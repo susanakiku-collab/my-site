@@ -1,11 +1,54 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
-<title>My Site</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>THEMIS AI Dispatch</title>
+  <meta name="description" content="THEMIS AI Dispatch GitHub Pages版" />
+  <link rel="stylesheet" href="style.css" />
 </head>
-
 <body>
-<h1>Hello GitHub Pages</h1>
-</body>
+  <header class="site-header">
+    <div class="container">
+      <h1>THEMIS AI Dispatch</h1>
+      <p class="subtitle">GitHub Pages 公開テスト版</p>
+    </div>
+  </header>
 
+  <main class="container">
+    <section class="card hero">
+      <h2>公開成功 🎉</h2>
+      <p>
+        このページが表示されていれば、GitHub Pages で
+        HTML / CSS / JavaScript の公開に成功しています。
+      </p>
+      <button id="testButton" class="btn">動作テスト</button>
+      <p id="result" class="result">まだボタンは押されていません</p>
+    </section>
+
+    <section class="card">
+      <h2>ファイル構成</h2>
+      <ul>
+        <li><strong>index.html</strong> … 画面本体</li>
+        <li><strong>style.css</strong> … デザイン</li>
+        <li><strong>app.js</strong> … 動き</li>
+        <li><strong>images/</strong> … 画像を入れる場所</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>画像表示テスト</h2>
+      <p>images フォルダに <code>logo.png</code> を入れたら表示できます。</p>
+      <img src="images/logo.png" alt="ロゴ画像" class="preview-image" onerror="this.style.display='none'">
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <small>© 2026 THEMIS AI Dispatch</small>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
 </html>
