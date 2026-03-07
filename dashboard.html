@@ -79,14 +79,21 @@
             <span>名前</span>
             <input type="text" id="castName" />
           </label>
+
           <label>
             <span>電話番号</span>
             <input type="text" id="castPhone" />
           </label>
 
-          <label class="full">
+          <label class="full address-field">
             <span>住所</span>
-            <input type="text" id="castAddress" placeholder="例: 東京都葛飾区鎌倉2丁目15-13" />
+            <input
+              type="text"
+              id="castAddress"
+              placeholder="例: 東京都葛飾区鎌倉2丁目15-13"
+              autocomplete="off"
+            />
+            <div id="addressSuggestions" class="suggestions"></div>
           </label>
 
           <label>
