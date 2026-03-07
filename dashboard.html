@@ -83,22 +83,27 @@
             <span>電話番号</span>
             <input type="text" id="castPhone" />
           </label>
+
           <label class="full">
             <span>住所</span>
-            <input type="text" id="castAddress" placeholder="千葉県松戸市..." />
+            <input type="text" id="castAddress" placeholder="例: 東京都葛飾区鎌倉2丁目15-13" />
           </label>
+
           <label>
             <span>方面</span>
             <input type="text" id="castArea" placeholder="柏方面 / 松戸方面 / 市川・東京方面" />
           </label>
+
           <label>
             <span>緯度</span>
             <input type="number" step="any" id="castLat" />
           </label>
+
           <label>
             <span>経度</span>
             <input type="number" step="any" id="castLng" />
           </label>
+
           <label class="full">
             <span>メモ</span>
             <textarea id="castMemo"></textarea>
@@ -135,7 +140,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCHp8CAK-Z1OXWpDzill27MKLzRSNoZ5hI"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>
