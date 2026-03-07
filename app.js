@@ -1,4 +1,4 @@
-const supabase = window.supabase.createClient(
+const supabaseClient = window.supabase.createClient(
   window.APP_CONFIG.SUPABASE_URL,
   window.APP_CONFIG.SUPABASE_ANON_KEY
 );
@@ -26,9 +26,9 @@ async function handleSignUp() {
       return;
     }
 
-    const { data, error } = await supabase.auth.signUp({
-      email: email,
-      password: password
+    const { data, error } = await supabaseClient.auth.signUp({
+      email,
+      password
     });
 
     if (error) {
@@ -37,7 +37,7 @@ async function handleSignUp() {
     }
 
     if (data?.user) {
-      setMessage("新規登録に成功しました。確認メールが必要な場合はメールを確認してください。", false);
+      setMessage("新規登録に成功しました。確認メールを確認してください。", false);
     } else {
       setMessage("新規登録が完了しました。", false);
     }
@@ -59,9 +59,9 @@ async function handleLogin() {
       return;
     }
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password
     });
 
     if (error) {
@@ -71,9 +71,6 @@ async function handleLogin() {
 
     console.log("login success:", data);
     setMessage("ログイン成功", false);
-
-    // 必要なら遷移
-    // window.location.href = "dashboard.html";
   } catch (err) {
     console.error(err);
     setMessage("例外エラー: " + err.message);
