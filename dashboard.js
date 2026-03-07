@@ -11,6 +11,7 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_
 
 let currentUser = null;
 let currentDispatchId = null;
+let editingCastId = null;
 
 const els = {
   userEmail: document.getElementById("userEmail"),
@@ -36,6 +37,9 @@ const els = {
   castMemo: document.getElementById("castMemo"),
   geocodeBtn: document.getElementById("geocodeBtn"),
   saveCastBtn: document.getElementById("saveCastBtn"),
+  cancelEditBtn: document.getElementById("cancelEditBtn"),
+  csvFileInput: document.getElementById("csvFileInput"),
+  importCsvBtn: document.getElementById("importCsvBtn"),
   castsList: document.getElementById("castsList"),
 
   historyList: document.getElementById("historyList")
@@ -134,7 +138,8 @@ async function logout() {
   window.location.href = "index.html";
 }
 
-function clearCastForm() {
+function resetCastForm() {
+  editingCastId = null;
   els.castName.value = "";
   els.castPhone.value = "";
   els.castAddress.value = "";
@@ -142,6 +147,22 @@ function clearCastForm() {
   els.castLat.value = "";
   els.castLng.value = "";
   els.castMemo.value = "";
+  els.saveCastBtn.textContent = "保存";
+  els.cancelEditBtn.classList.add("hidden");
+}
+
+function fillCastForm(cast) {
+  editingCastId = cast.id;
+  els.castName.value = cast.name || "";
+  els.castPhone.value = cast.phone || "";
+  els.castAddress.value = cast.address || "";
+  els.castArea.value = cast.area || "";
+  els.castLat.value = cast.latitude ?? "";
+  els.castLng.value = cast.longitude ?? "";
+  els.castMemo.value = cast.memo || "";
+  els.saveCastBtn.textContent = "更新";
+  els.cancelEditBtn.classList.remove("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function saveCast() {
@@ -161,19 +182,49 @@ async function saveCast() {
     area: els.castArea.value.trim() || (lat && lng ? guessArea(lat, lng) : null),
     latitude: lat,
     longitude: lng,
-    memo: els.castMemo.value.trim(),
-    created_by: currentUser.id
+    memo: els.castMemo.value.trim()
   };
 
-  const { error } = await supabaseClient.from("casts").insert(payload);
+  let error;
+
+  if (editingCastId) {
+    ({ error } = await supabaseClient
+      .from("casts")
+      .update(payload)
+      .eq("id", editingCastId));
+  } else {
+    payload.created_by = currentUser.id;
+    ({ error } = await supabaseClient.from("casts").insert(payload));
+  }
 
   if (error) {
     alert(error.message);
     return;
   }
 
-  clearCastForm();
+  await addHistory(null, null, editingCastId ? "update_cast" : "create_cast", editingCastId ? "キャストを更新" : "キャストを作成");
+  resetCastForm();
   await loadCasts();
+  await loadHistory();
+}
+
+async function softDeleteCast(castId) {
+  const ok = window.confirm("このキャストを削除しますか？");
+  if (!ok) return;
+
+  const { error } = await supabaseClient
+    .from("casts")
+    .update({ is_active: false })
+    .eq("id", castId);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await addHistory(null, null, "delete_cast", `キャストID ${castId} を削除`);
+  await loadCasts();
+  await loadHistory();
 }
 
 async function loadCasts() {
@@ -231,6 +282,8 @@ function renderCastList(casts) {
       <p>メモ: ${escapeHtml(cast.memo || "-")}</p>
       <div class="actions">
         <button class="btn secondary route-btn" data-address="${escapeHtml(cast.address || "")}">Googleマップ</button>
+        <button class="btn edit-cast-btn" data-id="${cast.id}">編集</button>
+        <button class="btn danger delete-cast-btn" data-id="${cast.id}">削除</button>
       </div>
     `;
 
@@ -238,6 +291,9 @@ function renderCastList(casts) {
       const address = e.currentTarget.dataset.address;
       if (address) openRouteFromMatsudo(address);
     });
+
+    div.querySelector(".edit-cast-btn")?.addEventListener("click", () => fillCastForm(cast));
+    div.querySelector(".delete-cast-btn")?.addEventListener("click", () => softDeleteCast(cast.id));
 
     els.castsList.appendChild(div);
   });
@@ -568,6 +624,114 @@ async function runOptimize() {
   await loadHistory();
 }
 
+function parseCsvLine(line) {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"';
+      i++;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  result.push(current.trim());
+  return result;
+}
+
+function parseCsv(text) {
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter(line => line.trim() !== "");
+
+  if (!lines.length) return [];
+
+  const headers = parseCsvLine(lines[0]).map(h => h.trim());
+  const rows = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCsvLine(lines[i]);
+    const row = {};
+    headers.forEach((header, idx) => {
+      row[header] = values[idx] ?? "";
+    });
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+async function importCsv() {
+  const file = els.csvFileInput.files?.[0];
+  if (!file) {
+    alert("CSVファイルを選択してください");
+    return;
+  }
+
+  const text = await file.text();
+  const rows = parseCsv(text);
+
+  if (!rows.length) {
+    alert("CSVデータが空です");
+    return;
+  }
+
+  const payload = rows.map(row => {
+    const lat = row.latitude ? Number(row.latitude) : null;
+    const lng = row.longitude ? Number(row.longitude) : null;
+
+    return {
+      name: row.name?.trim() || "",
+      phone: row.phone?.trim() || "",
+      address: row.address?.trim() || "",
+      area: row.area?.trim() || (lat && lng ? guessArea(lat, lng) : null),
+      latitude: lat,
+      longitude: lng,
+      memo: row.memo?.trim() || "",
+      is_active: true,
+      created_by: currentUser.id
+    };
+  }).filter(x => x.name);
+
+  if (!payload.length) {
+    alert("有効なname列がありません");
+    return;
+  }
+
+  const { error } = await supabaseClient.from("casts").insert(payload);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await addHistory(null, null, "import_csv", `${payload.length}件のキャストをCSV取込`);
+  els.csvFileInput.value = "";
+  await loadCasts();
+  await loadHistory();
+  alert(`${payload.length}件 取り込みました`);
+}
+
 function setupTabs() {
   const tabs = document.querySelectorAll(".tab");
   const panels = document.querySelectorAll(".tab-panel");
@@ -605,6 +769,9 @@ function setupEvents() {
   });
 
   els.saveCastBtn.addEventListener("click", saveCast);
+  els.cancelEditBtn.addEventListener("click", resetCastForm);
+  els.importCsvBtn.addEventListener("click", importCsv);
+
   els.createDispatchBtn.addEventListener("click", createDispatch);
   els.loadDispatchBtn.addEventListener("click", async () => {
     await loadDispatchByDate(els.dispatchDate.value);
@@ -621,6 +788,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   setupTabs();
   setupEvents();
+  resetCastForm();
   els.dispatchDate.value = todayStr();
   await loadCasts();
   await loadDispatchByDate(els.dispatchDate.value);
