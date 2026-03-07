@@ -1,120 +1,32 @@
 <!DOCTYPE html>
 <html lang="ja">
-
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>THEMIS AI Dispatch</title>
-
-<link rel="stylesheet" href="style.css">
-
-<style>
-
-body{
-background:#0b0f14;
-font-family:sans-serif;
-color:#e9eef7;
-display:flex;
-align-items:center;
-justify-content:center;
-height:100vh;
-margin:0;
-}
-
-.login-card{
-background:#121823;
-padding:30px;
-border-radius:10px;
-width:340px;
-box-shadow:0 10px 30px rgba(0,0,0,.35);
-}
-
-h2{
-margin-top:0;
-}
-
-label{
-display:block;
-margin-top:15px;
-font-size:14px;
-color:#a9b4c5;
-}
-
-input{
-width:100%;
-padding:10px;
-margin-top:5px;
-border-radius:6px;
-border:1px solid rgba(255,255,255,.1);
-background:#0b0f14;
-color:#fff;
-}
-
-button{
-margin-top:15px;
-padding:10px;
-border:none;
-border-radius:6px;
-cursor:pointer;
-}
-
-#loginBtn{
-background:#2d6cdf;
-color:white;
-margin-right:10px;
-}
-
-#signupBtn{
-background:#2fbf7a;
-color:white;
-}
-
-.btn-row{
-display:flex;
-gap:10px;
-}
-
-#authMessage{
-margin-top:10px;
-color:#ff6b6b;
-}
-
-</style>
-
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>THEMIS AI Dispatch</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
-
-
 <body>
 
-<div class="login-card">
+  <div class="login-card">
+    <h2>ログイン</h2>
 
-<h2>ログイン</h2>
+    <label>ログインID</label>
+    <input id="loginEmail" type="text" placeholder="登録済みID" />
 
-<label>メールアドレス</label>
-<input id="loginEmail" type="email" placeholder="example@email.com">
+    <label>パスワード</label>
+    <input id="loginPassword" type="password" placeholder="password" />
 
-<label>パスワード</label>
-<input id="loginPassword" type="password" placeholder="password">
+    <div class="btn-row">
+      <button id="loginBtn">ログイン</button>
+    </div>
 
-<div class="btn-row">
-<button id="loginBtn">ログイン</button>
-<button id="signupBtn">新規登録</button>
-</div>
+    <p id="authMessage"></p>
+  </div>
 
-<p id="authMessage"></p>
-
-</div>
-
-
-<!-- Supabase -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
-<!-- 設定 -->
-<script src="config.js"></script>
-
-<!-- アプリ -->
-<script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
 
 </body>
 </html>
