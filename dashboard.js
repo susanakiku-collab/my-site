@@ -121,12 +121,33 @@ async function geocodeAddress(address) {
 }
 
 async function ensureAuth() {
-  const { data } = await supabaseClient.auth.getUser();
+  const { data, error } = await supabaseClient.auth.getUser();
+
+  if (error) {
+    console.error(error);
+    window.location.href = "index.html";
+    return false;
+  }
+
   currentUser = data.user;
 
   if (!currentUser) {
     window.location.href = "index.html";
     return false;
+  }
+
+  // profiles に自動登録
+  const { error: profileError } = await supabaseClient
+    .from("profiles")
+    .upsert({
+      id: currentUser.id,
+      email: currentUser.email,
+      display_name: currentUser.email,
+      role: "dispatcher"
+    });
+
+  if (profileError) {
+    console.error("profiles upsert error:", profileError);
   }
 
   els.userEmail.textContent = currentUser.email || "";
