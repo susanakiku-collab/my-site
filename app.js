@@ -36,11 +36,9 @@ async function handleLogin() {
     }
 
     setMessage("ログイン成功", false);
+    console.log("login success:", data);
 
-    // ログイン成功後に遷移したい場合
-    // window.location.href = "dashboard.html";
-
-    console.log("login success", data);
+    window.location.href = "dashboard.html";
   } catch (err) {
     console.error(err);
     setMessage("例外エラー: " + err.message);
