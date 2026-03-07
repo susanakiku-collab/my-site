@@ -490,7 +490,7 @@ async function loadDispatchItems(dispatchId) {
       casts (
         id,
         name,
-        phone,
+    +#+#+#+#+#+കെ<|vq_14580|>phone,
         area
       )
     `)
