@@ -14,6 +14,7 @@ const supabaseClient = window.supabase.createClient(
 let currentUser = null;
 let currentDispatchId = null;
 let editingCastId = null;
+let searchTimer = null;
 
 const els = {
   userEmail: document.getElementById("userEmail"),
@@ -43,6 +44,7 @@ const els = {
   csvFileInput: document.getElementById("csvFileInput"),
   importCsvBtn: document.getElementById("importCsvBtn"),
   castsList: document.getElementById("castsList"),
+  addressSuggestions: document.getElementById("addressSuggestions"),
 
   historyList: document.getElementById("historyList")
 };
@@ -105,42 +107,130 @@ function guessArea(lat, lng) {
   return "周辺方面";
 }
 
-async function geocodeAddress(address) {
-
-  const normalized = String(address || "")
+function normalizeAddressForSearch(address) {
+  return String(address || "")
     .replace(/〒\s*\d{3}-?\d{4}/g, "")
+    .replace(/^日本[、,\s]*/g, "")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+async function geocodeAddress(address) {
+  const normalized = normalizeAddressForSearch(address);
 
   if (!normalized) {
     throw new Error("住所が空です");
   }
 
-  const query = "日本 " + normalized;
+  const candidates = [
+    `日本 ${normalized}`,
+    normalized,
+    normalized
+      .replace(/([0-9]+)-([0-9]+)-([0-9]+)/g, "$1丁目$2-$3")
+      .replace(/([0-9]+)-([0-9]+)/g, "$1丁目$2")
+  ];
+
+  for (const query of candidates) {
+    const url =
+      "https://nominatim.openstreetmap.org/search?" +
+      new URLSearchParams({
+        q: query,
+        format: "json",
+        limit: 1,
+        countrycodes: "jp",
+        addressdetails: "1"
+      });
+
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(`住所検索に失敗しました: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    if (Array.isArray(data) && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon),
+        displayName: data[0].display_name || query
+      };
+    }
+  }
+
+  throw new Error("住所が見つかりませんでした");
+}
+
+async function searchAddressCandidates(query) {
+  const normalized = normalizeAddressForSearch(query);
+  if (normalized.length < 3) return [];
 
   const url =
     "https://nominatim.openstreetmap.org/search?" +
     new URLSearchParams({
-      q: query,
+      q: `日本 ${normalized}`,
       format: "json",
-      limit: 1
+      limit: 5,
+      countrycodes: "jp",
+      addressdetails: "1"
     });
 
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
 
   if (!res.ok) {
-    throw new Error("住所検索APIエラー");
+    throw new Error(`候補取得に失敗しました: HTTP ${res.status}`);
   }
 
   const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
 
-  if (!data || data.length === 0) {
-    throw new Error("住所が見つかりませんでした");
+function hideSuggestions() {
+  if (els.addressSuggestions) {
+    els.addressSuggestions.innerHTML = "";
+    els.addressSuggestions.classList.add("hidden");
+  }
+}
+
+function showSuggestions(items) {
+  if (!els.addressSuggestions) return;
+
+  els.addressSuggestions.innerHTML = "";
+
+  if (!items.length) {
+    hideSuggestions();
+    return;
   }
 
-  return {
-    lat: parseFloat(data[0].lat),
-    lng: parseFloat(data[0].lon)
-  };
+  items.forEach(place => {
+    const div = document.createElement("div");
+    div.className = "suggestion-item";
+    div.textContent = place.display_name || "";
+    div.addEventListener("click", () => {
+      els.castAddress.value = place.display_name || "";
+      els.castLat.value = place.lat || "";
+      els.castLng.value = place.lon || "";
+
+      const lat = parseFloat(place.lat);
+      const lng = parseFloat(place.lon);
+      if (!Number.isNaN(lat) && !Number.isNaN(lng) && !els.castArea.value.trim()) {
+        els.castArea.value = guessArea(lat, lng);
+      }
+
+      hideSuggestions();
+    });
+    els.addressSuggestions.appendChild(div);
+  });
+
+  els.addressSuggestions.classList.remove("hidden");
 }
 
 async function ensureAuth() {
@@ -195,6 +285,7 @@ function resetCastForm() {
   els.castMemo.value = "";
   els.saveCastBtn.textContent = "保存";
   els.cancelEditBtn.classList.add("hidden");
+  hideSuggestions();
 }
 
 function fillCastForm(cast) {
@@ -208,6 +299,7 @@ function fillCastForm(cast) {
   els.castMemo.value = cast.memo || "";
   els.saveCastBtn.textContent = "更新";
   els.cancelEditBtn.classList.remove("hidden");
+  hideSuggestions();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -800,6 +892,40 @@ function setupTabs() {
   });
 }
 
+function setupAddressAutocomplete() {
+  if (!els.castAddress || !els.addressSuggestions) return;
+
+  els.castAddress.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+
+    const q = els.castAddress.value.trim();
+
+    if (q.length < 3) {
+      hideSuggestions();
+      return;
+    }
+
+    searchTimer = setTimeout(async () => {
+      try {
+        const results = await searchAddressCandidates(q);
+        showSuggestions(results);
+      } catch (err) {
+        console.error(err);
+        hideSuggestions();
+      }
+    }, 400);
+  });
+
+  document.addEventListener("click", e => {
+    if (
+      e.target !== els.castAddress &&
+      !els.addressSuggestions.contains(e.target)
+    ) {
+      hideSuggestions();
+    }
+  });
+}
+
 function setupEvents() {
   els.logoutBtn.addEventListener("click", logout);
 
@@ -843,6 +969,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   setupTabs();
   setupEvents();
+  setupAddressAutocomplete();
   resetCastForm();
   els.dispatchDate.value = todayStr();
   await loadCasts();
