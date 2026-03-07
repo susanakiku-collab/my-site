@@ -108,6 +108,18 @@
         <div class="row wrap">
           <button id="geocodeBtn" class="btn secondary">住所から座標取得</button>
           <button id="saveCastBtn" class="btn">保存</button>
+          <button id="cancelEditBtn" class="btn secondary hidden">編集キャンセル</button>
+        </div>
+
+        <hr />
+
+        <h3>CSV一括取込</h3>
+        <p class="muted">
+          ヘッダー例: name,phone,address,area,latitude,longitude,memo
+        </p>
+        <div class="row wrap">
+          <input type="file" id="csvFileInput" accept=".csv,text/csv" />
+          <button id="importCsvBtn" class="btn">CSV取込</button>
         </div>
 
         <div id="castsList" class="list"></div>
