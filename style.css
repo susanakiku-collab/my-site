@@ -270,12 +270,6 @@ hr{
   margin:16px 0;
 }
 
-@media (max-width:768px){
-  .grid.two{grid-template-columns:1fr}
-  button,.btn{width:100%}
-  .actions .btn{width:auto}
-  .topbar{flex-direction:column}
-}
 .edit-cast-btn{
   background:#5a6a85;
 }
@@ -286,4 +280,11 @@ hr{
 
 .hidden{
   display:none !important;
+}
+
+@media (max-width:768px){
+  .grid.two{grid-template-columns:1fr}
+  button,.btn{width:100%}
+  .actions .btn{width:auto}
+  .topbar{flex-direction:column}
 }
