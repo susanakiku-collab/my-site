@@ -125,6 +125,7 @@ async function ensureAuth() {
 
   if (error) {
     console.error(error);
+    alert("ユーザー情報の取得に失敗しました");
     window.location.href = "index.html";
     return false;
   }
@@ -136,7 +137,6 @@ async function ensureAuth() {
     return false;
   }
 
-  // profiles に自動登録
   const { error: profileError } = await supabaseClient
     .from("profiles")
     .upsert({
@@ -148,6 +148,8 @@ async function ensureAuth() {
 
   if (profileError) {
     console.error("profiles upsert error:", profileError);
+    alert("profiles作成エラー: " + profileError.message);
+    return false;
   }
 
   els.userEmail.textContent = currentUser.email || "";
