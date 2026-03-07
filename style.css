@@ -276,3 +276,14 @@ hr{
   .actions .btn{width:auto}
   .topbar{flex-direction:column}
 }
+.edit-cast-btn{
+  background:#5a6a85;
+}
+
+#csvFileInput{
+  max-width:360px;
+}
+
+.hidden{
+  display:none !important;
+}
