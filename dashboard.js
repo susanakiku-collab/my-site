@@ -109,44 +109,35 @@ async function geocodeAddress(address) {
   const normalized = String(address || "")
     .replace(/〒\s*\d{3}-?\d{4}/g, "")
     .replace(/^日本[、,\s]*/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 
   if (!normalized) {
     throw new Error("住所が空です");
   }
 
-  if (!window.google || !google.maps || !google.maps.Geocoder) {
-    throw new Error("Google Maps JavaScript API が読み込まれていません");
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=jp&q=${encodeURIComponent(normalized)}`;
+
+  const res = await fetch(url, {
+    headers: {
+      "Accept": "application/json"
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`住所検索に失敗しました: HTTP ${res.status}`);
   }
 
-  const geocoder = new google.maps.Geocoder();
+  const data = await res.json();
 
-  return new Promise((resolve, reject) => {
-    geocoder.geocode(
-      {
-        address: normalized,
-        region: "jp"
-      },
-      (results, status) => {
-        if (status !== "OK") {
-          reject(new Error("Geocoding失敗: " + status));
-          return;
-        }
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error("住所が見つかりませんでした");
+  }
 
-        if (!results || !results.length) {
-          reject(new Error("住所が見つかりません"));
-          return;
-        }
-
-        const location = results[0].geometry.location;
-
-        resolve({
-          lat: location.lat(),
-          lng: location.lng()
-        });
-      }
-    );
-  });
+  return {
+    lat: parseFloat(data[0].lat),
+    lng: parseFloat(data[0].lon)
+  };
 }
 
 async function ensureAuth() {
@@ -490,7 +481,7 @@ async function loadDispatchItems(dispatchId) {
       casts (
         id,
         name,
-    +#+#+#+#+#+കെ<|vq_14580|>phone,
+        phone,
         area
       )
     `)
@@ -824,6 +815,7 @@ function setupEvents() {
         els.castArea.value = guessArea(lat, lng);
       }
     } catch (err) {
+      console.error(err);
       alert(err.message);
     }
   });
