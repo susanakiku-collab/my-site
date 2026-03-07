@@ -106,31 +106,34 @@ function guessArea(lat, lng) {
 }
 
 async function geocodeAddress(address) {
+
   const normalized = String(address || "")
     .replace(/〒\s*\d{3}-?\d{4}/g, "")
-    .replace(/^日本[、,\s]*/g, "")
-    .replace(/\s+/g, " ")
     .trim();
 
   if (!normalized) {
     throw new Error("住所が空です");
   }
 
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=jp&q=${encodeURIComponent(normalized)}`;
+  const query = "日本 " + normalized;
 
-  const res = await fetch(url, {
-    headers: {
-      "Accept": "application/json"
-    }
-  });
+  const url =
+    "https://nominatim.openstreetmap.org/search?" +
+    new URLSearchParams({
+      q: query,
+      format: "json",
+      limit: 1
+    });
+
+  const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`住所検索に失敗しました: HTTP ${res.status}`);
+    throw new Error("住所検索APIエラー");
   }
 
   const data = await res.json();
 
-  if (!Array.isArray(data) || data.length === 0) {
+  if (!data || data.length === 0) {
     throw new Error("住所が見つかりませんでした");
   }
 
