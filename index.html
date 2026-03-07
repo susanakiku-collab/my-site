@@ -1,120 +1,503 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
-
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>THEMIS AI Dispatch</title>
-
-<link rel="stylesheet" href="style.css">
-
-<style>
-
-body{
-background:#0b0f14;
-font-family:sans-serif;
-color:#e9eef7;
-display:flex;
-align-items:center;
-justify-content:center;
-height:100vh;
-margin:0;
-}
-
-.login-card{
-background:#121823;
-padding:30px;
-border-radius:10px;
-width:340px;
-box-shadow:0 10px 30px rgba(0,0,0,.35);
-}
-
-h2{
-margin-top:0;
-}
-
-label{
-display:block;
-margin-top:15px;
-font-size:14px;
-color:#a9b4c5;
-}
-
-input{
-width:100%;
-padding:10px;
-margin-top:5px;
-border-radius:6px;
-border:1px solid rgba(255,255,255,.1);
-background:#0b0f14;
-color:#fff;
-}
-
-button{
-margin-top:15px;
-padding:10px;
-border:none;
-border-radius:6px;
-cursor:pointer;
-}
-
-#loginBtn{
-background:#2d6cdf;
-color:white;
-margin-right:10px;
-}
-
-#signupBtn{
-background:#2fbf7a;
-color:white;
-}
-
-.btn-row{
-display:flex;
-gap:10px;
-}
-
-#authMessage{
-margin-top:10px;
-color:#ff6b6b;
-}
-
-</style>
-
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>THEMIS AI Dispatch</title>
+  <link rel="stylesheet" href="./style.css" />
 </head>
-
-
 <body>
+  <header class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>THEMIS AI Dispatch 🚙🌙</h1>
+        <p class="muted">
+          緯度経度対応 / 方面自動判定 / 自動配車 / ルート確認
+        </p>
+      </div>
 
-<div class="login-card">
+      <div class="row gap">
+        <button id="btnExport" class="btn ghost" type="button">エクスポート</button>
 
-<h2>ログイン</h2>
+        <label class="btn ghost file">
+          インポート
+          <input id="fileImport" type="file" accept="application/json" hidden />
+        </label>
 
-<label>メールアドレス</label>
-<input id="loginEmail" type="email" placeholder="example@email.com">
+        <label class="btn ghost file">
+          キャストCSV
+          <input id="fileImportCastsCsv" type="file" accept=".csv,text/csv" hidden />
+        </label>
 
-<label>パスワード</label>
-<input id="loginPassword" type="password" placeholder="password">
+        <button id="btnResetAll" class="btn danger ghost" type="button">全消去</button>
+      </div>
+    </div>
 
-<div class="btn-row">
-<button id="loginBtn">ログイン</button>
-<button id="signupBtn">新規登録</button>
-</div>
+    <nav class="tabs">
+      <button class="tab active" data-view="home" type="button">ホーム</button>
+      <button class="tab" data-view="casts" type="button">キャスト</button>
+      <button class="tab" data-view="vehicles" type="button">車両</button>
+      <button class="tab" data-view="daily" type="button">当日運用</button>
+      <button class="tab" data-view="plan" type="button">予定表</button>
+      <button class="tab" data-view="actual" type="button">実際の送り</button>
+      <button class="tab" data-view="settings" type="button">設定</button>
+    </nav>
+  </header>
 
-<p id="authMessage"></p>
+  <main class="wrap">
+    <!-- HOME -->
+    <section id="view-home" class="view">
+      <div class="grid2">
+        <div class="card">
+          <h2>今日の状況</h2>
+          <div id="homeToday" class="muted">読み込み中...</div>
 
-</div>
+          <div class="row gap mt">
+            <button class="btn" data-nav="daily" type="button">当日運用へ</button>
+            <button class="btn ghost" data-nav="plan" type="button">予定表へ</button>
+            <button class="btn ghost" data-nav="actual" type="button">実際の送りへ</button>
+          </div>
+        </div>
 
+        <div class="card">
+          <h2>月間（車両別）</h2>
+          <div id="homeMonth" class="muted">読み込み中...</div>
 
-<!-- Supabase -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+          <div class="row gap mt">
+            <button id="btnResetMonth" class="btn danger ghost" type="button">
+              月間距離/出勤日数リセット
+            </button>
+          </div>
+        </div>
 
-<!-- 設定 -->
-<script src="config.js"></script>
+        <div class="card">
+          <h2>運用メモ</h2>
+          <ul class="muted small">
+            <li>キャストには住所・緯度経度・方面を保存</li>
+            <li>完了した送りは次回の自動配車から除外</li>
+            <li>予定表は時間別・方面別で整理表示</li>
+            <li>ルートボタンで松戸駅起点のGoogleマップを開く</li>
+            <li>自動配車後に車両変更も可能</li>
+          </ul>
+        </div>
 
-<!-- アプリ -->
-<script src="app.js"></script>
+        <div class="card">
+          <h2>補足</h2>
+          <p class="muted small">
+            緯度経度は住所から自動取得し、方面判定や距離推定に利用します。<br />
+            実際の送りで「完了」にしたキャストは、配車結果からも外れます。
+          </p>
+        </div>
+      </div>
+    </section>
 
+    <!-- CASTS -->
+    <section id="view-casts" class="view hidden">
+      <div class="card">
+        <div class="cardHead">
+          <h2>キャスト（事前登録）</h2>
+        </div>
+
+        <form id="castForm" class="form">
+          <input type="hidden" id="castId" />
+
+          <div class="row">
+            <label>
+              氏名
+              <input id="castName" placeholder="例：佐藤" required />
+            </label>
+
+            <label>
+              想定距離(km)
+              <input id="castKm" inputmode="decimal" placeholder="例：18" />
+            </label>
+          </div>
+
+          <label>
+            住所
+            <input id="castAddress" placeholder="例：千葉県柏市若柴..." required />
+          </label>
+
+          <div class="row">
+            <label>
+              方面
+              <input id="castArea" placeholder="自動判定 / 手修正可" />
+            </label>
+
+            <label>
+              メモ
+              <input id="castMemo" placeholder="例：新人 / 注意事項など" />
+            </label>
+          </div>
+
+          <div class="row gap">
+            <button class="btn" type="submit">追加/更新</button>
+            <button id="btnCastAutoArea" class="btn ghost" type="button">住所から方面判定</button>
+            <button id="btnCastReset" class="btn ghost" type="button">入力リセット</button>
+          </div>
+        </form>
+
+        <div class="tableWrap">
+          <table class="table" id="castsTable">
+            <thead>
+              <tr>
+                <th>氏名</th>
+                <th>住所</th>
+                <th>方面</th>
+                <th>想定距離(km)</th>
+                <th>緯度</th>
+                <th>経度</th>
+                <th>メモ</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- VEHICLES -->
+    <section id="view-vehicles" class="view hidden">
+      <div class="card">
+        <div class="cardHead">
+          <h2>車両マスタ</h2>
+        </div>
+
+        <form id="vehicleForm" class="form">
+          <input type="hidden" id="vehicleEditId" />
+
+          <div class="row">
+            <label>
+              車両ID
+              <input id="vehicleId" placeholder="例：A" required />
+            </label>
+
+            <label>
+              担当方面
+              <input id="vehicleArea" placeholder="例：柏方面" required />
+            </label>
+
+            <label>
+              帰宅方面
+              <input id="vehicleHomeArea" placeholder="例：柏方面" />
+            </label>
+
+            <label>
+              乗車可能人員
+              <input id="vehicleCap" inputmode="numeric" placeholder="例：4" required />
+            </label>
+
+            <label>
+              ドライバー名
+              <input id="vehicleDriver" placeholder="例：田中" />
+            </label>
+          </div>
+
+          <div class="row gap">
+            <button class="btn" type="submit">追加/更新</button>
+            <button id="btnVehicleReset" class="btn ghost" type="button">入力リセット</button>
+          </div>
+        </form>
+
+        <div class="tableWrap">
+          <table class="table" id="vehiclesTable">
+            <thead>
+              <tr>
+                <th>車両</th>
+                <th>担当方面</th>
+                <th>帰宅方面</th>
+                <th>定員</th>
+                <th>ドライバー</th>
+                <th>月間距離(km)</th>
+                <th>出勤日数</th>
+                <th>1日平均(km)</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- DAILY -->
+    <section id="view-daily" class="view hidden">
+      <div class="card">
+        <div class="cardHead">
+          <h2>当日運用</h2>
+          <div class="row gap">
+            <label class="row gap">
+              <span class="muted">日付：</span>
+              <input id="planDate" type="date" />
+            </label>
+
+            <button id="btnAutoPlan" class="btn" type="button">自動配車</button>
+            <button id="btnFinalize" class="btn ghost" type="button">確定（月間へ反映）</button>
+            <button id="btnClearActual" class="btn danger ghost" type="button">Actual全消去</button>
+          </div>
+        </div>
+
+        <div class="cardHead" style="margin-top:8px;">
+          <h2>本日使用する車両（出勤車）</h2>
+          <div class="row gap">
+            <button id="btnSelectAllVehicles" class="btn ghost" type="button">全選択</button>
+            <button id="btnClearVehiclesToday" class="btn danger ghost" type="button">全解除</button>
+          </div>
+        </div>
+
+        <div id="todayVehiclesBox" class="muted small"></div>
+
+        <div class="hr"></div>
+
+        <div class="cardHead">
+          <h2>配車結果</h2>
+          <div class="row gap">
+            <button id="btnCopy" class="btn ghost" type="button">結果をコピー</button>
+          </div>
+        </div>
+
+        <div id="planBox" class="planBox mt">
+          <div class="muted">「自動配車」を押すと、未完了のActualを配車します。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PLAN -->
+    <section id="view-plan" class="view hidden">
+      <div class="card">
+        <div class="cardHead">
+          <h2>予定表</h2>
+          <div class="row gap">
+            <label class="row gap">
+              <span class="muted">日付：</span>
+              <input id="planDate_plan" type="date" />
+            </label>
+
+            <button id="btnClearPlan" class="btn danger ghost" type="button">予定を全消去</button>
+          </div>
+        </div>
+
+        <form id="planForm" class="form">
+          <input type="hidden" id="planId" />
+
+          <div class="row">
+            <label>
+              キャスト選択
+              <select id="planCastSelect" required></select>
+            </label>
+
+            <label>
+              時間
+              <select id="planHour">
+                <option value="0">0時</option>
+                <option value="1">1時</option>
+                <option value="2">2時</option>
+                <option value="3">3時</option>
+                <option value="4">4時</option>
+                <option value="5">5時</option>
+              </select>
+            </label>
+
+            <label>
+              距離上書き(km)
+              <input id="planKmOverride" inputmode="decimal" placeholder="例：22" />
+            </label>
+          </div>
+
+          <label>
+            送り先住所
+            <input id="planAddress" placeholder="キャスト住所が入ります" />
+          </label>
+
+          <div class="row">
+            <label>
+              方面
+              <input id="planArea" placeholder="自動判定 / 手修正可" />
+            </label>
+
+            <label>
+              メモ
+              <input id="planMemo" placeholder="例：同乗 / 注意事項など" />
+            </label>
+          </div>
+
+          <div class="row gap">
+            <button class="btn" type="submit">追加/更新</button>
+            <button id="btnPlanAutoArea" class="btn ghost" type="button">住所から方面判定</button>
+            <button id="btnPlanReset" class="btn ghost" type="button">入力リセット</button>
+          </div>
+        </form>
+
+        <div class="tableWrap">
+          <table class="table" id="planTable">
+            <thead>
+              <tr>
+                <th>時間</th>
+                <th>キャスト</th>
+                <th>住所</th>
+                <th>方面</th>
+                <th>距離(km)</th>
+                <th>状態</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACTUAL -->
+    <section id="view-actual" class="view hidden">
+      <div class="card">
+        <div class="cardHead">
+          <h2>実際の送り</h2>
+          <div class="row gap">
+            <label class="row gap">
+              <span class="muted">日付：</span>
+              <input id="planDate_actual" type="date" />
+            </label>
+
+            <button id="btnAddFromPlan" class="btn ghost" type="button">予定から追加</button>
+            <button id="btnCopyMatrix" class="btn ghost" type="button">表をコピー</button>
+          </div>
+        </div>
+
+        <form id="actualForm" class="form">
+          <input type="hidden" id="actualId" />
+
+          <div class="row">
+            <label>
+              予定から選択
+              <select id="actualFromPlanSelect"></select>
+            </label>
+
+            <label>
+              キャスト選択
+              <select id="actualCastSelect" required></select>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              時間
+              <select id="actualHour">
+                <option value="0">0時</option>
+                <option value="1">1時</option>
+                <option value="2">2時</option>
+                <option value="3">3時</option>
+                <option value="4">4時</option>
+                <option value="5">5時</option>
+              </select>
+            </label>
+
+            <label>
+              距離上書き(km)
+              <input id="actualKmOverride" inputmode="decimal" placeholder="例：22" />
+            </label>
+
+            <label>
+              状態
+              <select id="actualStatus">
+                <option value="active" selected>未完了</option>
+                <option value="done">完了</option>
+                <option value="canceled">キャンセル</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            送り先住所
+            <input id="actualAddress" placeholder="キャスト住所が入ります" />
+          </label>
+
+          <div class="row">
+            <label>
+              方面
+              <input id="actualArea" placeholder="自動判定 / 手修正可" />
+            </label>
+
+            <label>
+              メモ
+              <input id="actualMemo" placeholder="例：同乗 / 注意事項など" />
+            </label>
+          </div>
+
+          <div class="row gap">
+            <button class="btn" type="submit">追加/更新</button>
+            <button id="btnActualAutoArea" class="btn ghost" type="button">住所から方面判定</button>
+            <button id="btnActualReset" class="btn ghost" type="button">入力リセット</button>
+          </div>
+        </form>
+
+        <div class="tableWrap">
+          <table class="table" id="actualTable">
+            <thead>
+              <tr>
+                <th>時間</th>
+                <th>キャスト</th>
+                <th>住所</th>
+                <th>方面</th>
+                <th>距離(km)</th>
+                <th>状態</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="cardHead">
+          <h2>時間帯 × 方面 一覧</h2>
+        </div>
+
+        <div class="tableWrap">
+          <table class="table" id="actualMatrixTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view hidden">
+      <div class="card">
+        <div class="cardHead">
+          <h2>設定</h2>
+        </div>
+
+        <div class="form">
+          <div class="row">
+            <label>
+              均し強度
+              <select id="balanceStrength">
+                <option value="0">0（均しなし）</option>
+                <option value="1">1（弱）</option>
+                <option value="2">2（中）</option>
+                <option value="3">3（強）</option>
+              </select>
+            </label>
+
+            <label>
+              ラスト便方面ペナルティ
+              <input id="lastAreaPenalty" inputmode="numeric" placeholder="例：10" />
+            </label>
+          </div>
+
+          <p class="muted small">
+            均し強度を上げるほど、月間平均距離の高い車を避けます。<br />
+            ラスト便方面ペナルティは、5時便で担当方面がズレる車をどれだけ避けるかの強さです。
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
 </body>
 </html>
