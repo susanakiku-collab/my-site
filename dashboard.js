@@ -108,12 +108,30 @@ async function geocodeAddress(address) {
     throw new Error("Google Maps APIキーが未設定です");
   }
 
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_API_KEY}`;
+  // 住所を少し正規化
+  const normalized = String(address || "")
+    .replace(/〒\s*\d{3}-?\d{4}/g, "")   // 郵便番号を削除
+    .replace(/^日本[、,\s]*/g, "")       // 先頭の「日本、」を削除
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) {
+    throw new Error("住所が空です");
+  }
+
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(normalized)}&region=jp&language=ja&key=${GOOGLE_MAPS_API_KEY}`;
+
   const res = await fetch(url);
   const json = await res.json();
 
+  console.log("Geocoding response:", json);
+
+  if (json.status !== "OK") {
+    throw new Error(`Geocoding失敗: ${json.status}${json.error_message ? " / " + json.error_message : ""}`);
+  }
+
   if (!json.results || !json.results.length) {
-    throw new Error("住所から座標を取得できませんでした");
+    throw new Error("Geocoding結果が0件でした");
   }
 
   const loc = json.results[0].geometry.location;
@@ -773,23 +791,26 @@ function setupEvents() {
   els.logoutBtn.addEventListener("click", logout);
 
   els.geocodeBtn.addEventListener("click", async () => {
-    const address = els.castAddress.value.trim();
-    if (!address) {
-      alert("住所を入力してください");
-      return;
-    }
+  const address = els.castAddress.value.trim();
 
-    try {
-      const { lat, lng } = await geocodeAddress(address);
-      els.castLat.value = lat;
-      els.castLng.value = lng;
-      if (!els.castArea.value) {
-        els.castArea.value = guessArea(lat, lng);
-      }
-    } catch (err) {
-      alert(err.message);
+  if (!address) {
+    alert("住所を入力してください");
+    return;
+  }
+
+  try {
+    const { lat, lng } = await geocodeAddress(address);
+    els.castLat.value = lat;
+    els.castLng.value = lng;
+
+    if (!els.castArea.value) {
+      els.castArea.value = guessArea(lat, lng);
     }
-  });
+  } catch (err) {
+    console.error(err);
+    alert(err.message);
+  }
+});
 
   els.saveCastBtn.addEventListener("click", saveCast);
   els.cancelEditBtn.addEventListener("click", resetCastForm);
