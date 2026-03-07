@@ -4,7 +4,7 @@ window.APP_CONFIG = {
 
   SUPABASE_ANON_KEY: "sb_sb_publishable_veQ6nay4yBjAHz95Hv55ng_QahlWYUzpublishable_xxxxxxxxx",
 
-  GOOGLE_MAPS_API_KEY: "",
+  GOOGLE_MAPS_API_KEY: "AIzaSyCHp8CAK-Z1OXWpDzill27MKLzRSNoZ5hI",
 
   ORIGIN_LABEL: "松戸駅",
 
@@ -14,3 +14,4 @@ window.APP_CONFIG = {
 
 
 };
+
