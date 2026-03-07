@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>THEMIS AI Dispatch</title>
+
+<link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<header class="topbar">
+<h1>THEMIS AI Dispatch</h1>
+</header>
+
+<main class="container">
+
+<div class="login-card">
+
+<h2>ログイン</h2>
+
+<label>メールアドレス</label>
+<input id="loginEmail" type="email" placeholder="example@email.com">
+
+<label>パスワード</label>
+<input id="loginPassword" type="password" placeholder="password">
+
+<div class="btn-row">
+<button id="loginBtn">ログイン</button>
+<button id="signupBtn">新規登録</button>
+</div>
+
+<p id="authMessage"></p>
+
+</div>
+
+</main>
+
+<!-- Supabase 本体 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<!-- 設定 -->
+<script src="config.js"></script>
+
+<!-- アプリ -->
+<script src="app.js"></script>
+
+</body>
+</html>
