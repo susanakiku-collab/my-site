@@ -20,7 +20,7 @@ const supabase = window.supabase.createClient(
 ========================= */
 
 const state = {
-  profile: null,A
+  profile: null,
   vehicles: [],
   plans: [],
   autoAssignments: []
@@ -426,3 +426,4 @@ async function importDispatch(){
   showStatus("dispatch登録完了")
 
 }
+
