@@ -166,7 +166,7 @@ function planStatusLabel(status) {
 function planStatusBadgeClass(status) {
   if (status === "done") return "done";
   if (status === "cancel") return "cancel";
-  if (status === "assigned") return "";
+  if (status === "assigned") return "assigned";
   return "";
 }
 
@@ -255,12 +255,6 @@ function getMonthKey(dateStr) {
 
 function getDisplayArea(cast) {
   return String(cast?.area || "").trim();
-}
-
-function rowLabelToHour(label) {
-  if (label === "12") return 0;
-  if (label === "L") return 5;
-  return Number(label);
 }
 
 /* =========================
@@ -358,7 +352,7 @@ function chooseBestVehicleForCast(cast, vehicles, assignments, monthlyDistanceMa
 
     const currentLoad = getVehicleLoad(assignments, vehicle.id);
     const maxDistance = getVehicleCurrentMaxDistance(assignments, vehicle.id);
-    const avgDistance = getVehicleMonthlyAvgDistance(monthlyDistanceMap, vehicle.id);
+    const avgDistance = getVehicleMonthlyAvgDistance(monthlyMap, vehicle.id);
 
     let score = 0;
     score += currentLoad * 20;
@@ -1095,9 +1089,10 @@ function renderPlanSelect(plans) {
     .filter(plan => plan.status === "planned")
     .filter(plan => !dispatchDate || plan.plan_date === dispatchDate)
     .forEach(plan => {
+      const hourLabel = BOARD_ROWS.find(r => r.key === Number(plan.plan_hour))?.label || plan.plan_hour;
       const option = document.createElement("option");
       option.value = plan.id;
-      option.textContent = `${BOARD_ROWS.find(r => r.key === Number(plan.plan_hour))?.label || plan.plan_hour} | ${plan.planned_area || "-"} | ${plan.casts?.name || "不明"}`;
+      option.textContent = `${hourLabel} | ${plan.planned_area || "-"} | ${plan.casts?.name || "不明"}`;
       els.planSelect.appendChild(option);
     });
 }
@@ -1119,6 +1114,23 @@ function renderPlansSummary(plans, dateStr) {
     `${dateStr} / 予定 ${byStatus.planned} 件 / 配車済 ${byStatus.assigned} 件 / 完了 ${byStatus.done} 件 / キャンセル ${byStatus.cancel} 件`;
 }
 
+function buildPlanCardHtml(plan) {
+  const status = normalizeStatus(plan.status);
+  const statusLabel = planStatusLabel(plan.status);
+
+  return `
+    <div class="plan-name-card ${status}">
+      <div class="plan-name">${escapeHtml(plan.casts?.name || "不明")}</div>
+      <div class="plan-mini-status ${status}">${escapeHtml(statusLabel)}</div>
+      <div class="mini-actions">
+        <button class="btn edit-plan-btn" data-id="${plan.id}">編集</button>
+        <button class="btn secondary plan-done-btn" data-id="${plan.id}">完了</button>
+        <button class="btn danger plan-cancel-btn" data-id="${plan.id}">キャンセル</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderPlansBoard(plans, dateStr) {
   els.plansBoard.innerHTML = "";
 
@@ -1127,11 +1139,11 @@ function renderPlansBoard(plans, dateStr) {
 
   let html = `
     <div style="overflow:auto;">
-      <table style="width:100%; border-collapse:collapse; min-width:900px;">
+      <table>
         <thead>
           <tr>
-            <th style="border:1px solid rgba(255,255,255,.15); padding:10px;">時間</th>
-            ${BLOCKS.map(block => `<th style="border:1px solid rgba(255,255,255,.15); padding:10px;">${block}</th>`).join("")}
+            <th>時間</th>
+            ${BLOCKS.map(block => `<th>${block}</th>`).join("")}
           </tr>
         </thead>
         <tbody>
@@ -1139,30 +1151,18 @@ function renderPlansBoard(plans, dateStr) {
 
   BOARD_ROWS.forEach(row => {
     html += `<tr>`;
-    html += `<td style="border:1px solid rgba(255,255,255,.15); padding:10px; font-weight:700; text-align:center;">${row.label}</td>`;
+    html += `<td>${row.label}</td>`;
 
     BLOCKS.forEach(block => {
       const cellPlans = plans.filter(
         p => Number(p.plan_hour) === row.key && String(p.planned_area || "") === block
       );
 
-      let cellHtml = "";
-      cellPlans.forEach(plan => {
-        const statusClass = planStatusBadgeClass(plan.status);
-        cellHtml += `
-          <div style="margin-bottom:8px; padding:8px; border:1px solid rgba(255,255,255,.10); border-radius:8px;">
-            <div style="font-weight:700;">${escapeHtml(plan.casts?.name || "不明")}</div>
-            <div class="badge ${statusClass}" style="margin-top:6px;">${escapeHtml(planStatusLabel(plan.status))}</div>
-            <div class="actions" style="margin-top:8px;">
-              <button class="btn edit-plan-btn" data-id="${plan.id}">編集</button>
-              <button class="btn secondary plan-done-btn" data-id="${plan.id}">完了</button>
-              <button class="btn danger plan-cancel-btn" data-id="${plan.id}">キャンセル</button>
-            </div>
-          </div>
-        `;
-      });
+      const cellHtml = cellPlans.length
+        ? `<div class="plan-cell">${cellPlans.map(buildPlanCardHtml).join("")}</div>`
+        : `<div class="plan-cell"></div>`;
 
-      html += `<td style="vertical-align:top; border:1px solid rgba(255,255,255,.15); padding:8px; min-height:80px;">${cellHtml}</td>`;
+      html += `<td>${cellHtml}</td>`;
     });
 
     html += `</tr>`;
@@ -1517,7 +1517,10 @@ function renderDispatchItems(items) {
     list.forEach(item => {
       const status = normalizeStatus(item.status);
       const badgeClass = status === "done" ? "done" : status === "cancel" ? "cancel" : "";
-      const cardClass = status === "done" ? "done-card" : status === "cancel" ? "cancel-card" : "";
+      const cardClass =
+        status === "done" ? "done-card" :
+        status === "cancel" ? "cancel-card" :
+        "";
 
       html += `
         <div class="item ${cardClass}" style="margin-top:8px;">
