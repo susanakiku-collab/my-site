@@ -15,6 +15,9 @@ let currentUser = null;
 let currentDispatchId = null;
 let editingCastId = null;
 
+let allCastsCache = [];
+let currentDispatchItemsCache = [];
+
 const els = {
   userEmail: document.getElementById("userEmail"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -72,6 +75,23 @@ function normalizeStatus(status) {
   return "pending";
 }
 
+function hasValue(v) {
+  return v !== null && v !== undefined && v !== "";
+}
+
+function toNullableNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isValidLatLng(lat, lng) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat < -90 || lat > 90) return false;
+  if (lng < -180 || lng > 180) return false;
+  return true;
+}
+
 function openRouteFromMatsudo(address) {
   const origin = encodeURIComponent(ORIGIN_LABEL);
   const dest = encodeURIComponent(address);
@@ -97,20 +117,34 @@ function parseLatLngText(text) {
   if (!raw) return null;
 
   const normalized = raw
-    .replace(/[ ]+/g, "")
+    .replace(/[　 ]+/g, "")
     .replace(/，/g, ",")
     .replace(/、/g, ",")
-    .replace(/,/g, ",");
+    .replace(/緯度[:：]/g, "")
+    .replace(/経度[:：]/g, "")
+    .replace(/latitude[:=]/gi, "")
+    .replace(/longitude[:=]/gi, "");
 
-  const parts = normalized.split(",");
-  if (parts.length !== 2) return null;
+  const patterns = [
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/
+  ];
 
-  const lat = Number(parts[0]);
-  const lng = Number(parts[1]);
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
 
-  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+    const lat = Number(match[1]);
+    const lng = Number(match[2]);
 
-  return { lat, lng };
+    if (isValidLatLng(lat, lng)) {
+      return { lat, lng };
+    }
+  }
+
+  return null;
 }
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -135,10 +169,19 @@ function estimateMinutes(km) {
 }
 
 function guessArea(lat, lng) {
+  if (!isValidLatLng(lat, lng)) return "周辺方面";
   if (lat >= 35.88) return "柏方面";
   if (lat >= 35.79) return "松戸方面";
   if (lng >= 139.95) return "市川・東京方面";
   return "周辺方面";
+}
+
+function getUsedCastIdsInCurrentDispatch() {
+  const ids = new Set();
+  currentDispatchItemsCache.forEach(item => {
+    if (item.cast_id) ids.add(Number(item.cast_id));
+  });
+  return ids;
 }
 
 async function ensureAuth() {
@@ -202,7 +245,7 @@ function fillCastForm(cast) {
   els.castPhone.value = cast.phone || "";
   els.castAddress.value = cast.address || "";
   els.castLatLngText.value =
-    cast.latitude != null && cast.longitude != null
+    hasValue(cast.latitude) && hasValue(cast.longitude)
       ? `${cast.latitude},${cast.longitude}`
       : "";
   els.castArea.value = cast.area || "";
@@ -237,17 +280,23 @@ async function saveCast() {
     return;
   }
 
-  const lat = els.castLat.value ? Number(els.castLat.value) : null;
-  const lng = els.castLng.value ? Number(els.castLng.value) : null;
+  const lat = toNullableNumber(els.castLat.value);
+  const lng = toNullableNumber(els.castLng.value);
+
+  if ((lat !== null || lng !== null) && !isValidLatLng(lat, lng)) {
+    alert("緯度経度が正しくありません");
+    return;
+  }
 
   const payload = {
     name,
     phone: els.castPhone.value.trim(),
     address: els.castAddress.value.trim(),
-    area: els.castArea.value.trim() || (lat && lng ? guessArea(lat, lng) : null),
+    area: els.castArea.value.trim() || (lat !== null && lng !== null ? guessArea(lat, lng) : null),
     latitude: lat,
     longitude: lng,
-    memo: els.castMemo.value.trim()
+    memo: els.castMemo.value.trim(),
+    is_active: true
   };
 
   let error;
@@ -295,6 +344,7 @@ async function softDeleteCast(castId) {
 
   await addHistory(null, null, "delete_cast", `キャストID ${castId} を削除`);
   await loadCasts();
+  await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
 
@@ -310,23 +360,28 @@ async function loadCasts() {
     return;
   }
 
-  renderCastSelect(data || []);
-  renderCastList(data || []);
+  allCastsCache = data || [];
+  renderCastSelect(allCastsCache);
+  renderCastList(allCastsCache);
 }
 
 function renderCastSelect(casts) {
   els.castSelect.innerHTML = `<option value="">選択してください</option>`;
 
-  casts.forEach(cast => {
-    const option = document.createElement("option");
-    option.value = cast.id;
-    option.textContent = `${cast.name} | ${cast.area || "方面未設定"}`;
-    option.dataset.address = cast.address || "";
-    option.dataset.lat = cast.latitude ?? "";
-    option.dataset.lng = cast.longitude ?? "";
-    option.dataset.area = cast.area || "";
-    els.castSelect.appendChild(option);
-  });
+  const usedCastIds = getUsedCastIdsInCurrentDispatch();
+
+  casts
+    .filter(cast => !usedCastIds.has(Number(cast.id)))
+    .forEach(cast => {
+      const option = document.createElement("option");
+      option.value = cast.id;
+      option.textContent = `${cast.name} | ${cast.area || "方面未設定"}`;
+      option.dataset.address = cast.address || "";
+      option.dataset.lat = cast.latitude ?? "";
+      option.dataset.lng = cast.longitude ?? "";
+      option.dataset.area = cast.area || "";
+      els.castSelect.appendChild(option);
+    });
 }
 
 function renderCastList(casts) {
@@ -338,9 +393,11 @@ function renderCastList(casts) {
   }
 
   casts.forEach(cast => {
+    const lat = toNullableNumber(cast.latitude);
+    const lng = toNullableNumber(cast.longitude);
     const km =
-      cast.latitude && cast.longitude
-        ? estimateRoadKmFromStation(Number(cast.latitude), Number(cast.longitude))
+      lat !== null && lng !== null
+        ? estimateRoadKmFromStation(lat, lng)
         : null;
 
     const div = document.createElement("div");
@@ -350,7 +407,7 @@ function renderCastList(casts) {
       <p>電話: ${escapeHtml(cast.phone || "-")}</p>
       <p>住所: ${escapeHtml(cast.address || "-")}</p>
       <p>方面: ${escapeHtml(cast.area || "-")}</p>
-      <p>松戸駅から推定距離: ${km ? `${km} km` : "-"}</p>
+      <p>松戸駅から推定距離: ${km !== null ? `${km} km` : "-"}</p>
       <p>座標: ${cast.latitude ?? "-"}, ${cast.longitude ?? "-"}</p>
       <p>メモ: ${escapeHtml(cast.memo || "-")}</p>
       <div class="actions">
@@ -395,6 +452,7 @@ async function createDispatch() {
 
   if (existing?.length) {
     currentDispatchId = existing[0].id;
+    els.driverName.value = existing[0].driver_name || "";
     await loadDispatchItems(currentDispatchId);
     return;
   }
@@ -441,6 +499,8 @@ async function loadDispatchByDate(dateStr) {
     els.driverName.value = dispatch.driver_name || "";
     await loadDispatchItems(dispatch.id);
   } else {
+    currentDispatchItemsCache = [];
+    renderCastSelect(allCastsCache);
     els.dispatchSummary.textContent = "";
     els.dispatchList.innerHTML = `<div class="item"><p>この日の配車はまだありません。</p></div>`;
   }
@@ -458,14 +518,28 @@ async function addCastToDispatch() {
     return;
   }
 
+  const alreadyExists = currentDispatchItemsCache.some(
+    item => Number(item.cast_id) === castId
+  );
+  if (alreadyExists) {
+    alert("このキャストはすでに配車に追加されています");
+    return;
+  }
+
   const selected = els.castSelect.selectedOptions[0];
   const destinationAddress = selected?.dataset.address || "";
-  const lat = selected?.dataset.lat ? Number(selected.dataset.lat) : null;
-  const lng = selected?.dataset.lng ? Number(selected.dataset.lng) : null;
-  const area = selected?.dataset.area || "";
-  const distanceKm = lat && lng ? estimateRoadKmFromStation(lat, lng) : null;
-  const travelMinutes = distanceKm ? estimateMinutes(distanceKm) : null;
-  const stopOrder = Number(els.stopOrder.value || 1);
+  const lat = toNullableNumber(selected?.dataset.lat);
+  const lng = toNullableNumber(selected?.dataset.lng);
+  const area =
+    selected?.dataset.area || (lat !== null && lng !== null ? guessArea(lat, lng) : "");
+  const distanceKm =
+    lat !== null && lng !== null ? estimateRoadKmFromStation(lat, lng) : null;
+  const travelMinutes = distanceKm !== null ? estimateMinutes(distanceKm) : null;
+
+  let stopOrder = Number(els.stopOrder.value || 1);
+  if (!Number.isFinite(stopOrder) || stopOrder <= 0) {
+    stopOrder = currentDispatchItemsCache.length + 1;
+  }
 
   const { data, error } = await supabaseClient
     .from("dispatch_items")
@@ -490,12 +564,21 @@ async function addCastToDispatch() {
     return;
   }
 
+  await normalizeStopOrders(currentDispatchId);
   await addHistory(currentDispatchId, data.id, "add_cast", "キャストを配車に追加");
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
 
 async function loadDispatchItems(dispatchId) {
+  if (!dispatchId) {
+    currentDispatchItemsCache = [];
+    renderDispatchSummary([]);
+    renderDispatchItems([]);
+    renderCastSelect(allCastsCache);
+    return;
+  }
+
   const { data, error } = await supabaseClient
     .from("dispatch_items")
     .select(`
@@ -508,15 +591,21 @@ async function loadDispatchItems(dispatchId) {
       )
     `)
     .eq("dispatch_id", dispatchId)
-    .order("stop_order", { ascending: true });
+    .order("stop_order", { ascending: true })
+    .order("id", { ascending: true });
 
   if (error) {
     console.error(error);
     return;
   }
 
-  renderDispatchSummary(data || []);
-  renderDispatchItems(data || []);
+  currentDispatchItemsCache = data || [];
+  renderDispatchSummary(currentDispatchItemsCache);
+  renderDispatchItems(currentDispatchItemsCache);
+  renderCastSelect(allCastsCache);
+
+  const nextOrder = currentDispatchItemsCache.length + 1;
+  els.stopOrder.value = String(nextOrder);
 }
 
 function renderDispatchSummary(items) {
@@ -526,11 +615,14 @@ function renderDispatchSummary(items) {
   }
 
   const active = items.filter(x => normalizeStatus(x.status) === "pending");
+  const done = items.filter(x => normalizeStatus(x.status) === "done");
+  const cancel = items.filter(x => normalizeStatus(x.status) === "cancel");
+
   const totalKm = active.reduce((sum, x) => sum + Number(x.distance_km || 0), 0);
   const totalMin = active.reduce((sum, x) => sum + Number(x.travel_minutes || 0), 0);
 
   els.dispatchSummary.textContent =
-    `未完了 ${active.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分`;
+    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分`;
 }
 
 function renderDispatchItems(items) {
@@ -541,10 +633,15 @@ function renderDispatchItems(items) {
     return;
   }
 
-  items.forEach(item => {
+  items.forEach((item, index) => {
     const status = normalizeStatus(item.status);
     const badgeClass = status === "done" ? "done" : status === "cancel" ? "cancel" : "";
     const cardClass = status === "done" ? "done-card" : status === "cancel" ? "cancel-card" : "";
+
+    const isDone = status === "done";
+    const isCancel = status === "cancel";
+    const disableDone = isDone ? "disabled" : "";
+    const disableCancel = isCancel ? "disabled" : "";
 
     const div = document.createElement("div");
     div.className = `item ${cardClass}`;
@@ -557,8 +654,11 @@ function renderDispatchItems(items) {
       <p><span class="badge ${badgeClass}">${escapeHtml(status)}</span></p>
       <div class="actions">
         <button class="btn secondary route-btn" data-address="${escapeHtml(item.destination_address || "")}">ルート</button>
-        <button class="btn done-btn" data-id="${item.id}">完了</button>
-        <button class="btn danger cancel-btn" data-id="${item.id}">キャンセル</button>
+        <button class="btn secondary up-btn" data-id="${item.id}" ${index === 0 ? "disabled" : ""}>上へ</button>
+        <button class="btn secondary down-btn" data-id="${item.id}" ${index === items.length - 1 ? "disabled" : ""}>下へ</button>
+        <button class="btn done-btn" data-id="${item.id}" ${disableDone}>完了</button>
+        <button class="btn danger cancel-btn" data-id="${item.id}" ${disableCancel}>キャンセル</button>
+        <button class="btn danger delete-item-btn" data-id="${item.id}">削除</button>
       </div>
     `;
 
@@ -573,6 +673,18 @@ function renderDispatchItems(items) {
 
     div.querySelector(".cancel-btn")?.addEventListener("click", async e => {
       await updateItemStatus(Number(e.currentTarget.dataset.id), "cancel");
+    });
+
+    div.querySelector(".delete-item-btn")?.addEventListener("click", async e => {
+      await deleteDispatchItem(Number(e.currentTarget.dataset.id));
+    });
+
+    div.querySelector(".up-btn")?.addEventListener("click", async e => {
+      await moveDispatchItem(Number(e.currentTarget.dataset.id), -1);
+    });
+
+    div.querySelector(".down-btn")?.addEventListener("click", async e => {
+      await moveDispatchItem(Number(e.currentTarget.dataset.id), 1);
     });
 
     els.dispatchList.appendChild(div);
@@ -593,6 +705,77 @@ async function updateItemStatus(itemId, status) {
   await addHistory(currentDispatchId, itemId, "update_status", `状態を ${status} に変更`);
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
+}
+
+async function deleteDispatchItem(itemId) {
+  const ok = window.confirm("この配車項目を削除しますか？");
+  if (!ok) return;
+
+  const { error } = await supabaseClient
+    .from("dispatch_items")
+    .delete()
+    .eq("id", itemId);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await normalizeStopOrders(currentDispatchId);
+  await addHistory(currentDispatchId, itemId, "delete_dispatch_item", "配車項目を削除");
+  await loadDispatchItems(currentDispatchId);
+  await loadHistory();
+}
+
+async function moveDispatchItem(itemId, direction) {
+  const items = [...currentDispatchItemsCache].sort(
+    (a, b) => Number(a.stop_order) - Number(b.stop_order)
+  );
+
+  const index = items.findIndex(item => Number(item.id) === Number(itemId));
+  if (index < 0) return;
+
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= items.length) return;
+
+  const temp = items[index];
+  items[index] = items[targetIndex];
+  items[targetIndex] = temp;
+
+  for (let i = 0; i < items.length; i++) {
+    const stopOrder = i + 1;
+    await supabaseClient
+      .from("dispatch_items")
+      .update({ stop_order: stopOrder })
+      .eq("id", items[i].id);
+  }
+
+  await addHistory(currentDispatchId, itemId, "move_dispatch_item", direction < 0 ? "配車項目を上へ移動" : "配車項目を下へ移動");
+  await loadDispatchItems(currentDispatchId);
+  await loadHistory();
+}
+
+async function normalizeStopOrders(dispatchId) {
+  if (!dispatchId) return;
+
+  const { data, error } = await supabaseClient
+    .from("dispatch_items")
+    .select("id, stop_order")
+    .eq("dispatch_id", dispatchId)
+    .order("stop_order", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (error || !data) return;
+
+  for (let i = 0; i < data.length; i++) {
+    const desiredOrder = i + 1;
+    if (Number(data[i].stop_order) === desiredOrder) continue;
+
+    await supabaseClient
+      .from("dispatch_items")
+      .update({ stop_order: desiredOrder })
+      .eq("id", data[i].id);
+  }
 }
 
 async function addHistory(dispatchId, itemId, action, message) {
@@ -643,10 +826,12 @@ async function loadHistory() {
 }
 
 function optimizeDispatchOrder(items) {
-  const active = items.filter(x => normalizeStatus(x.status) === "pending");
+  const pending = items.filter(x => normalizeStatus(x.status) === "pending");
+  const doneOrCancel = items.filter(x => normalizeStatus(x.status) !== "pending");
+
   const grouped = new Map();
 
-  active.forEach(item => {
+  pending.forEach(item => {
     const key = item.destination_area || "未分類";
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(item);
@@ -660,11 +845,21 @@ function optimizeDispatchOrder(items) {
 
   const result = [];
   orderedGroups.forEach(([, list]) => {
-    list.sort((a, b) => Number(a.distance_km || 9999) - Number(b.distance_km || 9999));
+    list.sort((a, b) => {
+      const aKm = Number(a.distance_km || 9999);
+      const bKm = Number(b.distance_km || 9999);
+
+      if (aKm !== bKm) return aKm - bKm;
+
+      const aLat = Number(a.latitude || 0);
+      const bLat = Number(b.latitude || 0);
+      return bLat - aLat;
+    });
+
     result.push(...list);
   });
 
-  return result;
+  return [...result, ...doneOrCancel];
 }
 
 async function runOptimize() {
@@ -730,8 +925,45 @@ function parseCsvLine(line) {
   return result;
 }
 
+function normalizeCsvHeader(header) {
+  const h = String(header || "").trim().toLowerCase();
+  const map = {
+    name: "name",
+    名前: "name",
+    cast_name: "name",
+
+    phone: "phone",
+    tel: "phone",
+    telephone: "phone",
+    電話: "phone",
+    電話番号: "phone",
+
+    address: "address",
+    住所: "address",
+
+    area: "area",
+    方面: "area",
+
+    latitude: "latitude",
+    lat: "latitude",
+    緯度: "latitude",
+
+    longitude: "longitude",
+    lng: "longitude",
+    lon: "longitude",
+    経度: "longitude",
+
+    memo: "memo",
+    メモ: "memo",
+    note: "memo"
+  };
+
+  return map[header] || map[h] || h;
+}
+
 function parseCsv(text) {
   const lines = text
+    .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
@@ -739,7 +971,7 @@ function parseCsv(text) {
 
   if (!lines.length) return [];
 
-  const headers = parseCsvLine(lines[0]).map(h => h.trim());
+  const headers = parseCsvLine(lines[0]).map(h => normalizeCsvHeader(h.trim()));
   const rows = [];
 
   for (let i = 1; i < lines.length; i++) {
@@ -769,25 +1001,32 @@ async function importCsv() {
     return;
   }
 
-  const payload = rows.map(row => {
-    const lat = row.latitude ? Number(row.latitude) : null;
-    const lng = row.longitude ? Number(row.longitude) : null;
+  const existingNames = new Set(
+    allCastsCache.map(c => String(c.name || "").trim().toLowerCase())
+  );
 
-    return {
-      name: row.name?.trim() || "",
-      phone: row.phone?.trim() || "",
-      address: row.address?.trim() || "",
-      area: row.area?.trim() || (lat && lng ? guessArea(lat, lng) : null),
-      latitude: lat,
-      longitude: lng,
-      memo: row.memo?.trim() || "",
-      is_active: true,
-      created_by: currentUser.id
-    };
-  }).filter(x => x.name);
+  const payload = rows
+    .map(row => {
+      const lat = toNullableNumber(row.latitude);
+      const lng = toNullableNumber(row.longitude);
+
+      return {
+        name: String(row.name || "").trim(),
+        phone: String(row.phone || "").trim(),
+        address: String(row.address || "").trim(),
+        area: String(row.area || "").trim() || (lat !== null && lng !== null ? guessArea(lat, lng) : null),
+        latitude: lat,
+        longitude: lng,
+        memo: String(row.memo || "").trim(),
+        is_active: true,
+        created_by: currentUser.id
+      };
+    })
+    .filter(x => x.name)
+    .filter(x => !existingNames.has(x.name.toLowerCase()));
 
   if (!payload.length) {
-    alert("有効なname列がありません");
+    alert("有効なname列がないか、すべて既存キャストと重複しています");
     return;
   }
 
@@ -839,6 +1078,21 @@ function setupEvents() {
   els.addCastBtn.addEventListener("click", addCastToDispatch);
   els.optimizeBtn.addEventListener("click", async () => {
     await runOptimize();
+  });
+
+  els.dispatchDate.addEventListener("change", async () => {
+    if (!els.dispatchDate.value) return;
+    await loadDispatchByDate(els.dispatchDate.value);
+  });
+
+  els.castLatLngText.addEventListener("blur", () => {
+    const parsed = parseLatLngText(els.castLatLngText.value);
+    if (!parsed) return;
+    els.castLat.value = parsed.lat;
+    els.castLng.value = parsed.lng;
+    if (!els.castArea.value.trim()) {
+      els.castArea.value = guessArea(parsed.lat, parsed.lng);
+    }
   });
 }
 
