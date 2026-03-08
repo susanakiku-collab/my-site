@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>THEMIS AI Dispatch | Dashboard</title>
   <link rel="stylesheet" href="style.css" />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
 </head>
 <body>
 
@@ -93,7 +99,6 @@
               placeholder="例: 東京都葛飾区鎌倉2丁目15-13"
               autocomplete="off"
             />
-            <div id="addressSuggestions" class="suggestions"></div>
           </label>
 
           <label>
@@ -118,7 +123,7 @@
         </div>
 
         <div class="row wrap">
-          <button id="geocodeBtn" class="btn secondary">住所から座標取得</button>
+          <button id="openPinMapBtn" class="btn secondary">地図で位置を確認</button>
           <button id="saveCastBtn" class="btn">保存</button>
           <button id="cancelEditBtn" class="btn secondary hidden">編集キャンセル</button>
         </div>
@@ -145,7 +150,32 @@
     </section>
   </main>
 
+  <!-- 地図モーダル -->
+  <div id="pinMapModal" class="modal hidden">
+    <div class="modal-backdrop" id="pinMapBackdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>位置を確認</h3>
+        <button id="closePinMapBtn" class="btn danger">閉じる</button>
+      </div>
+
+      <p class="muted">
+        地図をクリックすると、その場所の緯度経度を保存します。
+      </p>
+
+      <div id="pinMap" class="pin-map"></div>
+
+      <div class="row wrap">
+        <button id="confirmPinBtn" class="btn">この位置を使う</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin=""
+  ></script>
   <script src="config.js"></script>
   <script src="dashboard.js"></script>
 </body>
