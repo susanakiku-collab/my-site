@@ -2091,14 +2091,56 @@ async function resetAllDataDanger() {
   if (!window.confirm("全消去しますか？この操作は戻せません。")) return;
   if (!window.confirm("本当に全消去しますか？")) return;
 
-  const tables = ["dispatch_items", "dispatch_plans", "vehicle_daily_reports", "dispatch_history"];
-  for (const table of tables) {
-    const { error } = await supabaseClient.from(table).delete().neq("id", 0);
-    if (error) console.error(table, error);
-  }
+  try {
+    // まず履歴以外を消す
+    const deleteTargets = [
+      "dispatch_items",
+      "dispatch_plans",
+      "vehicle_daily_reports",
+      "casts",
+      "vehicles"
+    ];
 
-  await addHistory(null, null, "danger_reset", "主要データを全消去");
-  await loadHomeAndAll();
+    for (const table of deleteTargets) {
+      const { error } = await supabaseClient
+        .from(table)
+        .delete()
+        .neq("id", 0);
+
+      if (error) {
+        console.error(`${table} delete error:`, error);
+        alert(`${table} の削除でエラー: ${error.message}`);
+        return;
+      }
+    }
+
+    // 履歴は最後に消す
+    const { error: historyDeleteError } = await supabaseClient
+      .from("dispatch_history")
+      .delete()
+      .neq("id", 0);
+
+    if (historyDeleteError) {
+      console.error("dispatch_history delete error:", historyDeleteError);
+      alert(`dispatch_history の削除でエラー: ${historyDeleteError.message}`);
+      return;
+    }
+
+    // 画面側の状態も初期化
+    currentDispatchId = null;
+    activeVehicleIdsForToday = new Set();
+
+    resetCastForm();
+    resetVehicleForm();
+    resetPlanForm();
+    resetActualForm();
+
+    alert("全データを削除しました");
+    await loadHomeAndAll();
+  } catch (err) {
+    console.error("resetAllDataDanger error:", err);
+    alert("全消去中にエラーが発生しました");
+  }
 }
 
 async function loadHomeAndAll() {
