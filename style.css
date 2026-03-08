@@ -167,7 +167,7 @@ hr{
   border-radius:12px;
   cursor:pointer;
   white-space:nowrap;
-  transition:transform .15s ease, opacity .15s ease;
+  transition:transform .15s ease, opacity .15s ease, background .15s ease;
 }
 
 .tab:hover{
@@ -227,6 +227,12 @@ textarea{
   padding:12px;
   font-size:16px;
   outline:none;
+  transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+input::placeholder,
+textarea::placeholder{
+  color:#8090a8;
 }
 
 input:focus,
@@ -253,6 +259,7 @@ textarea{
 
 button,
 .btn{
+  appearance:none;
   border:none;
   background:var(--btn);
   color:#fff;
@@ -261,13 +268,19 @@ button,
   cursor:pointer;
   font-weight:700;
   font-size:14px;
-  transition:transform .15s ease, opacity .15s ease;
+  line-height:1.2;
+  transition:transform .15s ease, opacity .15s ease, filter .15s ease;
 }
 
 button:hover,
 .btn:hover{
   opacity:.95;
   transform:translateY(-1px);
+}
+
+button:active,
+.btn:active{
+  transform:translateY(0);
 }
 
 .btn.secondary{
@@ -278,12 +291,21 @@ button:hover,
   background:var(--danger);
 }
 
-.btn.done{
+.btn.done,
+.done-btn{
   background:var(--ok);
 }
 
 .edit-cast-btn{
   background:#5a6a85;
+}
+
+button:disabled,
+.btn:disabled{
+  cursor:not-allowed;
+  opacity:.45;
+  transform:none;
+  filter:grayscale(.15);
 }
 
 /* サマリー */
@@ -294,7 +316,7 @@ button:hover,
   border:1px dashed var(--line);
   border-radius:12px;
   background:#0d1420;
-  line-height:1.5;
+  line-height:1.6;
 }
 
 /* リスト */
@@ -316,12 +338,14 @@ button:hover,
   margin:0 0 10px;
   font-size:18px;
   line-height:1.35;
+  word-break:break-word;
 }
 
 .item p{
   margin:5px 0;
   color:var(--muted);
-  line-height:1.5;
+  line-height:1.55;
+  word-break:break-word;
 }
 
 .actions{
@@ -329,6 +353,11 @@ button:hover,
   gap:8px;
   flex-wrap:wrap;
   margin-top:12px;
+}
+
+.actions .btn,
+.actions button{
+  min-width:88px;
 }
 
 /* バッジ */
@@ -449,8 +478,16 @@ button:hover,
     width:100%;
   }
 
-  .actions .btn{
-    width:auto;
+  .actions{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+  }
+
+  .actions .btn,
+  .actions button{
+    width:100%;
+    min-width:0;
   }
 
   .modal-content{
@@ -459,5 +496,31 @@ button:hover,
 
   .pin-map{
     height:360px;
+  }
+}
+
+@media (max-width:520px){
+  .topbar{
+    padding:14px 16px;
+  }
+
+  .brand h1{
+    font-size:20px;
+  }
+
+  .card{
+    padding:14px;
+  }
+
+  .item{
+    padding:12px;
+  }
+
+  .item h3{
+    font-size:16px;
+  }
+
+  .actions{
+    grid-template-columns:1fr;
   }
 }
