@@ -114,6 +114,59 @@ function guessArea(lat, lng) {
   if (lng >= 139.95) return "市川・東京方面";
   return "周辺方面";
 }
+function normalizeAddressForSearch(address) {
+  return String(address || "")
+    .replace(/〒\s*\d{3}-?\d{4}/g, "")
+    .replace(/^日本[、,\s]*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function searchAddressForMap(address) {
+  const normalized = normalizeAddressForSearch(address);
+
+  if (!normalized) return null;
+
+  const candidates = [
+    `日本 ${normalized}`,
+    normalized,
+    normalized
+      .replace(/([0-9]+)-([0-9]+)-([0-9]+)/g, "$1丁目$2-$3")
+      .replace(/([0-9]+)-([0-9]+)/g, "$1丁目$2")
+  ];
+
+  for (const query of candidates) {
+    const url =
+      "https://nominatim.openstreetmap.org/search?" +
+      new URLSearchParams({
+        q: query,
+        format: "json",
+        limit: 1,
+        countrycodes: "jp",
+        addressdetails: "1"
+      });
+
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    if (!res.ok) continue;
+
+    const data = await res.json();
+
+    if (Array.isArray(data) && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon),
+        displayName: data[0].display_name || query
+      };
+    }
+  }
+
+  return null;
+}
 
 async function ensureAuth() {
   const { data, error } = await supabaseClient.auth.getUser();
@@ -183,15 +236,35 @@ function fillCastForm(cast) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function openPinMapModal() {
+async function openPinMapModal() {
   els.pinMapModal.classList.remove("hidden");
 
   const lat = parseFloat(els.castLat.value);
   const lng = parseFloat(els.castLng.value);
 
   const hasSavedPoint = !Number.isNaN(lat) && !Number.isNaN(lng);
-  const initialCenter = hasSavedPoint ? [lat, lng] : [ORIGIN_LAT, ORIGIN_LNG];
-  const initialZoom = hasSavedPoint ? 16 : 13;
+
+  let initialCenter = [ORIGIN_LAT, ORIGIN_LNG];
+  let initialZoom = 13;
+
+  if (hasSavedPoint) {
+    initialCenter = [lat, lng];
+    initialZoom = 16;
+  } else {
+    const address = els.castAddress.value.trim();
+
+    if (address) {
+      try {
+        const found = await searchAddressForMap(address);
+        if (found) {
+          initialCenter = [found.lat, found.lng];
+          initialZoom = 16;
+        }
+      } catch (err) {
+        console.error("map search error:", err);
+      }
+    }
+  }
 
   if (!pinMap) {
     pinMap = L.map(els.pinMapEl).setView(initialCenter, initialZoom);
@@ -224,11 +297,11 @@ function openPinMapModal() {
       pinMarker = L.marker(selectedLatLng).addTo(pinMap);
     }
   } else {
-    selectedLatLng = null;
     if (pinMarker) {
       pinMap.removeLayer(pinMarker);
       pinMarker = null;
     }
+    selectedLatLng = null;
   }
 
   setTimeout(() => pinMap.invalidateSize(), 150);
