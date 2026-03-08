@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-
   <header class="topbar">
     <div class="brand">
       <h1>THEMIS AI Dispatch</h1>
@@ -22,15 +21,15 @@
 
   <main class="container">
     <nav class="tabs">
-      <button class="tab active" data-tab="dispatchTab">配車</button>
-      <button class="tab" data-tab="plansTab">送り予定表</button>
+      <button class="tab active" data-tab="dispatchTab">今日の配車</button>
+      <button class="tab" data-tab="plansTab">予定表</button>
       <button class="tab" data-tab="castsTab">キャスト管理</button>
       <button class="tab" data-tab="vehiclesTab">車両管理</button>
       <button class="tab" data-tab="drivingTab">走行管理</button>
       <button class="tab" data-tab="historyTab">履歴</button>
     </nav>
 
-    <!-- 配車 -->
+    <!-- 今日の配車 -->
     <section id="dispatchTab" class="tab-panel active">
       <div class="card">
         <h2>今日の配車</h2>
@@ -42,13 +41,43 @@
           </label>
 
           <label>
-            <span>ドライバー名</span>
-            <input type="text" id="driverName" placeholder="例: 菊池" />
+            <span>担当メモ</span>
+            <input type="text" id="driverName" placeholder="例: 本日担当" />
           </label>
+        </div>
 
+        <div class="row wrap">
+          <button id="createDispatchBtn" class="btn">配車作成</button>
+          <button id="loadDispatchBtn" class="btn secondary">配車読込</button>
+          <button id="optimizeBtn" class="btn">AI配車</button>
+          <button id="copyLineDispatchBtn" class="btn secondary">LINE貼り付け文コピー</button>
+        </div>
+
+        <hr />
+
+        <h3>予定から取り込む</h3>
+        <div class="grid two">
+          <label class="full">
+            <span>予定一覧</span>
+            <select id="planSelect">
+              <option value="">予定を選択してください</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="row wrap">
+          <button id="addPlanToDispatchBtn" class="btn">予定から追加</button>
+        </div>
+
+        <hr />
+
+        <h3>予定外キャストを追加</h3>
+        <div class="grid two">
           <label>
-            <span>車両選択</span>
-            <select id="vehicleSelect"></select>
+            <span>キャスト選択</span>
+            <select id="castSelect">
+              <option value="">選択してください</option>
+            </select>
           </label>
 
           <label>
@@ -58,31 +87,7 @@
         </div>
 
         <div class="row wrap">
-          <button id="createDispatchBtn" class="btn">配車作成</button>
-          <button id="loadDispatchBtn" class="btn secondary">配車読込</button>
-          <button id="optimizeBtn" class="btn">AI並び替え</button>
-          <button id="copyLineDispatchBtn" class="btn secondary">LINE貼り付け文をコピー</button>
-        </div>
-
-        <hr />
-
-        <div class="grid two">
-          <label>
-            <span>キャスト選択</span>
-            <select id="castSelect"></select>
-          </label>
-
-          <label>
-            <span>予定一覧から追加</span>
-            <select id="planSelect">
-              <option value="">予定を選択してください</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="row wrap">
-          <button id="addCastBtn" class="btn">配車に追加</button>
-          <button id="addPlanToDispatchBtn" class="btn secondary">予定から追加</button>
+          <button id="addCastBtn" class="btn secondary">予定外キャスト追加</button>
         </div>
 
         <div id="dispatchSummary" class="summary-box muted"></div>
@@ -90,10 +95,10 @@
       </div>
     </section>
 
-    <!-- 送り予定表 -->
+    <!-- 予定表 -->
     <section id="plansTab" class="tab-panel">
       <div class="card">
-        <h2>送り予定表</h2>
+        <h2>予定表</h2>
 
         <div class="grid two">
           <label>
@@ -104,28 +109,38 @@
           <label>
             <span>時間</span>
             <select id="planHour">
-              <option value="0">0時</option>
-              <option value="1">1時</option>
-              <option value="2">2時</option>
-              <option value="3">3時</option>
-              <option value="4">4時</option>
-              <option value="5">5時</option>
+              <option value="0">12</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">L</option>
             </select>
           </label>
 
           <label>
             <span>キャスト</span>
-            <select id="planCastSelect"></select>
+            <select id="planCastSelect">
+              <option value="">選択してください</option>
+            </select>
           </label>
 
           <label>
-            <span>地域</span>
-            <input type="text" id="planArea" placeholder="自動 or 手入力" />
+            <span>方面ブロック</span>
+            <select id="planArea">
+              <option value="">選択してください</option>
+              <option value="A1">A1</option>
+              <option value="A2">A2</option>
+              <option value="B">B</option>
+              <option value="C1">C1</option>
+              <option value="D">D</option>
+              <option value="無し">無し</option>
+            </select>
           </label>
 
           <label class="full">
             <span>メモ</span>
-            <textarea id="planNote" placeholder="補足があれば入力"></textarea>
+            <textarea id="planNote"></textarea>
           </label>
         </div>
 
@@ -135,10 +150,8 @@
           <button id="loadPlansBtn" class="btn secondary">予定読込</button>
         </div>
 
-        <hr />
-
         <div id="plansSummary" class="summary-box muted"></div>
-        <div id="plansBoard" class="list"></div>
+        <div id="plansBoard" class="plans-board"></div>
       </div>
     </section>
 
@@ -160,7 +173,7 @@
 
           <label class="full">
             <span>住所</span>
-            <input type="text" id="castAddress" placeholder="例: 千葉県松戸市..." />
+            <input type="text" id="castAddress" placeholder="例: 千葉県..." />
           </label>
 
           <label class="full">
@@ -169,8 +182,8 @@
           </label>
 
           <label>
-            <span>地域・方面（手動優先）</span>
-            <input type="text" id="castArea" placeholder="例: 松戸 / 柏 / 八千代 / 三郷" />
+            <span>表示方面（自由入力）</span>
+            <input type="text" id="castArea" placeholder="例: 船橋 / 柏 / 松戸" />
           </label>
 
           <label>
@@ -223,11 +236,6 @@
           </label>
 
           <label>
-            <span>車両名</span>
-            <input type="text" id="vehicleName" placeholder="例: ハイゼットカーゴ" />
-          </label>
-
-          <label>
             <span>担当ドライバー名</span>
             <input type="text" id="vehicleDriverName" placeholder="例: 菊池" />
           </label>
@@ -257,12 +265,7 @@
 
           <label>
             <span>帰宅方面</span>
-            <input type="text" id="vehicleHomeArea" placeholder="例: 柏 / 松戸 / 八千代" />
-          </label>
-
-          <label class="full">
-            <span>積載メモ</span>
-            <input type="text" id="vehicleCapacityNote" placeholder="例: 荷物あり / 後部狭め" />
+            <input type="text" id="vehicleHomeArea" placeholder="例: 柏 / 松戸 / 船橋" />
           </label>
 
           <label class="full">
@@ -293,7 +296,9 @@
 
           <label>
             <span>車両</span>
-            <select id="reportVehicleSelect"></select>
+            <select id="reportVehicleSelect">
+              <option value="">選択してください</option>
+            </select>
           </label>
 
           <label>
@@ -303,12 +308,12 @@
 
           <label>
             <span>1日の走行距離（km）</span>
-            <input type="number" step="0.1" id="reportDistanceKm" placeholder="例: 118.5" />
+            <input type="number" step="0.1" id="reportDistanceKm" />
           </label>
 
           <label class="full">
             <span>メモ</span>
-            <textarea id="reportNote" placeholder="任意入力"></textarea>
+            <textarea id="reportNote"></textarea>
           </label>
         </div>
 
