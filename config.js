@@ -4,11 +4,9 @@ window.APP_CONFIG = {
 
   SUPABASE_ANON_KEY: "sb_publishable_veQ6nay4yBjAHz95Hv55ng_QahlWYUz",
 
+  // 松戸駅
   ORIGIN_LABEL: "松戸駅",
-
-  ORIGIN_LAT: 35.7843,
-
-  ORIGIN_LNG: 139.9006
-
+  ORIGIN_LAT: 35.784315,
+  ORIGIN_LNG: 139.900215
 };
-
+ 
