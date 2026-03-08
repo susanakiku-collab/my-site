@@ -1,6 +1,6 @@
 /* =========================================================
    THEMIS AI Dispatch
-   dashboard.js  安定版
+   dashboard.js 安定版
 ========================================================= */
 
 /* =========================
@@ -8,7 +8,7 @@
 ========================= */
 
 const SUPABASE_URL = "https://cgtkbroxqdamnirjhzxy.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_veQ6nay4yBjAHz95Hv55ng_QahlWYUz";
+const SUPABASE_ANON_KEY = "sb_publishable_xxxxxxxxxxxxxxxxx";
 
 const supabase = window.supabase.createClient(
   SUPABASE_URL,
@@ -426,6 +426,3 @@ async function importDispatch(){
   showStatus("dispatch登録完了")
 
 }
-
-
-
