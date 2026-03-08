@@ -114,6 +114,7 @@ function guessArea(lat, lng) {
   if (lng >= 139.95) return "市川・東京方面";
   return "周辺方面";
 }
+
 function normalizeAddressForSearch(address) {
   return String(address || "")
     .replace(/〒\s*\d{3}-?\d{4}/g, "")
@@ -239,16 +240,15 @@ function fillCastForm(cast) {
 async function openPinMapModal() {
   els.pinMapModal.classList.remove("hidden");
 
-  const lat = parseFloat(els.castLat.value);
-  const lng = parseFloat(els.castLng.value);
-
-  const hasSavedPoint = !Number.isNaN(lat) && !Number.isNaN(lng);
+  const savedLat = parseFloat(els.castLat.value);
+  const savedLng = parseFloat(els.castLng.value);
+  const hasSavedPoint = !Number.isNaN(savedLat) && !Number.isNaN(savedLng);
 
   let initialCenter = [ORIGIN_LAT, ORIGIN_LNG];
   let initialZoom = 13;
 
   if (hasSavedPoint) {
-    initialCenter = [lat, lng];
+    initialCenter = [savedLat, savedLng];
     initialZoom = 16;
   } else {
     const address = els.castAddress.value.trim();
@@ -256,12 +256,14 @@ async function openPinMapModal() {
     if (address) {
       try {
         const found = await searchAddressForMap(address);
+        console.log("address search result:", found);
+
         if (found) {
           initialCenter = [found.lat, found.lng];
           initialZoom = 16;
         }
       } catch (err) {
-        console.error("map search error:", err);
+        console.error("map address search error:", err);
       }
     }
   }
@@ -285,11 +287,10 @@ async function openPinMapModal() {
     });
   } else {
     pinMap.setView(initialCenter, initialZoom);
-    setTimeout(() => pinMap.invalidateSize(), 150);
   }
 
   if (hasSavedPoint) {
-    selectedLatLng = L.latLng(lat, lng);
+    selectedLatLng = L.latLng(savedLat, savedLng);
 
     if (pinMarker) {
       pinMarker.setLatLng(selectedLatLng);
@@ -304,7 +305,9 @@ async function openPinMapModal() {
     selectedLatLng = null;
   }
 
-  setTimeout(() => pinMap.invalidateSize(), 150);
+  setTimeout(() => {
+    pinMap.invalidateSize();
+  }, 200);
 }
 
 function closePinMapModal() {
@@ -922,7 +925,10 @@ function setupTabs() {
 function setupEvents() {
   els.logoutBtn.addEventListener("click", logout);
 
-  els.openPinMapBtn.addEventListener("click", openPinMapModal);
+  els.openPinMapBtn.addEventListener("click", async () => {
+    await openPinMapModal();
+  });
+
   els.closePinMapBtn.addEventListener("click", closePinMapModal);
   els.pinMapBackdrop.addEventListener("click", closePinMapModal);
   els.confirmPinBtn.addEventListener("click", confirmPinSelection);
