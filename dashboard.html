@@ -24,6 +24,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="dispatchTab">配車</button>
       <button class="tab" data-tab="castsTab">キャスト管理</button>
+      <button class="tab" data-tab="vehiclesTab">車両管理</button>
       <button class="tab" data-tab="historyTab">履歴</button>
     </nav>
 
@@ -41,6 +42,13 @@
             <span>ドライバー名</span>
             <input type="text" id="driverName" placeholder="例: 菊池" />
           </label>
+
+          <label class="full">
+            <span>車両選択</span>
+            <select id="vehicleSelect">
+              <option value="">選択してください</option>
+            </select>
+          </label>
         </div>
 
         <div class="row wrap">
@@ -54,7 +62,9 @@
         <div class="grid two">
           <label>
             <span>キャスト選択</span>
-            <select id="castSelect"></select>
+            <select id="castSelect">
+              <option value="">選択してください</option>
+            </select>
           </label>
 
           <label>
@@ -107,7 +117,11 @@
 
           <label>
             <span>方面</span>
-            <input type="text" id="castArea" placeholder="柏方面 / 松戸方面 / 市川・東京方面" />
+            <input
+              type="text"
+              id="castArea"
+              placeholder="柏方面 / 松戸方面 / 市川・東京方面"
+            />
           </label>
 
           <label>
@@ -144,6 +158,73 @@
         </div>
 
         <div id="castsList" class="list"></div>
+      </div>
+    </section>
+
+    <section id="vehiclesTab" class="tab-panel">
+      <div class="card">
+        <h2>車両管理</h2>
+
+        <div class="grid two">
+          <label>
+            <span>ナンバー</span>
+            <input
+              type="text"
+              id="vehiclePlateNumber"
+              placeholder="例: 柏480あ1234"
+            />
+          </label>
+
+          <label>
+            <span>車両名 / 車種</span>
+            <input
+              type="text"
+              id="vehicleName"
+              placeholder="例: ハイゼットカーゴ S700V"
+            />
+          </label>
+
+          <label>
+            <span>担当ドライバー</span>
+            <input
+              type="text"
+              id="vehicleDriverName"
+              placeholder="例: 菊池"
+            />
+          </label>
+
+          <label>
+            <span>状態</span>
+            <select id="vehicleStatus">
+              <option value="waiting">待機</option>
+              <option value="running">稼働中</option>
+              <option value="maintenance">整備中</option>
+            </select>
+          </label>
+
+          <label>
+            <span>積載メモ</span>
+            <input
+              type="text"
+              id="vehicleCapacityNote"
+              placeholder="例: 軽貨物 / 4名送迎 / 荷室広め"
+            />
+          </label>
+
+          <label class="full">
+            <span>メモ</span>
+            <textarea id="vehicleMemo"></textarea>
+          </label>
+        </div>
+
+        <div class="row wrap">
+          <button id="saveVehicleBtn" class="btn">保存</button>
+          <button id="cancelVehicleEditBtn" class="btn secondary hidden">編集キャンセル</button>
+        </div>
+
+        <hr />
+
+        <div id="vehiclesList" class="list"></div>
       </div>
     </section>
 
