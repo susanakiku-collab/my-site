@@ -5,12 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>THEMIS AI Dispatch | Dashboard</title>
   <link rel="stylesheet" href="style.css" />
-
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
 </head>
 <body>
 
@@ -42,6 +36,7 @@
             <span>日付</span>
             <input type="date" id="dispatchDate" />
           </label>
+
           <label>
             <span>ドライバー名</span>
             <input type="text" id="driverName" placeholder="例: 菊池" />
@@ -61,6 +56,7 @@
             <span>キャスト選択</span>
             <select id="castSelect"></select>
           </label>
+
           <label>
             <span>順番</span>
             <input type="number" id="stopOrder" min="1" value="1" />
@@ -91,13 +87,21 @@
             <input type="text" id="castPhone" />
           </label>
 
-          <label class="full address-field">
+          <label class="full">
             <span>住所</span>
             <input
               type="text"
               id="castAddress"
               placeholder="例: 東京都葛飾区鎌倉2丁目15-13"
-              autocomplete="off"
+            />
+          </label>
+
+          <label class="full">
+            <span>Google Mapsから取得した座標を貼り付け</span>
+            <input
+              type="text"
+              id="castLatLngText"
+              placeholder="例: 35.742891,139.876123"
             />
           </label>
 
@@ -123,7 +127,8 @@
         </div>
 
         <div class="row wrap">
-          <button id="openPinMapBtn" class="btn secondary">地図で位置を確認</button>
+          <button id="openGoogleMapBtn" class="btn secondary">Google Mapsで確認</button>
+          <button id="applyLatLngBtn" class="btn secondary">貼り付け座標を反映</button>
           <button id="saveCastBtn" class="btn">保存</button>
           <button id="cancelEditBtn" class="btn secondary hidden">編集キャンセル</button>
         </div>
@@ -150,32 +155,7 @@
     </section>
   </main>
 
-  <!-- 地図モーダル -->
-  <div id="pinMapModal" class="modal hidden">
-    <div class="modal-backdrop" id="pinMapBackdrop"></div>
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>位置を確認</h3>
-        <button id="closePinMapBtn" class="btn danger">閉じる</button>
-      </div>
-
-      <p class="muted">
-        地図をクリックすると、その場所の緯度経度を保存します。
-      </p>
-
-      <div id="pinMap" class="pin-map"></div>
-
-      <div class="row wrap">
-        <button id="confirmPinBtn" class="btn">この位置を使う</button>
-      </div>
-    </div>
-  </div>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    crossorigin=""
-  ></script>
   <script src="config.js"></script>
   <script src="dashboard.js"></script>
 </body>
