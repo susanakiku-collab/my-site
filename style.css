@@ -14,11 +14,21 @@
   --shadow:0 10px 30px rgba(0,0,0,.35);
   --radius:16px;
 
-  --doneBg:rgba(47,191,122,.12);
-  --doneBd:rgba(47,191,122,.55);
+  --doneBg:rgba(47,191,122,.14);
+  --doneBd:rgba(47,191,122,.58);
 
-  --cancelBg:rgba(224,82,82,.12);
-  --cancelBd:rgba(224,82,82,.55);
+  --cancelBg:rgba(224,82,82,.14);
+  --cancelBd:rgba(224,82,82,.58);
+
+  --assignedBg:rgba(45,108,223,.14);
+  --assignedBd:rgba(45,108,223,.58);
+
+  --excelBg:#f4f4f4;
+  --excelCell:#ffffff;
+  --excelLine:#909090;
+  --excelHeader:#ececec;
+  --excelTime:#e4e4e4;
+  --excelText:#111111;
 }
 
 *{
@@ -62,29 +72,6 @@ hr{
   margin:20px 0;
 }
 
-/* ログイン画面 */
-
-.login-card{
-  width:min(100% - 32px, 420px);
-  margin:10vh auto 0;
-  background:var(--card);
-  border:1px solid var(--line);
-  border-radius:var(--radius);
-  box-shadow:var(--shadow);
-  padding:28px;
-}
-
-.login-card h2{
-  margin:0 0 18px;
-  font-size:22px;
-}
-
-#authMessage{
-  margin-top:14px;
-  font-weight:700;
-  line-height:1.5;
-}
-
 /* 上部バー */
 
 .topbar{
@@ -105,7 +92,6 @@ hr{
   margin:0;
   font-size:22px;
   line-height:1.2;
-  letter-spacing:.02em;
 }
 
 .sub{
@@ -124,7 +110,7 @@ hr{
 /* レイアウト */
 
 .container{
-  width:min(100% - 24px, 1100px);
+  width:min(100% - 24px, 1280px);
   margin:0 auto;
   padding:20px 0 40px;
 }
@@ -160,15 +146,6 @@ hr{
   padding-bottom:2px;
 }
 
-.tabs::-webkit-scrollbar{
-  height:8px;
-}
-
-.tabs::-webkit-scrollbar-thumb{
-  background:rgba(255,255,255,.12);
-  border-radius:999px;
-}
-
 .tab{
   border:1px solid var(--line);
   background:#101722;
@@ -177,7 +154,7 @@ hr{
   border-radius:12px;
   cursor:pointer;
   white-space:nowrap;
-  transition:transform .15s ease, opacity .15s ease, background .15s ease;
+  transition:transform .15s ease, opacity .15s ease;
 }
 
 .tab:hover{
@@ -237,12 +214,6 @@ textarea{
   padding:12px;
   font-size:16px;
   outline:none;
-  transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
-}
-
-input::placeholder,
-textarea::placeholder{
-  color:#8090a8;
 }
 
 input:focus,
@@ -257,22 +228,8 @@ textarea{
   resize:vertical;
 }
 
-select{
-  appearance:none;
-  background-image:
-    linear-gradient(45deg, transparent 50%, #8ea2c2 50%),
-    linear-gradient(135deg, #8ea2c2 50%, transparent 50%);
-  background-position:
-    calc(100% - 18px) calc(50% - 3px),
-    calc(100% - 12px) calc(50% - 3px);
-  background-size:6px 6px, 6px 6px;
-  background-repeat:no-repeat;
-  padding-right:36px;
-}
-
 /* ボタン */
 
-.btn-row,
 .row{
   display:flex;
   gap:10px;
@@ -282,7 +239,6 @@ select{
 
 button,
 .btn{
-  appearance:none;
   border:none;
   background:var(--btn);
   color:#fff;
@@ -291,19 +247,13 @@ button,
   cursor:pointer;
   font-weight:700;
   font-size:14px;
-  line-height:1.2;
-  transition:transform .15s ease, opacity .15s ease, filter .15s ease, box-shadow .15s ease;
+  transition:transform .15s ease, opacity .15s ease;
 }
 
 button:hover,
 .btn:hover{
   opacity:.95;
   transform:translateY(-1px);
-}
-
-button:active,
-.btn:active{
-  transform:translateY(0);
 }
 
 .btn.secondary{
@@ -314,23 +264,8 @@ button:active,
   background:var(--danger);
 }
 
-.btn.done,
-.done-btn{
+.btn.done{
   background:var(--ok);
-}
-
-.edit-cast-btn,
-.edit-vehicle-btn{
-  background:#5a6a85;
-}
-
-button:disabled,
-.btn:disabled{
-  cursor:not-allowed;
-  opacity:.45;
-  transform:none;
-  filter:grayscale(.15);
-  box-shadow:none;
 }
 
 /* サマリー */
@@ -341,7 +276,7 @@ button:disabled,
   border:1px dashed var(--line);
   border-radius:12px;
   background:#0d1420;
-  line-height:1.6;
+  line-height:1.5;
 }
 
 /* リスト */
@@ -363,14 +298,12 @@ button:disabled,
   margin:0 0 10px;
   font-size:18px;
   line-height:1.35;
-  word-break:break-word;
 }
 
 .item p{
   margin:5px 0;
   color:var(--muted);
-  line-height:1.55;
-  word-break:break-word;
+  line-height:1.5;
 }
 
 .actions{
@@ -378,11 +311,6 @@ button:disabled,
   gap:8px;
   flex-wrap:wrap;
   margin-top:12px;
-}
-
-.actions .btn,
-.actions button{
-  min-width:88px;
 }
 
 /* バッジ */
@@ -400,13 +328,19 @@ button:disabled,
 .badge.done{
   background:var(--doneBg);
   border-color:var(--doneBd);
-  color:#7be2ab;
+  color:#8cf0b9;
 }
 
 .badge.cancel{
   background:var(--cancelBg);
   border-color:var(--cancelBd);
-  color:#ffaaaa;
+  color:#ffb1b1;
+}
+
+.badge.assigned{
+  background:var(--assignedBg);
+  border-color:var(--assignedBd);
+  color:#9ec4ff;
 }
 
 .done-card{
@@ -419,84 +353,188 @@ button:disabled,
   border-color:var(--cancelBd);
 }
 
-/* ファイル入力 */
+.assigned-card{
+  background:linear-gradient(180deg, rgba(45,108,223,.08), rgba(15,22,33,1));
+  border-color:var(--assignedBd);
+}
+
+/* CSV */
 
 #csvFileInput{
   max-width:360px;
 }
 
-/* モーダル拡張用 */
+/* =========================
+   予定表 Excel風
+========================= */
 
-.modal{
-  position:fixed;
-  inset:0;
-  z-index:2000;
+.plans-board{
+  margin-top:16px;
 }
 
-.modal-backdrop{
-  position:absolute;
-  inset:0;
-  background:rgba(0,0,0,.6);
-}
-
-.modal-content{
-  position:relative;
-  width:min(100% - 24px, 900px);
-  margin:40px auto;
-  background:var(--card);
-  border:1px solid var(--line);
+.plans-board .item{
+  background:var(--excelBg);
+  border:1px solid #6f6f6f;
   border-radius:12px;
-  box-shadow:var(--shadow);
-  padding:16px;
-  z-index:2;
+  padding:10px;
+  overflow:hidden;
 }
 
-.modal-header{
+.plans-board table{
+  width:100%;
+  min-width:980px;
+  border-collapse:collapse;
+  table-layout:fixed;
+  background:var(--excelCell);
+}
+
+.plans-board th,
+.plans-board td{
+  border:2px solid var(--excelLine);
+  color:var(--excelText);
+  vertical-align:top;
+}
+
+.plans-board thead th{
+  background:var(--excelHeader);
+  text-align:center;
+  font-size:18px;
+  font-weight:800;
+  padding:14px 8px;
+  letter-spacing:.02em;
+}
+
+.plans-board tbody td{
+  background:var(--excelCell);
+  min-height:110px;
+  height:110px;
+  padding:8px;
+}
+
+.plans-board tbody td:first-child{
+  background:var(--excelTime);
+  text-align:center;
+  font-size:48px;
+  font-weight:900;
+  line-height:1;
+  width:90px;
+  min-width:90px;
+  vertical-align:middle;
+  color:#000;
+}
+
+.plans-board tbody tr:last-child td:first-child{
+  font-size:54px;
+  letter-spacing:.04em;
+}
+
+.plans-board .plan-cell{
   display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:12px;
+  flex-direction:column;
+  gap:6px;
+}
+
+.plans-board .plan-name-card{
+  background:#fff;
+  border:1px solid #bcbcbc;
+  border-radius:6px;
+  padding:6px 8px;
+  color:#111;
+  font-size:14px;
+  line-height:1.35;
+  box-shadow:0 1px 0 rgba(0,0,0,.04);
+}
+
+.plans-board .plan-name-card.done{
+  background:#eefbf3;
+  border-color:#66c68d;
+}
+
+.plans-board .plan-name-card.cancel{
+  background:#fff2f2;
+  border-color:#e28282;
+}
+
+.plans-board .plan-name-card.assigned{
+  background:#eef4ff;
+  border-color:#7ea9ef;
+}
+
+.plans-board .plan-name{
+  font-weight:700;
+  color:#111;
+}
+
+.plans-board .plan-mini-status{
+  margin-top:4px;
+  font-size:11px;
+  font-weight:700;
+}
+
+.plans-board .plan-mini-status.done{
+  color:#1a8f54;
+}
+
+.plans-board .plan-mini-status.cancel{
+  color:#c74f4f;
+}
+
+.plans-board .plan-mini-status.assigned{
+  color:#2d6cdf;
+}
+
+.plans-board .mini-actions{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-top:6px;
+}
+
+.plans-board .mini-actions .btn{
+  padding:6px 8px;
+  font-size:11px;
+  border-radius:8px;
+}
+
+/* =========================
+   実配車結果
+========================= */
+
+#dispatchList .item > h3{
+  font-size:20px;
   margin-bottom:12px;
 }
 
-.modal-header h3{
-  margin:0;
+#dispatchList .item .item{
+  border-radius:12px;
+  padding:12px;
 }
 
-.pin-map{
-  width:100%;
-  height:480px;
-  border-radius:10px;
-  overflow:hidden;
-  margin-top:12px;
-  border:1px solid var(--line);
+#dispatchList .item .item p{
+  font-size:15px;
+  margin:4px 0;
 }
 
-/* 小さな見た目調整 */
-
-#dispatchSummary:empty{
-  display:none;
+#dispatchList .item .actions{
+  margin-top:10px;
 }
 
-#dispatchList .item,
-#castsList .item,
+/* =========================
+   車両管理・走行管理
+========================= */
+
 #vehiclesList .item,
+#dailyReportsList .item,
+#monthlyAverageList .item,
 #historyList .item{
-  position:relative;
+  background:var(--card2);
 }
 
-#historyList .item h3{
-  font-size:16px;
-}
+/* =========================
+   レスポンシブ
+========================= */
 
-#historyList .item p:last-child{
-  font-size:13px;
-  color:#8ea2c2;
-}
-
-/* レスポンシブ */
-
-@media (max-width:768px){
+@media (max-width:900px){
   .topbar{
     flex-direction:column;
     align-items:flex-start;
@@ -512,7 +550,7 @@ button:disabled,
   }
 
   .container{
-    width:min(100% - 16px, 1100px);
+    width:min(100% - 16px, 1280px);
     padding:16px 0 32px;
   }
 
@@ -521,49 +559,34 @@ button:disabled,
     width:100%;
   }
 
-  .actions{
-    display:grid;
-    grid-template-columns:repeat(2,minmax(0,1fr));
-    gap:8px;
-  }
-
   .actions .btn,
-  .actions button{
-    width:100%;
-    min-width:0;
+  .mini-actions .btn{
+    width:auto;
   }
 
-  .modal-content{
-    margin:20px auto;
+  .plans-board thead th{
+    font-size:15px;
+    padding:10px 6px;
   }
 
-  .pin-map{
-    height:360px;
-  }
-}
-
-@media (max-width:520px){
-  .topbar{
-    padding:14px 16px;
+  .plans-board tbody td{
+    min-height:92px;
+    height:92px;
+    padding:6px;
   }
 
-  .brand h1{
-    font-size:20px;
+  .plans-board tbody td:first-child{
+    font-size:34px;
+    width:64px;
+    min-width:64px;
   }
 
-  .card{
-    padding:14px;
+  .plans-board tbody tr:last-child td:first-child{
+    font-size:38px;
   }
 
-  .item{
-    padding:12px;
-  }
-
-  .item h3{
-    font-size:16px;
-  }
-
-  .actions{
-    grid-template-columns:1fr;
+  .plans-board .plan-name-card{
+    padding:5px 6px;
+    font-size:12px;
   }
 }
