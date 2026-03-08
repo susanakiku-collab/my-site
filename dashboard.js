@@ -307,6 +307,16 @@ function classifyAreaByAddress(address) {
   if (a.includes("野田市")) return "野田";
   if (a.includes("習志野市")) return "習志野";
   if (a.includes("浦安市")) return "浦安";
+  if (a.includes("八千代市")) {
+    if (["大和田新田", "勝田台", "八千代台", "村上", "緑が丘", "緑ヶ丘", "高津", "大和田"].some(k => a.includes(k))) {
+      return "八千代";
+    }
+    return "八千代";
+  }
+  if (a.includes("白井市")) return "白井";
+  if (a.includes("印西市")) return "印西";
+  if (a.includes("佐倉市")) return "佐倉";
+  if (a.includes("成田市")) return "成田";
 
   /* 埼玉 */
   if (a.includes("三郷市")) {
@@ -377,7 +387,8 @@ function classifyAreaByAddress(address) {
     { name: "八潮", keywords: ["八潮", "大瀬", "茜町", "木曽根"] },
     { name: "取手", keywords: ["取手", "藤代", "宮和田"] },
     { name: "守谷", keywords: ["守谷", "みずき野", "けやき台", "ひがし野"] },
-    { name: "みらい平", keywords: ["みらい平", "陽光台", "紫峰ヶ丘", "富士見ヶ丘"] }
+    { name: "みらい平", keywords: ["みらい平", "陽光台", "紫峰ヶ丘", "富士見ヶ丘"] },
+    { name: "八千代", keywords: ["大和田新田", "勝田台", "八千代台", "緑が丘", "緑ヶ丘"] }
   ];
 
   for (const rule of fallbackRules) {
@@ -388,6 +399,7 @@ function classifyAreaByAddress(address) {
 
   return "";
 }
+
 function classifyAreaByLatLng(lat, lng) {
   if (!isValidLatLng(lat, lng)) return "周辺";
 
@@ -436,6 +448,10 @@ function classifyAreaByLatLng(lat, lng) {
     return "市川北部";
   }
 
+  if (lat >= 35.74 && lat < 35.80 && lng >= 139.98 && lng < 140.09) {
+    return "八千代・習志野";
+  }
+
   if (lat >= 35.81 && lat < 35.86 && lng >= 139.90 && lng < 139.96) {
     return "新松戸";
   }
@@ -478,6 +494,9 @@ function guessArea(lat, lng, address = "") {
 }
 
 function getDisplayArea(cast) {
+  const manualArea = String(cast.area || "").trim();
+  if (manualArea) return manualArea;
+
   const address = cast.address || "";
   const byAddress = classifyAreaByAddress(address);
   if (byAddress) return byAddress;
@@ -489,7 +508,7 @@ function getDisplayArea(cast) {
     return classifyAreaByLatLng(lat, lng);
   }
 
-  return cast.area || "";
+  return "";
 }
 
 function getUsedCastIdsInCurrentDispatch() {
@@ -612,6 +631,8 @@ async function saveCast() {
     return;
   }
 
+  const manualArea = els.castArea.value.trim();
+
   const autoArea =
     classifyAreaByAddress(els.castAddress.value) ||
     (lat !== null && lng !== null ? classifyAreaByLatLng(lat, lng) : "");
@@ -620,7 +641,7 @@ async function saveCast() {
     name,
     phone: els.castPhone.value.trim(),
     address: els.castAddress.value.trim(),
-    area: autoArea || els.castArea.value.trim() || null,
+    area: manualArea || autoArea || null,
     latitude: lat,
     longitude: lng,
     memo: els.castMemo.value.trim(),
@@ -764,6 +785,7 @@ function renderCastList(casts) {
     els.castsList.appendChild(div);
   });
 }
+
 /* =========================
    車両管理
 ========================= */
@@ -1129,6 +1151,7 @@ async function loadDispatchItems(dispatchId) {
   const nextOrder = currentDispatchItemsCache.length + 1;
   els.stopOrder.value = String(nextOrder);
 }
+
 function renderDispatchSummary(items) {
   if (!items.length) {
     els.dispatchSummary.textContent = "配車先はまだありません。";
@@ -1440,6 +1463,7 @@ async function runOptimize() {
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
+
 /* =========================
    CSV
 ========================= */
@@ -1562,6 +1586,7 @@ async function importCsv() {
     .map(row => {
       const lat = toNullableNumber(row.latitude);
       const lng = toNullableNumber(row.longitude);
+      const manualArea = String(row.area || "").trim();
 
       const autoArea =
         classifyAreaByAddress(row.address) ||
@@ -1571,7 +1596,7 @@ async function importCsv() {
         name: String(row.name || "").trim(),
         phone: String(row.phone || "").trim(),
         address: String(row.address || "").trim(),
-        area: autoArea || String(row.area || "").trim() || null,
+        area: manualArea || autoArea || null,
         latitude: lat,
         longitude: lng,
         memo: String(row.memo || "").trim(),
