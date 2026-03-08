@@ -61,6 +61,7 @@
           <button id="createDispatchBtn" class="btn">配車作成</button>
           <button id="loadDispatchBtn" class="btn secondary">配車読込</button>
           <button id="optimizeBtn" class="btn">AI並び替え</button>
+          <button id="copyLineDispatchBtn" class="btn secondary">LINE貼り付け文をコピー</button>
         </div>
 
         <hr />
@@ -159,20 +160,12 @@
 
           <label class="full">
             <span>住所</span>
-            <input
-              type="text"
-              id="castAddress"
-              placeholder="例: 千葉県松戸市..."
-            />
+            <input type="text" id="castAddress" placeholder="例: 千葉県松戸市..." />
           </label>
 
           <label class="full">
             <span>Google Mapsから取得した座標を貼り付け</span>
-            <input
-              type="text"
-              id="castLatLngText"
-              placeholder="例: 35.742891,139.876123"
-            />
+            <input type="text" id="castLatLngText" placeholder="例: 35.742891,139.876123" />
           </label>
 
           <label>
@@ -237,6 +230,11 @@
           <label>
             <span>担当ドライバー名</span>
             <input type="text" id="vehicleDriverName" placeholder="例: 菊池" />
+          </label>
+
+          <label>
+            <span>LINE ID</span>
+            <input type="text" id="vehicleLineId" placeholder="例: @kikuchi" />
           </label>
 
           <label>
