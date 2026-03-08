@@ -4,16 +4,16 @@
 ========================================================= */
 
 /* =========================
-   Supabase 初期化
+   Supabase
 ========================= */
 
-const SUPABASE_URL = "https://cgtkbroxqdamnirjhzxy.supabase.co"
-const SUPABASE_ANON_KEY = "sb_publishable_veQ6nay4yBjAHz95Hv55ng_QahlWYUz"
+const SUPABASE_URL = "https://cgtkbroxqdamnirjhzxy.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_veQ6nay4yBjAHz95Hv55ng_QahlWYUz";
 
 const supabase = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
-)
+);
 
 /* =========================
    State
@@ -426,5 +426,6 @@ async function importDispatch(){
   showStatus("dispatch登録完了")
 
 }
+
 
 
