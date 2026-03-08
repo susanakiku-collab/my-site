@@ -348,6 +348,44 @@ function parseCsvLine(line) {
   return result;
 }
 
+async function readCsvFileAsText(file) {
+  const buffer = await file.arrayBuffer();
+
+  // UTF-8で先に試す
+  let text = new TextDecoder("utf-8").decode(buffer);
+
+  // 文字化けっぽい場合は Shift-JIS を試す
+  const mojibakeLike =
+    text.includes("�") ||
+    (!text.includes("name") &&
+      !text.includes("address") &&
+      !text.includes("名前") &&
+      !text.includes("住所"));
+
+  if (mojibakeLike) {
+    try {
+      text = new TextDecoder("shift_jis").decode(buffer);
+    } catch (e) {
+      console.warn("shift_jis decode failed:", e);
+    }
+  }
+
+  return text;
+}
+
+function normalizeCsvRows(rows) {
+  return rows.map(row => {
+    const normalized = {};
+
+    Object.keys(row).forEach(key => {
+      const nk = normalizeCsvHeader(key);
+      normalized[nk] = row[key];
+    });
+
+    return normalized;
+  });
+}
+
 function normalizeCsvHeader(header) {
   const h = String(header || "").trim().toLowerCase();
   const map = {
@@ -749,48 +787,68 @@ async function importCastCsvFile() {
     return;
   }
 
-  const text = await file.text();
-  const rows = parseCsv(text);
-  if (!rows.length) {
-    alert("CSVデータが空です");
-    return;
+  try {
+    const text = await readCsvFileAsText(file);
+    let rows = parseCsv(text);
+    rows = normalizeCsvRows(rows);
+
+    if (!rows.length) {
+      alert("CSVデータが空です");
+      return;
+    }
+
+    console.log("CSV rows:", rows);
+
+    const payload = rows
+      .map((row, index) => {
+        const lat = toNullableNumber(row.latitude);
+        const lng = toNullableNumber(row.longitude);
+        const address = String(row.address || "").trim();
+        const name = String(row.name || "").trim();
+
+        return {
+          name,
+          phone: String(row.phone || "").trim(),
+          address,
+          area: String(row.area || "").trim() || guessArea(lat, lng, address) || "",
+          distance_km: toNullableNumber(row.distance_km),
+          latitude: lat,
+          longitude: lng,
+          memo: String(row.memo || "").trim(),
+          is_active: true,
+          created_by: currentUser.id
+        };
+      })
+      .filter(row => row.name);
+
+    if (!payload.length) {
+      alert(
+        "有効なデータがありません。\n" +
+        "CSVヘッダは name / address または 名前 / 住所 を使ってください。"
+      );
+      return;
+    }
+
+    console.log("CSV payload:", payload);
+
+    const { error } = await supabaseClient.from("casts").insert(payload);
+
+    if (error) {
+      console.error("CSV import supabase error:", error);
+      alert("CSV取込エラー: " + error.message);
+      return;
+    }
+
+    els.csvFileInput.value = "";
+    await addHistory(null, null, "import_csv", `${payload.length}件のキャストをCSV取込`);
+    alert(`${payload.length}件のキャストを取り込みました`);
+    await loadCasts();
+  } catch (error) {
+    console.error("importCastCsvFile error:", error);
+    alert("CSV取込中にエラーが発生しました");
   }
-
-  const payload = rows
-    .map(row => {
-      const lat = toNullableNumber(row.latitude);
-      const lng = toNullableNumber(row.longitude);
-      const address = String(row.address || "").trim();
-      return {
-        name: String(row.name || "").trim(),
-        phone: String(row.phone || "").trim(),
-        address,
-        area: String(row.area || "").trim() || guessArea(lat, lng, address),
-        distance_km: toNullableNumber(row.distance_km),
-        latitude: lat,
-        longitude: lng,
-        memo: String(row.memo || "").trim(),
-        is_active: true,
-        created_by: currentUser.id
-      };
-    })
-    .filter(x => x.name);
-
-  if (!payload.length) {
-    alert("有効なデータがありません");
-    return;
-  }
-
-  const { error } = await supabaseClient.from("casts").insert(payload);
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  els.csvFileInput.value = "";
-  await addHistory(null, null, "import_csv", `${payload.length}件のキャストをCSV取込`);
-  await loadCasts();
 }
+
 
 function applyCastLatLng() {
   const parsed = parseLatLngText(els.castLatLngText?.value || "");
