@@ -105,6 +105,7 @@ hr{
   margin:0;
   font-size:22px;
   line-height:1.2;
+  letter-spacing:.02em;
 }
 
 .sub{
@@ -157,6 +158,15 @@ hr{
   margin-bottom:16px;
   overflow:auto;
   padding-bottom:2px;
+}
+
+.tabs::-webkit-scrollbar{
+  height:8px;
+}
+
+.tabs::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,.12);
+  border-radius:999px;
 }
 
 .tab{
@@ -247,6 +257,19 @@ textarea{
   resize:vertical;
 }
 
+select{
+  appearance:none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #8ea2c2 50%),
+    linear-gradient(135deg, #8ea2c2 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% - 3px),
+    calc(100% - 12px) calc(50% - 3px);
+  background-size:6px 6px, 6px 6px;
+  background-repeat:no-repeat;
+  padding-right:36px;
+}
+
 /* ボタン */
 
 .btn-row,
@@ -269,7 +292,7 @@ button,
   font-weight:700;
   font-size:14px;
   line-height:1.2;
-  transition:transform .15s ease, opacity .15s ease, filter .15s ease;
+  transition:transform .15s ease, opacity .15s ease, filter .15s ease, box-shadow .15s ease;
 }
 
 button:hover,
@@ -296,7 +319,8 @@ button:active,
   background:var(--ok);
 }
 
-.edit-cast-btn{
+.edit-cast-btn,
+.edit-vehicle-btn{
   background:#5a6a85;
 }
 
@@ -306,6 +330,7 @@ button:disabled,
   opacity:.45;
   transform:none;
   filter:grayscale(.15);
+  box-shadow:none;
 }
 
 /* サマリー */
@@ -394,17 +419,13 @@ button:disabled,
   border-color:var(--cancelBd);
 }
 
-/* 住所関連 */
-
-.address-field{
-  position:relative;
-}
+/* ファイル入力 */
 
 #csvFileInput{
   max-width:360px;
 }
 
-/* モーダル */
+/* モーダル拡張用 */
 
 .modal{
   position:fixed;
@@ -449,6 +470,28 @@ button:disabled,
   overflow:hidden;
   margin-top:12px;
   border:1px solid var(--line);
+}
+
+/* 小さな見た目調整 */
+
+#dispatchSummary:empty{
+  display:none;
+}
+
+#dispatchList .item,
+#castsList .item,
+#vehiclesList .item,
+#historyList .item{
+  position:relative;
+}
+
+#historyList .item h3{
+  font-size:16px;
+}
+
+#historyList .item p:last-child{
+  font-size:13px;
+  color:#8ea2c2;
 }
 
 /* レスポンシブ */
