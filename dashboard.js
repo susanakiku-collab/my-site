@@ -15,10 +15,6 @@ let currentUser = null;
 let currentDispatchId = null;
 let editingCastId = null;
 
-let pinMap = null;
-let pinMarker = null;
-let selectedLatLng = null;
-
 const els = {
   userEmail: document.getElementById("userEmail"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -37,24 +33,20 @@ const els = {
   castName: document.getElementById("castName"),
   castPhone: document.getElementById("castPhone"),
   castAddress: document.getElementById("castAddress"),
+  castLatLngText: document.getElementById("castLatLngText"),
   castArea: document.getElementById("castArea"),
   castLat: document.getElementById("castLat"),
   castLng: document.getElementById("castLng"),
   castMemo: document.getElementById("castMemo"),
-  openPinMapBtn: document.getElementById("openPinMapBtn"),
+  openGoogleMapBtn: document.getElementById("openGoogleMapBtn"),
+  applyLatLngBtn: document.getElementById("applyLatLngBtn"),
   saveCastBtn: document.getElementById("saveCastBtn"),
   cancelEditBtn: document.getElementById("cancelEditBtn"),
   csvFileInput: document.getElementById("csvFileInput"),
   importCsvBtn: document.getElementById("importCsvBtn"),
   castsList: document.getElementById("castsList"),
 
-  historyList: document.getElementById("historyList"),
-
-  pinMapModal: document.getElementById("pinMapModal"),
-  pinMapBackdrop: document.getElementById("pinMapBackdrop"),
-  closePinMapBtn: document.getElementById("closePinMapBtn"),
-  confirmPinBtn: document.getElementById("confirmPinBtn"),
-  pinMapEl: document.getElementById("pinMap")
+  historyList: document.getElementById("historyList")
 };
 
 function todayStr() {
@@ -87,6 +79,40 @@ function openRouteFromMatsudo(address) {
   window.open(url, "_blank");
 }
 
+function openGoogleMapsForPin(address) {
+  if (!address || !address.trim()) {
+    alert("住所を入力してください");
+    return;
+  }
+
+  const url =
+    "https://www.google.com/maps/search/?api=1&query=" +
+    encodeURIComponent(address.trim());
+
+  window.open(url, "_blank");
+}
+
+function parseLatLngText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/[ ]+/g, "")
+    .replace(/，/g, ",")
+    .replace(/、/g, ",")
+    .replace(/,/g, ",");
+
+  const parts = normalized.split(",");
+  if (parts.length !== 2) return null;
+
+  const lat = Number(parts[0]);
+  const lng = Number(parts[1]);
+
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+
+  return { lat, lng };
+}
+
 function haversineKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -113,60 +139,6 @@ function guessArea(lat, lng) {
   if (lat >= 35.79) return "松戸方面";
   if (lng >= 139.95) return "市川・東京方面";
   return "周辺方面";
-}
-
-function normalizeAddressForSearch(address) {
-  return String(address || "")
-    .replace(/〒\s*\d{3}-?\d{4}/g, "")
-    .replace(/^日本[、,\s]*/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function searchAddressForMap(address) {
-  const normalized = normalizeAddressForSearch(address);
-
-  if (!normalized) return null;
-
-  const candidates = [
-    `日本 ${normalized}`,
-    normalized,
-    normalized
-      .replace(/([0-9]+)-([0-9]+)-([0-9]+)/g, "$1丁目$2-$3")
-      .replace(/([0-9]+)-([0-9]+)/g, "$1丁目$2")
-  ];
-
-  for (const query of candidates) {
-    const url =
-      "https://nominatim.openstreetmap.org/search?" +
-      new URLSearchParams({
-        q: query,
-        format: "json",
-        limit: 1,
-        countrycodes: "jp",
-        addressdetails: "1"
-      });
-
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json"
-      }
-    });
-
-    if (!res.ok) continue;
-
-    const data = await res.json();
-
-    if (Array.isArray(data) && data.length > 0) {
-      return {
-        lat: parseFloat(data[0].lat),
-        lng: parseFloat(data[0].lon),
-        displayName: data[0].display_name || query
-      };
-    }
-  }
-
-  return null;
 }
 
 async function ensureAuth() {
@@ -215,6 +187,7 @@ function resetCastForm() {
   els.castName.value = "";
   els.castPhone.value = "";
   els.castAddress.value = "";
+  els.castLatLngText.value = "";
   els.castArea.value = "";
   els.castLat.value = "";
   els.castLng.value = "";
@@ -228,6 +201,10 @@ function fillCastForm(cast) {
   els.castName.value = cast.name || "";
   els.castPhone.value = cast.phone || "";
   els.castAddress.value = cast.address || "";
+  els.castLatLngText.value =
+    cast.latitude != null && cast.longitude != null
+      ? `${cast.latitude},${cast.longitude}`
+      : "";
   els.castArea.value = cast.area || "";
   els.castLat.value = cast.latitude ?? "";
   els.castLng.value = cast.longitude ?? "";
@@ -237,100 +214,20 @@ function fillCastForm(cast) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-async function openPinMapModal() {
-  els.pinMapModal.classList.remove("hidden");
+function applyLatLngFromText() {
+  const parsed = parseLatLngText(els.castLatLngText.value);
 
-  const savedLat = parseFloat(els.castLat.value);
-  const savedLng = parseFloat(els.castLng.value);
-  const hasSavedPoint = !Number.isNaN(savedLat) && !Number.isNaN(savedLng);
-
-  let initialCenter = [ORIGIN_LAT, ORIGIN_LNG];
-  let initialZoom = 13;
-
-  if (hasSavedPoint) {
-    initialCenter = [savedLat, savedLng];
-    initialZoom = 16;
-  } else {
-    const address = els.castAddress.value.trim();
-
-    if (address) {
-      try {
-        const found = await searchAddressForMap(address);
-        console.log("address search result:", found);
-
-        if (found) {
-          initialCenter = [found.lat, found.lng];
-          initialZoom = 16;
-        }
-      } catch (err) {
-        console.error("map address search error:", err);
-      }
-    }
-  }
-
-  if (!pinMap) {
-    pinMap = L.map(els.pinMapEl).setView(initialCenter, initialZoom);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(pinMap);
-
-    pinMap.on("click", e => {
-      selectedLatLng = e.latlng;
-
-      if (pinMarker) {
-        pinMarker.setLatLng(e.latlng);
-      } else {
-        pinMarker = L.marker(e.latlng).addTo(pinMap);
-      }
-    });
-  } else {
-    pinMap.setView(initialCenter, initialZoom);
-  }
-
-  if (hasSavedPoint) {
-    selectedLatLng = L.latLng(savedLat, savedLng);
-
-    if (pinMarker) {
-      pinMarker.setLatLng(selectedLatLng);
-    } else {
-      pinMarker = L.marker(selectedLatLng).addTo(pinMap);
-    }
-  } else {
-    if (pinMarker) {
-      pinMap.removeLayer(pinMarker);
-      pinMarker = null;
-    }
-    selectedLatLng = null;
-  }
-
-  setTimeout(() => {
-    pinMap.invalidateSize();
-  }, 200);
-}
-
-function closePinMapModal() {
-  els.pinMapModal.classList.add("hidden");
-}
-
-function confirmPinSelection() {
-  if (!selectedLatLng) {
-    alert("地図をクリックして位置を選択してください");
+  if (!parsed) {
+    alert("座標の形式が正しくありません。例: 35.742891,139.876123");
     return;
   }
 
-  const lat = Number(selectedLatLng.lat.toFixed(6));
-  const lng = Number(selectedLatLng.lng.toFixed(6));
-
-  els.castLat.value = lat;
-  els.castLng.value = lng;
+  els.castLat.value = parsed.lat;
+  els.castLng.value = parsed.lng;
 
   if (!els.castArea.value.trim()) {
-    els.castArea.value = guessArea(lat, lng);
+    els.castArea.value = guessArea(parsed.lat, parsed.lng);
   }
-
-  closePinMapModal();
 }
 
 async function saveCast() {
@@ -925,13 +822,11 @@ function setupTabs() {
 function setupEvents() {
   els.logoutBtn.addEventListener("click", logout);
 
-  els.openPinMapBtn.addEventListener("click", async () => {
-    await openPinMapModal();
+  els.openGoogleMapBtn.addEventListener("click", () => {
+    openGoogleMapsForPin(els.castAddress.value);
   });
 
-  els.closePinMapBtn.addEventListener("click", closePinMapModal);
-  els.pinMapBackdrop.addEventListener("click", closePinMapModal);
-  els.confirmPinBtn.addEventListener("click", confirmPinSelection);
+  els.applyLatLngBtn.addEventListener("click", applyLatLngFromText);
 
   els.saveCastBtn.addEventListener("click", saveCast);
   els.cancelEditBtn.addEventListener("click", resetCastForm);
