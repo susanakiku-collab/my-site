@@ -932,7 +932,7 @@ async function saveCast() {
 
   resetCastForm();
   await loadCasts();
-  await refreshPlanCastSelect();
+  refreshPlanCastSelect();
   await loadHistory();
 }
 
@@ -952,7 +952,7 @@ async function softDeleteCast(castId) {
 
   await addHistory(null, null, "delete_cast", `キャストID ${castId} を削除`);
   await loadCasts();
-  await refreshPlanCastSelect();
+  refreshPlanCastSelect();
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
@@ -1348,9 +1348,20 @@ async function savePlan() {
     return;
   }
 
-  await addHistory(null, null, editingPlanId ? "update_plan" : "create_plan", editingPlanId ? "送り予定を更新" : "送り予定を作成");
+  await addHistory(
+    null,
+    null,
+    editingPlanId ? "update_plan" : "create_plan",
+    editingPlanId ? "送り予定を更新" : "送り予定を作成"
+  );
+
   resetPlanForm();
   await loadPlansByDate(planDate);
+
+  if (els.dispatchDate?.value === planDate) {
+    renderPlanSelect(currentPlansCache);
+  }
+
   await loadHistory();
 }
 
@@ -1423,10 +1434,13 @@ async function loadPlansByDate(dateStr) {
 function renderPlanSelect(plans) {
   if (!els.planSelect) return;
 
+  const dispatchDate = els.dispatchDate?.value || "";
+
   els.planSelect.innerHTML = `<option value="">予定を選択してください</option>`;
 
   plans
     .filter(plan => plan.status === "planned")
+    .filter(plan => !dispatchDate || plan.plan_date === dispatchDate)
     .forEach(plan => {
       const option = document.createElement("option");
       option.value = plan.id;
@@ -1562,7 +1576,14 @@ async function createDispatch() {
     currentDispatchId = existing[0].id;
     els.driverName.value = existing[0].driver_name || "";
     els.vehicleSelect.value = existing[0].vehicle_id ? String(existing[0].vehicle_id) : "";
+
+    if (els.planDate) {
+      els.planDate.value = dispatchDate;
+      rebuildPlanHourOptions(dispatchDate);
+    }
+
     await loadDispatchItems(currentDispatchId);
+    await loadPlansByDate(dispatchDate);
     return;
   }
 
@@ -1589,8 +1610,15 @@ async function createDispatch() {
   }
 
   currentDispatchId = data.id;
+
+  if (els.planDate) {
+    els.planDate.value = dispatchDate;
+    rebuildPlanHourOptions(dispatchDate);
+  }
+
   await addHistory(currentDispatchId, null, "create_dispatch", `配車を作成: ${dispatchDate}`);
   await loadDispatchItems(currentDispatchId);
+  await loadPlansByDate(dispatchDate);
   await loadHistory();
 }
 
@@ -1621,6 +1649,13 @@ async function loadDispatchByDate(dateStr) {
     els.dispatchList.innerHTML = `<div class="item"><p>この日の配車はまだありません。</p></div>`;
     els.vehicleSelect.value = "";
   }
+
+  if (els.planDate) {
+    els.planDate.value = dateStr;
+    rebuildPlanHourOptions(dateStr);
+  }
+
+  await loadPlansByDate(dateStr);
 }
 
 async function addCastToDispatch() {
@@ -1697,6 +1732,8 @@ async function addPlanToDispatch() {
     alert("先に配車を作成または読込してください");
     return;
   }
+
+  await loadPlansByDate(els.dispatchDate.value || todayStr());
 
   const planId = Number(els.planSelect.value);
   if (!planId) {
@@ -2546,6 +2583,12 @@ function setupEvents() {
 
   els.dispatchDate?.addEventListener("change", async () => {
     if (!els.dispatchDate.value) return;
+
+    if (els.planDate) {
+      els.planDate.value = els.dispatchDate.value;
+      rebuildPlanHourOptions(els.dispatchDate.value);
+    }
+
     await loadDispatchByDate(els.dispatchDate.value);
   });
 
