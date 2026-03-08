@@ -14,8 +14,10 @@ const supabaseClient = window.supabase.createClient(
 let currentUser = null;
 let currentDispatchId = null;
 let editingCastId = null;
+let editingVehicleId = null;
 
 let allCastsCache = [];
+let allVehiclesCache = [];
 let currentDispatchItemsCache = [];
 
 const els = {
@@ -24,6 +26,7 @@ const els = {
 
   dispatchDate: document.getElementById("dispatchDate"),
   driverName: document.getElementById("driverName"),
+  vehicleSelect: document.getElementById("vehicleSelect"),
   createDispatchBtn: document.getElementById("createDispatchBtn"),
   loadDispatchBtn: document.getElementById("loadDispatchBtn"),
   optimizeBtn: document.getElementById("optimizeBtn"),
@@ -48,6 +51,16 @@ const els = {
   csvFileInput: document.getElementById("csvFileInput"),
   importCsvBtn: document.getElementById("importCsvBtn"),
   castsList: document.getElementById("castsList"),
+
+  vehiclePlateNumber: document.getElementById("vehiclePlateNumber"),
+  vehicleName: document.getElementById("vehicleName"),
+  vehicleDriverName: document.getElementById("vehicleDriverName"),
+  vehicleStatus: document.getElementById("vehicleStatus"),
+  vehicleCapacityNote: document.getElementById("vehicleCapacityNote"),
+  vehicleMemo: document.getElementById("vehicleMemo"),
+  saveVehicleBtn: document.getElementById("saveVehicleBtn"),
+  cancelVehicleEditBtn: document.getElementById("cancelVehicleEditBtn"),
+  vehiclesList: document.getElementById("vehiclesList"),
 
   historyList: document.getElementById("historyList")
 };
@@ -90,6 +103,18 @@ function isValidLatLng(lat, lng) {
   if (lat < -90 || lat > 90) return false;
   if (lng < -180 || lng > 180) return false;
   return true;
+}
+
+function vehicleStatusLabel(status) {
+  if (status === "running") return "稼働中";
+  if (status === "maintenance") return "整備中";
+  return "待機";
+}
+
+function vehicleStatusBadgeClass(status) {
+  if (status === "running") return "done";
+  if (status === "maintenance") return "cancel";
+  return "";
 }
 
 function openRouteFromMatsudo(address) {
@@ -224,6 +249,10 @@ async function logout() {
   await supabaseClient.auth.signOut();
   window.location.href = "index.html";
 }
+
+/* =========================
+   キャスト管理
+========================= */
 
 function resetCastForm() {
   editingCastId = null;
@@ -429,6 +458,174 @@ function renderCastList(casts) {
   });
 }
 
+/* =========================
+   車両管理
+========================= */
+
+function resetVehicleForm() {
+  editingVehicleId = null;
+  els.vehiclePlateNumber.value = "";
+  els.vehicleName.value = "";
+  els.vehicleDriverName.value = "";
+  els.vehicleStatus.value = "waiting";
+  els.vehicleCapacityNote.value = "";
+  els.vehicleMemo.value = "";
+  els.saveVehicleBtn.textContent = "保存";
+  els.cancelVehicleEditBtn.classList.add("hidden");
+}
+
+function fillVehicleForm(vehicle) {
+  editingVehicleId = vehicle.id;
+  els.vehiclePlateNumber.value = vehicle.plate_number || "";
+  els.vehicleName.value = vehicle.vehicle_name || "";
+  els.vehicleDriverName.value = vehicle.driver_name || "";
+  els.vehicleStatus.value = vehicle.status || "waiting";
+  els.vehicleCapacityNote.value = vehicle.capacity_note || "";
+  els.vehicleMemo.value = vehicle.memo || "";
+  els.saveVehicleBtn.textContent = "更新";
+  els.cancelVehicleEditBtn.classList.remove("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function saveVehicle() {
+  const plateNumber = els.vehiclePlateNumber.value.trim();
+  if (!plateNumber) {
+    alert("ナンバーを入力してください");
+    return;
+  }
+
+  const payload = {
+    plate_number: plateNumber,
+    vehicle_name: els.vehicleName.value.trim(),
+    driver_name: els.vehicleDriverName.value.trim(),
+    status: els.vehicleStatus.value,
+    capacity_note: els.vehicleCapacityNote.value.trim(),
+    memo: els.vehicleMemo.value.trim(),
+    is_active: true
+  };
+
+  let error;
+
+  if (editingVehicleId) {
+    ({ error } = await supabaseClient
+      .from("vehicles")
+      .update(payload)
+      .eq("id", editingVehicleId));
+  } else {
+    payload.created_by = currentUser.id;
+    ({ error } = await supabaseClient
+      .from("vehicles")
+      .insert(payload));
+  }
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await addHistory(
+    null,
+    null,
+    editingVehicleId ? "update_vehicle" : "create_vehicle",
+    editingVehicleId ? "車両を更新" : "車両を登録"
+  );
+
+  resetVehicleForm();
+  await loadVehicles();
+  await loadHistory();
+}
+
+async function softDeleteVehicle(vehicleId) {
+  const ok = window.confirm("この車両を削除しますか？");
+  if (!ok) return;
+
+  const { error } = await supabaseClient
+    .from("vehicles")
+    .update({ is_active: false })
+    .eq("id", vehicleId);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await addHistory(null, null, "delete_vehicle", `車両ID ${vehicleId} を削除`);
+  await loadVehicles();
+  await loadHistory();
+}
+
+async function loadVehicles() {
+  const { data, error } = await supabaseClient
+    .from("vehicles")
+    .select("*")
+    .eq("is_active", true)
+    .order("id", { ascending: false });
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  allVehiclesCache = data || [];
+  renderVehicleSelect(allVehiclesCache);
+  renderVehicleList(allVehiclesCache);
+}
+
+function renderVehicleSelect(vehicles) {
+  if (!els.vehicleSelect) return;
+
+  els.vehicleSelect.innerHTML = `<option value="">選択してください</option>`;
+
+  vehicles.forEach(vehicle => {
+    const option = document.createElement("option");
+    option.value = vehicle.id;
+    option.textContent =
+      `${vehicle.plate_number} | ${vehicle.vehicle_name || "車種未設定"} | ${vehicleStatusLabel(vehicle.status)}`;
+    option.dataset.label =
+      `${vehicle.plate_number} ${vehicle.vehicle_name || ""}`.trim();
+    els.vehicleSelect.appendChild(option);
+  });
+}
+
+function renderVehicleList(vehicles) {
+  if (!els.vehiclesList) return;
+
+  els.vehiclesList.innerHTML = "";
+
+  if (!vehicles.length) {
+    els.vehiclesList.innerHTML = `<div class="item"><p>車両がまだ登録されていません。</p></div>`;
+    return;
+  }
+
+  vehicles.forEach(vehicle => {
+    const badgeClass = vehicleStatusBadgeClass(vehicle.status);
+
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <h3>${escapeHtml(vehicle.plate_number)}</h3>
+      <p>車両名: ${escapeHtml(vehicle.vehicle_name || "-")}</p>
+      <p>担当ドライバー: ${escapeHtml(vehicle.driver_name || "-")}</p>
+      <p>積載メモ: ${escapeHtml(vehicle.capacity_note || "-")}</p>
+      <p>状態: <span class="badge ${badgeClass}">${escapeHtml(vehicleStatusLabel(vehicle.status))}</span></p>
+      <p>メモ: ${escapeHtml(vehicle.memo || "-")}</p>
+      <div class="actions">
+        <button class="btn edit-vehicle-btn" data-id="${vehicle.id}">編集</button>
+        <button class="btn danger delete-vehicle-btn" data-id="${vehicle.id}">削除</button>
+      </div>
+    `;
+
+    div.querySelector(".edit-vehicle-btn")?.addEventListener("click", () => fillVehicleForm(vehicle));
+    div.querySelector(".delete-vehicle-btn")?.addEventListener("click", () => softDeleteVehicle(vehicle.id));
+
+    els.vehiclesList.appendChild(div);
+  });
+}
+
+/* =========================
+   配車管理
+========================= */
+
 async function createDispatch() {
   const dispatchDate = els.dispatchDate.value;
   const driverName = els.driverName.value.trim();
@@ -453,15 +650,24 @@ async function createDispatch() {
   if (existing?.length) {
     currentDispatchId = existing[0].id;
     els.driverName.value = existing[0].driver_name || "";
+    if (els.vehicleSelect) {
+      els.vehicleSelect.value = existing[0].vehicle_id ? String(existing[0].vehicle_id) : "";
+    }
     await loadDispatchItems(currentDispatchId);
     return;
   }
+
+  const selectedVehicle = els.vehicleSelect?.selectedOptions?.[0] || null;
+  const vehicleId = els.vehicleSelect?.value ? Number(els.vehicleSelect.value) : null;
+  const vehicleLabel = selectedVehicle?.dataset.label || null;
 
   const { data, error } = await supabaseClient
     .from("dispatches")
     .insert({
       dispatch_date: dispatchDate,
       driver_name: driverName,
+      vehicle_id: vehicleId,
+      vehicle_label: vehicleLabel,
       status: "draft",
       created_by: currentUser.id
     })
@@ -497,12 +703,18 @@ async function loadDispatchByDate(dateStr) {
 
   if (dispatch) {
     els.driverName.value = dispatch.driver_name || "";
+    if (els.vehicleSelect) {
+      els.vehicleSelect.value = dispatch.vehicle_id ? String(dispatch.vehicle_id) : "";
+    }
     await loadDispatchItems(dispatch.id);
   } else {
     currentDispatchItemsCache = [];
     renderCastSelect(allCastsCache);
     els.dispatchSummary.textContent = "";
     els.dispatchList.innerHTML = `<div class="item"><p>この日の配車はまだありません。</p></div>`;
+    if (els.vehicleSelect) {
+      els.vehicleSelect.value = "";
+    }
   }
 }
 
@@ -621,8 +833,13 @@ function renderDispatchSummary(items) {
   const totalKm = active.reduce((sum, x) => sum + Number(x.distance_km || 0), 0);
   const totalMin = active.reduce((sum, x) => sum + Number(x.travel_minutes || 0), 0);
 
+  const vehicleText =
+    els.vehicleSelect && els.vehicleSelect.selectedOptions.length
+      ? els.vehicleSelect.selectedOptions[0]?.textContent || ""
+      : "";
+
   els.dispatchSummary.textContent =
-    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分`;
+    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分${vehicleText ? ` / 車両 ${vehicleText}` : ""}`;
 }
 
 function renderDispatchItems(items) {
@@ -750,7 +967,12 @@ async function moveDispatchItem(itemId, direction) {
       .eq("id", items[i].id);
   }
 
-  await addHistory(currentDispatchId, itemId, "move_dispatch_item", direction < 0 ? "配車項目を上へ移動" : "配車項目を下へ移動");
+  await addHistory(
+    currentDispatchId,
+    itemId,
+    "move_dispatch_item",
+    direction < 0 ? "配車項目を上へ移動" : "配車項目を下へ移動"
+  );
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
@@ -777,6 +999,10 @@ async function normalizeStopOrders(dispatchId) {
       .eq("id", data[i].id);
   }
 }
+
+/* =========================
+   履歴
+========================= */
 
 async function addHistory(dispatchId, itemId, action, message) {
   const { error } = await supabaseClient
@@ -824,6 +1050,10 @@ async function loadHistory() {
     els.historyList.appendChild(div);
   });
 }
+
+/* =========================
+   AI並び替え
+========================= */
 
 function optimizeDispatchOrder(items) {
   const pending = items.filter(x => normalizeStatus(x.status) === "pending");
@@ -891,6 +1121,10 @@ async function runOptimize() {
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
+
+/* =========================
+   CSV
+========================= */
 
 function parseCsvLine(line) {
   const result = [];
@@ -1044,6 +1278,10 @@ async function importCsv() {
   alert(`${payload.length}件 取り込みました`);
 }
 
+/* =========================
+   UI
+========================= */
+
 function setupTabs() {
   const tabs = document.querySelectorAll(".tab");
   const panels = document.querySelectorAll(".tab-panel");
@@ -1059,33 +1297,36 @@ function setupTabs() {
 }
 
 function setupEvents() {
-  els.logoutBtn.addEventListener("click", logout);
+  els.logoutBtn?.addEventListener("click", logout);
 
-  els.openGoogleMapBtn.addEventListener("click", () => {
+  els.openGoogleMapBtn?.addEventListener("click", () => {
     openGoogleMapsForPin(els.castAddress.value);
   });
 
-  els.applyLatLngBtn.addEventListener("click", applyLatLngFromText);
+  els.applyLatLngBtn?.addEventListener("click", applyLatLngFromText);
 
-  els.saveCastBtn.addEventListener("click", saveCast);
-  els.cancelEditBtn.addEventListener("click", resetCastForm);
-  els.importCsvBtn.addEventListener("click", importCsv);
+  els.saveCastBtn?.addEventListener("click", saveCast);
+  els.cancelEditBtn?.addEventListener("click", resetCastForm);
+  els.importCsvBtn?.addEventListener("click", importCsv);
 
-  els.createDispatchBtn.addEventListener("click", createDispatch);
-  els.loadDispatchBtn.addEventListener("click", async () => {
+  els.saveVehicleBtn?.addEventListener("click", saveVehicle);
+  els.cancelVehicleEditBtn?.addEventListener("click", resetVehicleForm);
+
+  els.createDispatchBtn?.addEventListener("click", createDispatch);
+  els.loadDispatchBtn?.addEventListener("click", async () => {
     await loadDispatchByDate(els.dispatchDate.value);
   });
-  els.addCastBtn.addEventListener("click", addCastToDispatch);
-  els.optimizeBtn.addEventListener("click", async () => {
+  els.addCastBtn?.addEventListener("click", addCastToDispatch);
+  els.optimizeBtn?.addEventListener("click", async () => {
     await runOptimize();
   });
 
-  els.dispatchDate.addEventListener("change", async () => {
+  els.dispatchDate?.addEventListener("change", async () => {
     if (!els.dispatchDate.value) return;
     await loadDispatchByDate(els.dispatchDate.value);
   });
 
-  els.castLatLngText.addEventListener("blur", () => {
+  els.castLatLngText?.addEventListener("blur", () => {
     const parsed = parseLatLngText(els.castLatLngText.value);
     if (!parsed) return;
     els.castLat.value = parsed.lat;
@@ -1102,9 +1343,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   setupTabs();
   setupEvents();
+
   resetCastForm();
+  resetVehicleForm();
+
   els.dispatchDate.value = todayStr();
+
   await loadCasts();
+  await loadVehicles();
   await loadDispatchByDate(els.dispatchDate.value);
   await loadHistory();
 });
