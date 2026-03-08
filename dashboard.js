@@ -209,6 +209,7 @@ function classifyAreaByAddress(address) {
   const a = normalizeAddressText(address);
   if (!a) return "";
 
+  /* 東京 */
   if (a.includes("江戸川区")) {
     if (["西小岩", "南小岩", "北小岩", "上一色", "本一色"].some(k => a.includes(k))) return "江戸川・小岩";
     if (["篠崎", "瑞江", "一之江", "船堀", "葛西", "西葛西"].some(k => a.includes(k))) return "江戸川南部";
@@ -235,6 +236,7 @@ function classifyAreaByAddress(address) {
   if (a.includes("千代田区")) return "千代田区";
   if (a.includes("文京区")) return "文京区";
 
+  /* 千葉 */
   if (a.includes("船橋市")) {
     if (["西船", "西船橋", "本中山", "二子", "二子町", "海神", "山野町", "印内", "葛飾町", "東中山"].some(k => a.includes(k))) {
       return "船橋西部";
@@ -305,7 +307,9 @@ function classifyAreaByAddress(address) {
   if (a.includes("野田市")) return "野田";
   if (a.includes("習志野市")) return "習志野";
   if (a.includes("浦安市")) return "浦安";
-    if (a.includes("三郷市")) {
+
+  /* 埼玉 */
+  if (a.includes("三郷市")) {
     if (["新三郷", "彦成", "彦糸", "采女", "早稲田"].some(k => a.includes(k))) return "三郷北部";
     if (["戸ケ崎", "戸ヶ崎", "高州", "鷹野", "彦沢", "栄"].some(k => a.includes(k))) return "三郷南部";
     return "三郷";
@@ -333,6 +337,7 @@ function classifyAreaByAddress(address) {
     return "さいたま";
   }
 
+  /* 茨城 */
   if (a.includes("取手市")) {
     if (["取手", "新町", "井野", "白山", "台宿"].some(k => a.includes(k))) return "取手中心部";
     if (["藤代", "宮和田", "双葉", "谷中", "桜が丘"].some(k => a.includes(k))) return "藤代";
@@ -383,16 +388,17 @@ function classifyAreaByAddress(address) {
 
   return "";
 }
-
 function classifyAreaByLatLng(lat, lng) {
   if (!isValidLatLng(lat, lng)) return "周辺";
 
+  /* 東京 */
   if (lng >= 139.99) {
     if (lat >= 35.75) return "葛飾東部";
     if (lat >= 35.71) return "江戸川・小岩";
     return "東京東部";
   }
 
+  /* 埼玉 */
   if (lat >= 35.79 && lat < 35.86 && lng >= 139.78 && lng < 139.88) {
     return "草加・八潮・三郷";
   }
@@ -403,6 +409,7 @@ function classifyAreaByLatLng(lat, lng) {
     return "越谷";
   }
 
+  /* 茨城 */
   if (lat >= 35.88 && lat < 35.98 && lng >= 140.00 && lng < 140.10) {
     return "取手";
   }
@@ -416,6 +423,7 @@ function classifyAreaByLatLng(lat, lng) {
     return "龍ケ崎・牛久";
   }
 
+  /* 千葉 */
   if (lat >= 35.69 && lat < 35.74 && lng >= 139.93 && lng < 139.99) {
     return "船橋西部";
   }
@@ -588,6 +596,7 @@ function applyLatLngFromText() {
     els.castArea.value = guessArea(parsed.lat, parsed.lng, els.castAddress.value);
   }
 }
+
 async function saveCast() {
   const name = els.castName.value.trim();
   if (!name) {
@@ -755,7 +764,6 @@ function renderCastList(casts) {
     els.castsList.appendChild(div);
   });
 }
-
 /* =========================
    車両管理
 ========================= */
@@ -982,386 +990,90 @@ async function createDispatch() {
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
-async function saveCast() {
-  const name = els.castName.value.trim();
-  if (!name) {
-    alert("名前を入力してください");
-    return;
-  }
 
-  const lat = toNullableNumber(els.castLat.value);
-  const lng = toNullableNumber(els.castLng.value);
-
-  if ((lat !== null || lng !== null) && !isValidLatLng(lat, lng)) {
-    alert("緯度経度が正しくありません");
-    return;
-  }
-
-  const autoArea =
-    classifyAreaByAddress(els.castAddress.value) ||
-    (lat !== null && lng !== null ? classifyAreaByLatLng(lat, lng) : "");
-
-  const payload = {
-    name,
-    phone: els.castPhone.value.trim(),
-    address: els.castAddress.value.trim(),
-    area: autoArea || els.castArea.value.trim() || null,
-    latitude: lat,
-    longitude: lng,
-    memo: els.castMemo.value.trim(),
-    is_active: true
-  };
-
-  let error;
-
-  if (editingCastId) {
-    ({ error } = await supabaseClient
-      .from("casts")
-      .update(payload)
-      .eq("id", editingCastId));
-  } else {
-    payload.created_by = currentUser.id;
-    ({ error } = await supabaseClient.from("casts").insert(payload));
-  }
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(
-    null,
-    null,
-    editingCastId ? "update_cast" : "create_cast",
-    editingCastId ? "キャストを更新" : "キャストを作成"
-  );
-
-  resetCastForm();
-  await loadCasts();
-  await loadHistory();
-}
-
-async function softDeleteCast(castId) {
-  const ok = window.confirm("このキャストを削除しますか？");
-  if (!ok) return;
-
-  const { error } = await supabaseClient
-    .from("casts")
-    .update({ is_active: false })
-    .eq("id", castId);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(null, null, "delete_cast", `キャストID ${castId} を削除`);
-  await loadCasts();
-  await loadDispatchItems(currentDispatchId);
-  await loadHistory();
-}
-
-async function loadCasts() {
+async function loadDispatchByDate(dateStr) {
   const { data, error } = await supabaseClient
-    .from("casts")
-    .select("*")
-    .eq("is_active", true)
-    .order("id", { ascending: false });
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  allCastsCache = data || [];
-  renderCastSelect(allCastsCache);
-  renderCastList(allCastsCache);
-}
-
-function renderCastSelect(casts) {
-  if (!els.castSelect) return;
-
-  els.castSelect.innerHTML = `<option value="">選択してください</option>`;
-
-  const usedCastIds = getUsedCastIdsInCurrentDispatch();
-
-  casts
-    .filter(cast => !usedCastIds.has(Number(cast.id)))
-    .forEach(cast => {
-      const displayArea = getDisplayArea(cast);
-
-      const option = document.createElement("option");
-      option.value = cast.id;
-      option.textContent = `${cast.name} | ${displayArea || "地域未設定"}`;
-      option.dataset.address = cast.address || "";
-      option.dataset.lat = cast.latitude ?? "";
-      option.dataset.lng = cast.longitude ?? "";
-      option.dataset.area = displayArea || "";
-      els.castSelect.appendChild(option);
-    });
-}
-
-function renderCastList(casts) {
-  if (!els.castsList) return;
-
-  els.castsList.innerHTML = "";
-
-  if (!casts.length) {
-    els.castsList.innerHTML = `<div class="item"><p>キャストがまだ登録されていません。</p></div>`;
-    return;
-  }
-
-  casts.forEach(cast => {
-    const lat = toNullableNumber(cast.latitude);
-    const lng = toNullableNumber(cast.longitude);
-    const km =
-      lat !== null && lng !== null
-        ? estimateRoadKmFromStation(lat, lng)
-        : null;
-
-    const displayArea = getDisplayArea(cast);
-
-    const div = document.createElement("div");
-    div.className = "item";
-    div.innerHTML = `
-      <h3>${escapeHtml(cast.name)}</h3>
-      <p>電話: ${escapeHtml(cast.phone || "-")}</p>
-      <p>住所: ${escapeHtml(cast.address || "-")}</p>
-      <p>地域: ${escapeHtml(displayArea || "-")}</p>
-      <p>松戸駅から推定距離: ${km !== null ? `${km} km` : "-"}</p>
-      <p>座標: ${cast.latitude ?? "-"}, ${cast.longitude ?? "-"}</p>
-      <p>メモ: ${escapeHtml(cast.memo || "-")}</p>
-      <div class="actions">
-        <button class="btn secondary route-btn" data-address="${escapeHtml(cast.address || "")}">Googleマップ</button>
-        <button class="btn edit-cast-btn" data-id="${cast.id}">編集</button>
-        <button class="btn danger delete-cast-btn" data-id="${cast.id}">削除</button>
-      </div>
-    `;
-
-    div.querySelector(".route-btn")?.addEventListener("click", e => {
-      const address = e.currentTarget.dataset.address;
-      if (address) openRouteFromMatsudo(address);
-    });
-
-    div.querySelector(".edit-cast-btn")?.addEventListener("click", () => fillCastForm(cast));
-    div.querySelector(".delete-cast-btn")?.addEventListener("click", () => softDeleteCast(cast.id));
-
-    els.castsList.appendChild(div);
-  });
-}
-
-/* =========================
-   車両管理
-========================= */
-
-function resetVehicleForm() {
-  editingVehicleId = null;
-  if (els.vehiclePlateNumber) els.vehiclePlateNumber.value = "";
-  if (els.vehicleName) els.vehicleName.value = "";
-  if (els.vehicleDriverName) els.vehicleDriverName.value = "";
-  if (els.vehicleStatus) els.vehicleStatus.value = "waiting";
-  if (els.vehicleCapacityNote) els.vehicleCapacityNote.value = "";
-  if (els.vehicleMemo) els.vehicleMemo.value = "";
-  if (els.saveVehicleBtn) els.saveVehicleBtn.textContent = "保存";
-  if (els.cancelVehicleEditBtn) els.cancelVehicleEditBtn.classList.add("hidden");
-}
-
-function fillVehicleForm(vehicle) {
-  editingVehicleId = vehicle.id;
-  els.vehiclePlateNumber.value = vehicle.plate_number || "";
-  els.vehicleName.value = vehicle.vehicle_name || "";
-  els.vehicleDriverName.value = vehicle.driver_name || "";
-  els.vehicleStatus.value = vehicle.status || "waiting";
-  els.vehicleCapacityNote.value = vehicle.capacity_note || "";
-  els.vehicleMemo.value = vehicle.memo || "";
-  els.saveVehicleBtn.textContent = "更新";
-  els.cancelVehicleEditBtn.classList.remove("hidden");
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-async function saveVehicle() {
-  const plateNumber = els.vehiclePlateNumber.value.trim();
-  if (!plateNumber) {
-    alert("ナンバーを入力してください");
-    return;
-  }
-
-  const payload = {
-    plate_number: plateNumber,
-    vehicle_name: els.vehicleName.value.trim(),
-    driver_name: els.vehicleDriverName.value.trim(),
-    status: els.vehicleStatus.value,
-    capacity_note: els.vehicleCapacityNote.value.trim(),
-    memo: els.vehicleMemo.value.trim(),
-    is_active: true
-  };
-
-  let error;
-
-  if (editingVehicleId) {
-    ({ error } = await supabaseClient
-      .from("vehicles")
-      .update(payload)
-      .eq("id", editingVehicleId));
-  } else {
-    payload.created_by = currentUser.id;
-    ({ error } = await supabaseClient
-      .from("vehicles")
-      .insert(payload));
-  }
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(
-    null,
-    null,
-    editingVehicleId ? "update_vehicle" : "create_vehicle",
-    editingVehicleId ? "車両を更新" : "車両を登録"
-  );
-
-  resetVehicleForm();
-  await loadVehicles();
-  await loadHistory();
-}
-
-async function softDeleteVehicle(vehicleId) {
-  const ok = window.confirm("この車両を削除しますか？");
-  if (!ok) return;
-
-  const { error } = await supabaseClient
-    .from("vehicles")
-    .update({ is_active: false })
-    .eq("id", vehicleId);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(null, null, "delete_vehicle", `車両ID ${vehicleId} を削除`);
-  await loadVehicles();
-  await loadHistory();
-}
-
-async function loadVehicles() {
-  const { data, error } = await supabaseClient
-    .from("vehicles")
-    .select("*")
-    .eq("is_active", true)
-    .order("id", { ascending: false });
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  allVehiclesCache = data || [];
-  renderVehicleSelect(allVehiclesCache);
-  renderVehicleList(allVehiclesCache);
-}
-
-function renderVehicleSelect(vehicles) {
-  if (!els.vehicleSelect) return;
-
-  els.vehicleSelect.innerHTML = `<option value="">選択してください</option>`;
-
-  vehicles.forEach(vehicle => {
-    const option = document.createElement("option");
-    option.value = vehicle.id;
-    option.textContent =
-      `${vehicle.plate_number} | ${vehicle.vehicle_name || "車種未設定"} | ${vehicleStatusLabel(vehicle.status)}`;
-    option.dataset.label =
-      `${vehicle.plate_number} ${vehicle.vehicle_name || ""}`.trim();
-    els.vehicleSelect.appendChild(option);
-  });
-}
-
-function renderVehicleList(vehicles) {
-  if (!els.vehiclesList) return;
-
-  els.vehiclesList.innerHTML = "";
-
-  if (!vehicles.length) {
-    els.vehiclesList.innerHTML = `<div class="item"><p>車両がまだ登録されていません。</p></div>`;
-    return;
-  }
-
-  vehicles.forEach(vehicle => {
-    const badgeClass = vehicleStatusBadgeClass(vehicle.status);
-
-    const div = document.createElement("div");
-    div.className = "item";
-    div.innerHTML = `
-      <h3>${escapeHtml(vehicle.plate_number)}</h3>
-      <p>車両名: ${escapeHtml(vehicle.vehicle_name || "-")}</p>
-      <p>担当ドライバー: ${escapeHtml(vehicle.driver_name || "-")}</p>
-      <p>積載メモ: ${escapeHtml(vehicle.capacity_note || "-")}</p>
-      <p>状態: <span class="badge ${badgeClass}">${escapeHtml(vehicleStatusLabel(vehicle.status))}</span></p>
-      <p>メモ: ${escapeHtml(vehicle.memo || "-")}</p>
-      <div class="actions">
-        <button class="btn edit-vehicle-btn" data-id="${vehicle.id}">編集</button>
-        <button class="btn danger delete-vehicle-btn" data-id="${vehicle.id}">削除</button>
-      </div>
-    `;
-
-    div.querySelector(".edit-vehicle-btn")?.addEventListener("click", () => fillVehicleForm(vehicle));
-    div.querySelector(".delete-vehicle-btn")?.addEventListener("click", () => softDeleteVehicle(vehicle.id));
-
-    els.vehiclesList.appendChild(div);
-  });
-}
-
-/* =========================
-   配車管理
-========================= */
-
-async function createDispatch() {
-  const dispatchDate = els.dispatchDate.value;
-  const driverName = els.driverName.value.trim();
-
-  if (!dispatchDate) {
-    alert("日付を選択してください");
-    return;
-  }
-
-  const { data: existing, error: existingError } = await supabaseClient
     .from("dispatches")
     .select("*")
-    .eq("dispatch_date", dispatchDate)
+    .eq("dispatch_date", dateStr)
     .order("id", { ascending: false })
     .limit(1);
 
-  if (existingError) {
-    alert(existingError.message);
+  if (error) {
+    console.error(error);
     return;
   }
 
-  if (existing?.length) {
-    currentDispatchId = existing[0].id;
-    els.driverName.value = existing[0].driver_name || "";
+  const dispatch = data?.[0];
+  currentDispatchId = dispatch?.id || null;
+
+  if (dispatch) {
+    els.driverName.value = dispatch.driver_name || "";
     if (els.vehicleSelect) {
-      els.vehicleSelect.value = existing[0].vehicle_id ? String(existing[0].vehicle_id) : "";
+      els.vehicleSelect.value = dispatch.vehicle_id ? String(dispatch.vehicle_id) : "";
     }
-    await loadDispatchItems(currentDispatchId);
+    await loadDispatchItems(dispatch.id);
+  } else {
+    currentDispatchItemsCache = [];
+    renderCastSelect(allCastsCache);
+    els.dispatchSummary.textContent = "";
+    els.dispatchList.innerHTML = `<div class="item"><p>この日の配車はまだありません。</p></div>`;
+    if (els.vehicleSelect) {
+      els.vehicleSelect.value = "";
+    }
+  }
+}
+
+async function addCastToDispatch() {
+  if (!currentDispatchId) {
+    alert("先に配車を作成または読込してください");
     return;
   }
 
-  const selectedVehicle = els.vehicleSelect?.selectedOptions?.[0] || null;
-  const vehicleId = els.vehicleSelect?.value ? Number(els.vehicleSelect.value) : null;
-  const vehicleLabel = selectedVehicle?.dataset.label || null;
+  const castId = Number(els.castSelect.value);
+  if (!castId) {
+    alert("キャストを選択してください");
+    return;
+  }
+
+  const alreadyExists = currentDispatchItemsCache.some(
+    item => Number(item.cast_id) === castId
+  );
+  if (alreadyExists) {
+    alert("このキャストはすでに配車に追加されています");
+    return;
+  }
+
+  const selected = els.castSelect.selectedOptions[0];
+  const destinationAddress = selected?.dataset.address || "";
+  const lat = toNullableNumber(selected?.dataset.lat);
+  const lng = toNullableNumber(selected?.dataset.lng);
+  const area =
+    selected?.dataset.area ||
+    (lat !== null && lng !== null ? guessArea(lat, lng, destinationAddress) : "");
+  const distanceKm =
+    lat !== null && lng !== null ? estimateRoadKmFromStation(lat, lng) : null;
+  const travelMinutes = distanceKm !== null ? estimateMinutes(distanceKm) : null;
+
+  let stopOrder = Number(els.stopOrder.value || 1);
+  if (!Number.isFinite(stopOrder) || stopOrder <= 0) {
+    stopOrder = currentDispatchItemsCache.length + 1;
+  }
 
   const { data, error } = await supabaseClient
-    .from("dispatches")
+    .from("dispatch_items")
     .insert({
-      dispatch_date: dispatchDate,
-      driver_name: driverName,
-      vehicle_id: vehicleId,
-      vehicle_label: vehicleLabel,
-      status: "draft",
-      created_by: currentUser.id
+      dispatch_id: currentDispatchId,
+      cast_id: castId,
+      stop_order: stopOrder,
+      pickup_label: ORIGIN_LABEL,
+      destination_address: destinationAddress,
+      destination_area: area,
+      latitude: lat,
+      longitude: lng,
+      distance_km: distanceKm,
+      travel_minutes: travelMinutes,
+      status: "pending"
     })
     .select()
     .single();
@@ -1371,11 +1083,297 @@ async function createDispatch() {
     return;
   }
 
-  currentDispatchId = data.id;
-  await addHistory(currentDispatchId, null, "create_dispatch", `配車を作成: ${dispatchDate}`);
+  await normalizeStopOrders(currentDispatchId);
+  await addHistory(currentDispatchId, data.id, "add_cast", "キャストを配車に追加");
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
+
+async function loadDispatchItems(dispatchId) {
+  if (!dispatchId) {
+    currentDispatchItemsCache = [];
+    renderDispatchSummary([]);
+    renderDispatchItems([]);
+    renderCastSelect(allCastsCache);
+    return;
+  }
+
+  const { data, error } = await supabaseClient
+    .from("dispatch_items")
+    .select(`
+      *,
+      casts (
+        id,
+        name,
+        phone,
+        area,
+        address,
+        latitude,
+        longitude
+      )
+    `)
+    .eq("dispatch_id", dispatchId)
+    .order("stop_order", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  currentDispatchItemsCache = data || [];
+  renderDispatchSummary(currentDispatchItemsCache);
+  renderDispatchItems(currentDispatchItemsCache);
+  renderCastSelect(allCastsCache);
+
+  const nextOrder = currentDispatchItemsCache.length + 1;
+  els.stopOrder.value = String(nextOrder);
+}
+function renderDispatchSummary(items) {
+  if (!items.length) {
+    els.dispatchSummary.textContent = "配車先はまだありません。";
+    return;
+  }
+
+  const active = items.filter(x => normalizeStatus(x.status) === "pending");
+  const done = items.filter(x => normalizeStatus(x.status) === "done");
+  const cancel = items.filter(x => normalizeStatus(x.status) === "cancel");
+
+  const totalKm = active.reduce((sum, x) => sum + Number(x.distance_km || 0), 0);
+  const totalMin = active.reduce((sum, x) => sum + Number(x.travel_minutes || 0), 0);
+
+  const areas = [...new Set(active.map(x => x.destination_area).filter(Boolean))];
+  const vehicleText =
+    els.vehicleSelect && els.vehicleSelect.selectedOptions.length
+      ? els.vehicleSelect.selectedOptions[0]?.textContent || ""
+      : "";
+
+  els.dispatchSummary.textContent =
+    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分${areas.length ? ` / 地域 ${areas.join("・")}` : ""}${vehicleText ? ` / 車両 ${vehicleText}` : ""}`;
+}
+
+function renderDispatchItems(items) {
+  if (!els.dispatchList) return;
+
+  els.dispatchList.innerHTML = "";
+
+  if (!items.length) {
+    els.dispatchList.innerHTML = `<div class="item"><p>配車先はまだありません。</p></div>`;
+    return;
+  }
+
+  items.forEach((item, index) => {
+    const status = normalizeStatus(item.status);
+    const badgeClass = status === "done" ? "done" : status === "cancel" ? "cancel" : "";
+    const cardClass = status === "done" ? "done-card" : status === "cancel" ? "cancel-card" : "";
+
+    const isDone = status === "done";
+    const isCancel = status === "cancel";
+    const disableDone = isDone ? "disabled" : "";
+    const disableCancel = isCancel ? "disabled" : "";
+
+    const displayArea =
+      item.destination_area ||
+      (item.casts ? getDisplayArea(item.casts) : "") ||
+      "-";
+
+    const div = document.createElement("div");
+    div.className = `item ${cardClass}`;
+    div.innerHTML = `
+      <h3>${item.stop_order}件目 | ${escapeHtml(item.casts?.name || "不明")}</h3>
+      <p>地域: ${escapeHtml(displayArea)}</p>
+      <p>住所: ${escapeHtml(item.destination_address || "-")}</p>
+      <p>推定距離: ${item.distance_km ?? "-"} km</p>
+      <p>推定時間: ${item.travel_minutes ?? "-"} 分</p>
+      <p><span class="badge ${badgeClass}">${escapeHtml(status)}</span></p>
+      <div class="actions">
+        <button class="btn secondary route-btn" data-address="${escapeHtml(item.destination_address || "")}">ルート</button>
+        <button class="btn secondary up-btn" data-id="${item.id}" ${index === 0 ? "disabled" : ""}>上へ</button>
+        <button class="btn secondary down-btn" data-id="${item.id}" ${index === items.length - 1 ? "disabled" : ""}>下へ</button>
+        <button class="btn done-btn" data-id="${item.id}" ${disableDone}>完了</button>
+        <button class="btn danger cancel-btn" data-id="${item.id}" ${disableCancel}>キャンセル</button>
+        <button class="btn danger delete-item-btn" data-id="${item.id}">削除</button>
+      </div>
+    `;
+
+    div.querySelector(".route-btn")?.addEventListener("click", e => {
+      const address = e.currentTarget.dataset.address;
+      if (address) openRouteFromMatsudo(address);
+    });
+
+    div.querySelector(".done-btn")?.addEventListener("click", async e => {
+      await updateItemStatus(Number(e.currentTarget.dataset.id), "done");
+    });
+
+    div.querySelector(".cancel-btn")?.addEventListener("click", async e => {
+      await updateItemStatus(Number(e.currentTarget.dataset.id), "cancel");
+    });
+
+    div.querySelector(".delete-item-btn")?.addEventListener("click", async e => {
+      await deleteDispatchItem(Number(e.currentTarget.dataset.id));
+    });
+
+    div.querySelector(".up-btn")?.addEventListener("click", async e => {
+      await moveDispatchItem(Number(e.currentTarget.dataset.id), -1);
+    });
+
+    div.querySelector(".down-btn")?.addEventListener("click", async e => {
+      await moveDispatchItem(Number(e.currentTarget.dataset.id), 1);
+    });
+
+    els.dispatchList.appendChild(div);
+  });
+}
+
+async function updateItemStatus(itemId, status) {
+  const { error } = await supabaseClient
+    .from("dispatch_items")
+    .update({ status })
+    .eq("id", itemId);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await addHistory(currentDispatchId, itemId, "update_status", `状態を ${status} に変更`);
+  await loadDispatchItems(currentDispatchId);
+  await loadHistory();
+}
+
+async function deleteDispatchItem(itemId) {
+  const ok = window.confirm("この配車項目を削除しますか？");
+  if (!ok) return;
+
+  const { error } = await supabaseClient
+    .from("dispatch_items")
+    .delete()
+    .eq("id", itemId);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await normalizeStopOrders(currentDispatchId);
+  await addHistory(currentDispatchId, itemId, "delete_dispatch_item", "配車項目を削除");
+  await loadDispatchItems(currentDispatchId);
+  await loadHistory();
+}
+
+async function moveDispatchItem(itemId, direction) {
+  const items = [...currentDispatchItemsCache].sort(
+    (a, b) => Number(a.stop_order) - Number(b.stop_order)
+  );
+
+  const index = items.findIndex(item => Number(item.id) === Number(itemId));
+  if (index < 0) return;
+
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= items.length) return;
+
+  const temp = items[index];
+  items[index] = items[targetIndex];
+  items[targetIndex] = temp;
+
+  for (let i = 0; i < items.length; i++) {
+    const stopOrder = i + 1;
+    await supabaseClient
+      .from("dispatch_items")
+      .update({ stop_order: stopOrder })
+      .eq("id", items[i].id);
+  }
+
+  await addHistory(
+    currentDispatchId,
+    itemId,
+    "move_dispatch_item",
+    direction < 0 ? "配車項目を上へ移動" : "配車項目を下へ移動"
+  );
+  await loadDispatchItems(currentDispatchId);
+  await loadHistory();
+}
+
+async function normalizeStopOrders(dispatchId) {
+  if (!dispatchId) return;
+
+  const { data, error } = await supabaseClient
+    .from("dispatch_items")
+    .select("id, stop_order")
+    .eq("dispatch_id", dispatchId)
+    .order("stop_order", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (error || !data) return;
+
+  for (let i = 0; i < data.length; i++) {
+    const desiredOrder = i + 1;
+    if (Number(data[i].stop_order) === desiredOrder) continue;
+
+    await supabaseClient
+      .from("dispatch_items")
+      .update({ stop_order: desiredOrder })
+      .eq("id", data[i].id);
+  }
+}
+
+/* =========================
+   履歴
+========================= */
+
+async function addHistory(dispatchId, itemId, action, message) {
+  const { error } = await supabaseClient
+    .from("dispatch_history")
+    .insert({
+      dispatch_id: dispatchId,
+      item_id: itemId,
+      action,
+      message,
+      acted_by: currentUser.id
+    });
+
+  if (error) {
+    console.error(error);
+  }
+}
+
+async function loadHistory() {
+  if (!els.historyList) return;
+
+  const { data, error } = await supabaseClient
+    .from("dispatch_history")
+    .select("*")
+    .order("id", { ascending: false })
+    .limit(50);
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  els.historyList.innerHTML = "";
+
+  if (!data?.length) {
+    els.historyList.innerHTML = `<div class="item"><p>履歴はまだありません。</p></div>`;
+    return;
+  }
+
+  data.forEach(row => {
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <h3>${escapeHtml(row.action)}</h3>
+      <p>${escapeHtml(row.message || "")}</p>
+      <p>${new Date(row.created_at).toLocaleString("ja-JP")}</p>
+    `;
+    els.historyList.appendChild(div);
+  });
+}
+
+/* =========================
+   AI並び替え
+========================= */
+
 function optimizeDispatchOrder(items) {
   const pending = items.filter(x => normalizeStatus(x.status) === "pending");
   const doneOrCancel = items.filter(x => normalizeStatus(x.status) !== "pending");
@@ -1442,6 +1440,9 @@ async function runOptimize() {
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
+/* =========================
+   CSV
+========================= */
 
 function parseCsvLine(line) {
   const result = [];
@@ -1600,6 +1601,10 @@ async function importCsv() {
   alert(`${payload.length}件 取り込みました`);
 }
 
+/* =========================
+   UI
+========================= */
+
 function setupTabs() {
   const tabs = document.querySelectorAll(".tab");
   const panels = document.querySelectorAll(".tab-panel");
@@ -1659,6 +1664,10 @@ function setupEvents() {
     }
   });
 }
+
+/* =========================
+   起動
+========================= */
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
