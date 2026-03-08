@@ -193,12 +193,130 @@ function estimateMinutes(km) {
   return Math.max(8, Math.round(km * 3.2));
 }
 
-function guessArea(lat, lng) {
-  if (!isValidLatLng(lat, lng)) return "周辺方面";
-  if (lat >= 35.88) return "柏方面";
-  if (lat >= 35.79) return "松戸方面";
-  if (lng >= 139.95) return "市川・東京方面";
-  return "周辺方面";
+function normalizeAddressText(address) {
+  return String(address || "")
+    .trim()
+    .replace(/[　\s]+/g, "")
+    .replace(/ヶ/g, "ケ")
+    .replace(/之/g, "の");
+}
+
+function classifyAreaByAddress(address) {
+  const a = normalizeAddressText(address);
+  if (!a) return "";
+
+  const rules = [
+    {
+      name: "松戸駅周辺",
+      keywords: ["松戸", "根本", "小根本", "樋野口", "古ケ崎", "古ヶ崎", "上本郷", "岩瀬", "胡録台", "緑ケ丘", "緑ヶ丘"]
+    },
+    {
+      name: "新松戸",
+      keywords: ["新松戸", "新松戸北", "新松戸東", "幸谷", "馬橋", "西馬橋", "八ケ崎", "八ヶ崎", "二ツ木", "中和倉"]
+    },
+    {
+      name: "北松戸・馬橋",
+      keywords: ["北松戸", "栄町", "栄町西", "馬橋", "西馬橋", "中根", "中根長津町"]
+    },
+    {
+      name: "常盤平",
+      keywords: ["常盤平", "常盤平陣屋前", "常盤平西窪町", "常盤平双葉町", "常盤平柳町", "五香", "五香西", "五香南", "金ケ作", "金ヶ作"]
+    },
+    {
+      name: "八柱・みのり台",
+      keywords: ["日暮", "河原塚", "千駄堀", "牧の原", "松飛台", "稔台", "みのり台", "八柱", "常盤平松葉町"]
+    },
+    {
+      name: "東松戸・秋山",
+      keywords: ["東松戸", "秋山", "高塚新田", "紙敷", "大橋", "和名ケ谷", "和名ヶ谷"]
+    },
+    {
+      name: "北国分・矢切",
+      keywords: ["北国分", "下矢切", "上矢切", "栗山", "三矢小台", "矢切"]
+    },
+    {
+      name: "市川北部",
+      keywords: ["市川", "中国分", "国分", "国府台", "堀之内", "須和田", "曽谷", "宮久保", "菅野"]
+    },
+    {
+      name: "市川・本八幡",
+      keywords: ["八幡", "南八幡", "鬼越", "鬼高", "東菅野", "本北方", "北方", "若宮", "高石神", "中山"]
+    },
+    {
+      name: "船橋西部",
+      keywords: ["西船", "本中山", "二子", "二子町", "海神", "山野町", "印内", "葛飾町", "東中山", "前原"]
+    },
+    {
+      name: "柏",
+      keywords: ["柏", "旭町", "明原", "あけぼの", "末広町", "泉町", "東", "中央", "豊四季", "南柏", "北柏", "柏の葉"]
+    },
+    {
+      name: "流山",
+      keywords: ["流山", "南流山", "おおたかの森", "江戸川台", "初石", "平和台", "流山セントラルパーク"]
+    },
+    {
+      name: "我孫子",
+      keywords: ["我孫子", "天王台", "湖北", "新木", "布佐"]
+    },
+    {
+      name: "鎌ケ谷",
+      keywords: ["鎌ケ谷", "鎌ヶ谷", "初富", "新鎌ケ谷", "新鎌ヶ谷", "道野辺", "東道野辺", "南鎌ケ谷", "南鎌ヶ谷", "北中沢"]
+    },
+    {
+      name: "葛飾",
+      keywords: ["葛飾", "金町", "柴又", "高砂", "青戸", "立石", "亀有", "新小岩", "奥戸"]
+    },
+    {
+      name: "足立",
+      keywords: ["足立", "綾瀬", "北千住", "竹ノ塚", "西新井", "梅島", "六町"]
+    },
+    {
+      name: "江戸川",
+      keywords: ["江戸川", "小岩", "西小岩", "南小岩", "北小岩", "上一色", "本一色", "篠崎", "瑞江", "船堀"]
+    },
+    {
+      name: "東京東部",
+      keywords: ["墨田", "江東", "台東", "荒川", "文京", "中央区", "千代田区"]
+    }
+  ];
+
+  for (const rule of rules) {
+    if (rule.keywords.some(keyword => a.includes(keyword))) {
+      return rule.name;
+    }
+  }
+
+  return "";
+}
+
+function classifyAreaByLatLng(lat, lng) {
+  if (!isValidLatLng(lat, lng)) return "周辺";
+
+  if (lat >= 35.84 && lng >= 139.94 && lng < 140.02) return "柏";
+  if (lat >= 35.87 && lng >= 139.90 && lng < 139.98) return "流山";
+  if (lat >= 35.86 && lng < 139.90) return "我孫子";
+  if (lat >= 35.81 && lat < 35.86 && lng >= 139.90 && lng < 139.96) return "新松戸";
+  if (lat >= 35.80 && lat < 35.84 && lng >= 139.90 && lng < 139.95) return "北松戸・馬橋";
+  if (lat >= 35.79 && lat < 35.83 && lng >= 139.85 && lng < 139.91) return "常盤平";
+  if (lat >= 35.76 && lat < 35.81 && lng >= 139.89 && lng < 139.95) return "八柱・みのり台";
+  if (lat >= 35.75 && lat < 35.79 && lng >= 139.93 && lng < 139.99) return "東松戸・秋山";
+  if (lat >= 35.75 && lat < 35.79 && lng >= 139.87 && lng < 139.93) return "鎌ケ谷";
+  if (lat >= 35.74 && lat < 35.78 && lng >= 139.86 && lng < 139.91) return "北国分・矢切";
+  if (lat >= 35.72 && lat < 35.77 && lng >= 139.88 && lng < 139.95) return "市川北部";
+  if (lat >= 35.71 && lat < 35.75 && lng >= 139.90 && lng < 139.97) return "市川・本八幡";
+  if (lat >= 35.70 && lat < 35.74 && lng >= 139.95 && lng < 140.01) return "船橋西部";
+  if (lat >= 35.76 && lng >= 139.98) return "葛飾";
+  if (lat >= 35.73 && lng >= 139.98) return "江戸川";
+  if (lat < 35.73 && lng >= 139.97) return "東京東部";
+
+  return "松戸周辺";
+}
+
+function guessArea(lat, lng, address = "") {
+  const byAddress = classifyAreaByAddress(address);
+  if (byAddress) return byAddress;
+
+  return classifyAreaByLatLng(lat, lng);
 }
 
 function getUsedCastIdsInCurrentDispatch() {
@@ -298,7 +416,7 @@ function applyLatLngFromText() {
   els.castLng.value = parsed.lng;
 
   if (!els.castArea.value.trim()) {
-    els.castArea.value = guessArea(parsed.lat, parsed.lng);
+    els.castArea.value = guessArea(parsed.lat, parsed.lng, els.castAddress.value);
   }
 }
 
@@ -321,7 +439,11 @@ async function saveCast() {
     name,
     phone: els.castPhone.value.trim(),
     address: els.castAddress.value.trim(),
-    area: els.castArea.value.trim() || (lat !== null && lng !== null ? guessArea(lat, lng) : null),
+    area:
+      els.castArea.value.trim() ||
+      (lat !== null && lng !== null
+        ? guessArea(lat, lng, els.castAddress.value)
+        : null),
     latitude: lat,
     longitude: lng,
     memo: els.castMemo.value.trim(),
@@ -404,7 +526,7 @@ function renderCastSelect(casts) {
     .forEach(cast => {
       const option = document.createElement("option");
       option.value = cast.id;
-      option.textContent = `${cast.name} | ${cast.area || "方面未設定"}`;
+      option.textContent = `${cast.name} | ${cast.area || "地域未設定"}`;
       option.dataset.address = cast.address || "";
       option.dataset.lat = cast.latitude ?? "";
       option.dataset.lng = cast.longitude ?? "";
@@ -435,7 +557,7 @@ function renderCastList(casts) {
       <h3>${escapeHtml(cast.name)}</h3>
       <p>電話: ${escapeHtml(cast.phone || "-")}</p>
       <p>住所: ${escapeHtml(cast.address || "-")}</p>
-      <p>方面: ${escapeHtml(cast.area || "-")}</p>
+      <p>地域: ${escapeHtml(cast.area || "-")}</p>
       <p>松戸駅から推定距離: ${km !== null ? `${km} km` : "-"}</p>
       <p>座標: ${cast.latitude ?? "-"}, ${cast.longitude ?? "-"}</p>
       <p>メモ: ${escapeHtml(cast.memo || "-")}</p>
@@ -743,7 +865,8 @@ async function addCastToDispatch() {
   const lat = toNullableNumber(selected?.dataset.lat);
   const lng = toNullableNumber(selected?.dataset.lng);
   const area =
-    selected?.dataset.area || (lat !== null && lng !== null ? guessArea(lat, lng) : "");
+    selected?.dataset.area ||
+    (lat !== null && lng !== null ? guessArea(lat, lng, destinationAddress) : "");
   const distanceKm =
     lat !== null && lng !== null ? estimateRoadKmFromStation(lat, lng) : null;
   const travelMinutes = distanceKm !== null ? estimateMinutes(distanceKm) : null;
@@ -833,13 +956,14 @@ function renderDispatchSummary(items) {
   const totalKm = active.reduce((sum, x) => sum + Number(x.distance_km || 0), 0);
   const totalMin = active.reduce((sum, x) => sum + Number(x.travel_minutes || 0), 0);
 
+  const areas = [...new Set(active.map(x => x.destination_area).filter(Boolean))];
   const vehicleText =
     els.vehicleSelect && els.vehicleSelect.selectedOptions.length
       ? els.vehicleSelect.selectedOptions[0]?.textContent || ""
       : "";
 
   els.dispatchSummary.textContent =
-    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分${vehicleText ? ` / 車両 ${vehicleText}` : ""}`;
+    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分${areas.length ? ` / 地域 ${areas.join("・")}` : ""}${vehicleText ? ` / 車両 ${vehicleText}` : ""}`;
 }
 
 function renderDispatchItems(items) {
@@ -864,7 +988,7 @@ function renderDispatchItems(items) {
     div.className = `item ${cardClass}`;
     div.innerHTML = `
       <h3>${item.stop_order}件目 | ${escapeHtml(item.casts?.name || "不明")}</h3>
-      <p>方面: ${escapeHtml(item.destination_area || item.casts?.area || "-")}</p>
+      <p>地域: ${escapeHtml(item.destination_area || item.casts?.area || "-")}</p>
       <p>住所: ${escapeHtml(item.destination_address || "-")}</p>
       <p>推定距離: ${item.distance_km ?? "-"} km</p>
       <p>推定時間: ${item.travel_minutes ?? "-"} 分</p>
@@ -1177,6 +1301,7 @@ function normalizeCsvHeader(header) {
 
     area: "area",
     方面: "area",
+    地域: "area",
 
     latitude: "latitude",
     lat: "latitude",
@@ -1248,7 +1373,11 @@ async function importCsv() {
         name: String(row.name || "").trim(),
         phone: String(row.phone || "").trim(),
         address: String(row.address || "").trim(),
-        area: String(row.area || "").trim() || (lat !== null && lng !== null ? guessArea(lat, lng) : null),
+        area:
+          String(row.area || "").trim() ||
+          (lat !== null && lng !== null
+            ? guessArea(lat, lng, row.address)
+            : null),
         latitude: lat,
         longitude: lng,
         memo: String(row.memo || "").trim(),
@@ -1332,7 +1461,7 @@ function setupEvents() {
     els.castLat.value = parsed.lat;
     els.castLng.value = parsed.lng;
     if (!els.castArea.value.trim()) {
-      els.castArea.value = guessArea(parsed.lat, parsed.lng);
+      els.castArea.value = guessArea(parsed.lat, parsed.lng, els.castAddress.value);
     }
   });
 }
