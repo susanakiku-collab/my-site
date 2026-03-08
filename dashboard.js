@@ -23,13 +23,22 @@ let currentDispatchItemsCache = [];
 let currentPlansCache = [];
 let currentDailyReportsCache = [];
 
+const BLOCKS = ["A1", "A2", "B", "C1", "D", "無し"];
+const BOARD_ROWS = [
+  { key: 0, label: "12" },
+  { key: 1, label: "1" },
+  { key: 2, label: "2" },
+  { key: 3, label: "3" },
+  { key: 4, label: "4" },
+  { key: 5, label: "L" }
+];
+
 const els = {
   userEmail: document.getElementById("userEmail"),
   logoutBtn: document.getElementById("logoutBtn"),
 
   dispatchDate: document.getElementById("dispatchDate"),
   driverName: document.getElementById("driverName"),
-  vehicleSelect: document.getElementById("vehicleSelect"),
   createDispatchBtn: document.getElementById("createDispatchBtn"),
   loadDispatchBtn: document.getElementById("loadDispatchBtn"),
   optimizeBtn: document.getElementById("optimizeBtn"),
@@ -71,13 +80,11 @@ const els = {
   castsList: document.getElementById("castsList"),
 
   vehiclePlateNumber: document.getElementById("vehiclePlateNumber"),
-  vehicleName: document.getElementById("vehicleName"),
   vehicleDriverName: document.getElementById("vehicleDriverName"),
   vehicleLineId: document.getElementById("vehicleLineId"),
   vehicleStatus: document.getElementById("vehicleStatus"),
   vehicleSeatCapacity: document.getElementById("vehicleSeatCapacity"),
   vehicleHomeArea: document.getElementById("vehicleHomeArea"),
-  vehicleCapacityNote: document.getElementById("vehicleCapacityNote"),
   vehicleMemo: document.getElementById("vehicleMemo"),
   saveVehicleBtn: document.getElementById("saveVehicleBtn"),
   cancelVehicleEditBtn: document.getElementById("cancelVehicleEditBtn"),
@@ -120,10 +127,6 @@ function normalizeStatus(status) {
   return "pending";
 }
 
-function hasValue(v) {
-  return v !== null && v !== undefined && v !== "";
-}
-
 function toNullableNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
@@ -163,6 +166,7 @@ function planStatusLabel(status) {
 function planStatusBadgeClass(status) {
   if (status === "done") return "done";
   if (status === "cancel") return "cancel";
+  if (status === "assigned") return "";
   return "";
 }
 
@@ -207,13 +211,9 @@ function parseLatLngText(text) {
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
     if (!match) continue;
-
     const lat = Number(match[1]);
     const lng = Number(match[2]);
-
-    if (isValidLatLng(lat, lng)) {
-      return { lat, lng };
-    }
+    if (isValidLatLng(lat, lng)) return { lat, lng };
   }
 
   return null;
@@ -250,249 +250,56 @@ function normalizeAddressText(address) {
 
 function getMonthKey(dateStr) {
   const d = new Date(dateStr);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function isFridayOrSaturday(dateStr) {
-  const d = new Date(dateStr);
-  const day = d.getDay();
-  return day === 5 || day === 6;
+function getDisplayArea(cast) {
+  return String(cast?.area || "").trim();
 }
 
-function getPlanHourOptions(dateStr) {
-  const base = [0, 1, 2, 3];
-  return isFridayOrSaturday(dateStr) ? [...base, 5] : [...base, 4];
-}
-
-function isLastHour(dateStr, hour) {
-  return isFridayOrSaturday(dateStr) ? Number(hour) === 5 : Number(hour) === 4;
+function rowLabelToHour(label) {
+  if (label === "12") return 0;
+  if (label === "L") return 5;
+  return Number(label);
 }
 
 /* =========================
-   地域判定
+   簡易地域推定
 ========================= */
 
 function classifyAreaByAddress(address) {
   const a = normalizeAddressText(address);
   if (!a) return "";
 
-  if (a.includes("江戸川区")) {
-    if (["西小岩", "南小岩", "北小岩", "上一色", "本一色"].some(k => a.includes(k))) return "江戸川・小岩";
-    if (["篠崎", "瑞江", "一之江", "船堀", "葛西", "西葛西"].some(k => a.includes(k))) return "江戸川南部";
-    return "江戸川";
-  }
-
-  if (a.includes("葛飾区")) {
-    if (["金町", "柴又", "高砂", "新宿"].some(k => a.includes(k))) return "葛飾東部";
-    if (["青戸", "立石", "亀有", "奥戸", "堀切"].some(k => a.includes(k))) return "葛飾西部";
-    return "葛飾";
-  }
-
-  if (a.includes("足立区")) {
-    if (["綾瀬", "六町", "北綾瀬"].some(k => a.includes(k))) return "足立東部";
-    if (["北千住", "西新井", "竹ノ塚", "梅島"].some(k => a.includes(k))) return "足立西部";
-    return "足立";
-  }
-
-  if (a.includes("江東区")) return "江東";
-  if (a.includes("墨田区")) return "墨田";
-  if (a.includes("台東区")) return "台東";
-  if (a.includes("荒川区")) return "荒川";
-  if (a.includes("中央区")) return "中央区";
-  if (a.includes("千代田区")) return "千代田区";
-  if (a.includes("文京区")) return "文京区";
-
-  if (a.includes("船橋市")) {
-    if (["西船", "西船橋", "本中山", "二子", "二子町", "海神", "山野町", "印内", "葛飾町", "東中山"].some(k => a.includes(k))) return "船橋西部";
-    if (["前原", "前原西", "前原東", "津田沼", "東船橋"].some(k => a.includes(k))) return "船橋中部";
-    if (["習志野台", "薬円台", "北習志野", "高根台", "芝山", "飯山満"].some(k => a.includes(k))) return "船橋東部";
-    return "船橋";
-  }
-
-  if (a.includes("市川市")) {
-    if (["八幡", "南八幡", "鬼越", "鬼高", "本八幡", "東菅野", "本北方", "北方", "若宮", "高石神", "中山"].some(k => a.includes(k))) return "市川・本八幡";
-    if (["中国分", "国分", "国府台", "堀之内", "須和田", "曽谷", "宮久保", "菅野"].some(k => a.includes(k))) return "市川北部";
-    if (["行徳", "妙典", "南行徳", "相之川", "新浜", "福栄", "末広"].some(k => a.includes(k))) return "行徳・南行徳";
-    return "市川";
-  }
-
-  if (a.includes("松戸市")) {
-    if (["新松戸", "新松戸北", "新松戸東", "幸谷", "八ケ崎", "八ヶ崎", "二ツ木", "中和倉"].some(k => a.includes(k))) return "新松戸";
-    if (["北松戸", "馬橋", "西馬橋", "栄町", "栄町西", "中根", "中根長津町"].some(k => a.includes(k))) return "北松戸・馬橋";
-    if (["常盤平", "常盤平陣屋前", "常盤平西窪町", "常盤平双葉町", "常盤平柳町", "五香", "五香西", "五香南", "金ケ作", "金ヶ作"].some(k => a.includes(k))) return "常盤平";
-    if (["日暮", "河原塚", "千駄堀", "牧の原", "松飛台", "稔台", "みのり台", "八柱", "常盤平松葉町"].some(k => a.includes(k))) return "八柱・みのり台";
-    if (["東松戸", "秋山", "高塚新田", "紙敷", "大橋", "和名ケ谷", "和名ヶ谷"].some(k => a.includes(k))) return "東松戸・秋山";
-    if (["北国分", "下矢切", "上矢切", "栗山", "三矢小台", "矢切"].some(k => a.includes(k))) return "北国分・矢切";
-    if (["根本", "小根本", "樋野口", "古ケ崎", "古ヶ崎", "上本郷", "岩瀬", "胡録台", "緑ケ丘", "緑ヶ丘"].some(k => a.includes(k))) return "松戸駅周辺";
-    return "松戸";
-  }
-
-  if (a.includes("柏市")) {
-    if (["旭町", "明原", "あけぼの", "末広町", "泉町", "中央町", "柏", "東上町"].some(k => a.includes(k))) return "柏駅周辺";
-    if (["豊四季", "南柏", "今谷", "新富町"].some(k => a.includes(k))) return "南柏・豊四季";
-    if (["北柏", "根戸", "松葉町", "花野井", "柏の葉"].some(k => a.includes(k))) return "北柏・柏の葉";
-    return "柏";
-  }
-
-  if (a.includes("流山市")) {
-    if (["南流山"].some(k => a.includes(k))) return "南流山";
-    if (["おおたかの森", "初石", "駒木"].some(k => a.includes(k))) return "おおたかの森";
-    if (["江戸川台", "西初石", "東初石"].some(k => a.includes(k))) return "江戸川台・初石";
-    return "流山";
-  }
-
-  if (a.includes("我孫子市")) return "我孫子";
-  if (a.includes("鎌ケ谷市") || a.includes("鎌ヶ谷市")) return "鎌ケ谷";
-  if (a.includes("野田市")) return "野田";
-  if (a.includes("習志野市")) return "習志野";
-  if (a.includes("浦安市")) return "浦安";
-  if (a.includes("八千代市")) return "八千代";
-  if (a.includes("白井市")) return "白井";
-  if (a.includes("印西市")) return "印西";
-  if (a.includes("佐倉市")) return "佐倉";
-  if (a.includes("成田市")) return "成田";
-
-  if (a.includes("三郷市")) {
-    if (["新三郷", "彦成", "彦糸", "采女", "早稲田"].some(k => a.includes(k))) return "三郷北部";
-    if (["戸ケ崎", "戸ヶ崎", "高州", "鷹野", "彦沢", "栄"].some(k => a.includes(k))) return "三郷南部";
-    return "三郷";
-  }
-
-  if (a.includes("八潮市")) {
-    if (["八潮", "中央", "大瀬", "茜町"].some(k => a.includes(k))) return "八潮中心部";
-    if (["大原", "木曽根", "浮塚", "南後谷", "伊勢野"].some(k => a.includes(k))) return "八潮南部";
-    return "八潮";
-  }
-
-  if (a.includes("草加市")) {
-    if (["草加", "氷川町", "中央", "高砂", "住吉"].some(k => a.includes(k))) return "草加中心部";
-    if (["谷塚", "瀬崎", "新田", "松原", "獨協大学前"].some(k => a.includes(k))) return "草加周辺";
-    return "草加";
-  }
-
-  if (a.includes("吉川市")) return "吉川";
-  if (a.includes("越谷市")) return "越谷";
-  if (a.includes("川口市")) return "川口";
-  if (a.includes("さいたま市")) {
-    if (a.includes("岩槻区")) return "さいたま・岩槻";
-    if (a.includes("浦和区") || a.includes("南区") || a.includes("緑区")) return "さいたま南部";
-    if (a.includes("大宮区") || a.includes("見沼区") || a.includes("北区") || a.includes("西区")) return "さいたま北部";
-    return "さいたま";
-  }
-
-  if (a.includes("取手市")) {
-    if (["取手", "新町", "井野", "白山", "台宿"].some(k => a.includes(k))) return "取手中心部";
-    if (["藤代", "宮和田", "双葉", "谷中", "桜が丘"].some(k => a.includes(k))) return "藤代";
-    return "取手";
-  }
-
-  if (a.includes("守谷市")) {
-    if (["中央", "松ケ丘", "松ヶ丘", "けやき台", "ひがし野", "本町"].some(k => a.includes(k))) return "守谷中心部";
-    if (["みずき野", "百合ケ丘", "百合ヶ丘", "御所ケ丘", "御所ヶ丘"].some(k => a.includes(k))) return "守谷西部";
-    return "守谷";
-  }
-
-  if (a.includes("つくばみらい市")) {
-    if (["みらい平", "陽光台", "紫峰ヶ丘", "富士見ヶ丘", "筒戸"].some(k => a.includes(k))) return "みらい平";
-    return "つくばみらい";
-  }
-
-  if (a.includes("常総市")) return "常総";
-  if (a.includes("龍ケ崎市") || a.includes("龍ヶ崎市")) return "龍ケ崎";
-  if (a.includes("牛久市")) return "牛久";
-  if (a.includes("つくば市")) return "つくば";
-  if (a.includes("土浦市")) return "土浦";
-  if (a.includes("坂東市")) return "坂東";
-  if (a.includes("利根町")) return "利根町";
-
+  if (a.includes("船橋")) return "船橋";
+  if (a.includes("柏")) return "柏";
+  if (a.includes("松戸")) return "松戸";
+  if (a.includes("市川")) return "市川";
+  if (a.includes("流山")) return "流山";
+  if (a.includes("八千代")) return "八千代";
+  if (a.includes("三郷")) return "三郷";
+  if (a.includes("守谷")) return "守谷";
+  if (a.includes("葛飾")) return "葛飾";
+  if (a.includes("江戸川")) return "江戸川";
   return "";
 }
 
 function classifyAreaByLatLng(lat, lng) {
   if (!isValidLatLng(lat, lng)) return "周辺";
-
-  if (lng >= 139.99) {
-    if (lat >= 35.75) return "葛飾東部";
-    if (lat >= 35.71) return "江戸川・小岩";
-    return "東京東部";
-  }
-
-  if (lat >= 35.79 && lat < 35.86 && lng >= 139.78 && lng < 139.88) return "草加・八潮・三郷";
-  if (lat >= 35.84 && lat < 35.92 && lng >= 139.84 && lng < 139.92) return "三郷・吉川";
-  if (lat >= 35.86 && lat < 35.95 && lng >= 139.74 && lng < 139.84) return "越谷";
-
-  if (lat >= 35.88 && lat < 35.98 && lng >= 140.00 && lng < 140.10) return "取手";
-  if (lat >= 35.93 && lat < 36.03 && lng >= 139.95 && lng < 140.06) return "守谷";
-  if (lat >= 35.97 && lat < 36.08 && lng >= 139.98 && lng < 140.08) return "つくばみらい";
-  if (lat >= 35.94 && lat < 36.08 && lng >= 140.10 && lng < 140.22) return "龍ケ崎・牛久";
-
-  if (lat >= 35.69 && lat < 35.74 && lng >= 139.93 && lng < 139.99) return "船橋西部";
-  if (lat >= 35.71 && lat < 35.76 && lng >= 139.89 && lng < 139.96) return "市川・本八幡";
-  if (lat >= 35.73 && lat < 35.78 && lng >= 139.87 && lng < 139.93) return "市川北部";
-  if (lat >= 35.74 && lat < 35.80 && lng >= 139.98 && lng < 140.09) return "八千代・習志野";
-  if (lat >= 35.81 && lat < 35.86 && lng >= 139.90 && lng < 139.96) return "新松戸";
-  if (lat >= 35.80 && lat < 35.84 && lng >= 139.90 && lng < 139.95) return "北松戸・馬橋";
-  if (lat >= 35.79 && lat < 35.83 && lng >= 139.85 && lng < 139.91) return "常盤平";
-  if (lat >= 35.76 && lat < 35.81 && lng >= 139.89 && lng < 139.95) return "八柱・みのり台";
-  if (lat >= 35.75 && lat < 35.79 && lng >= 139.93 && lng < 139.98) return "東松戸・秋山";
-  if (lat >= 35.74 && lat < 35.78 && lng >= 139.86 && lng < 139.91) return "北国分・矢切";
-  if (lat >= 35.84 && lng >= 139.94 && lng < 140.02) return "柏";
-  if (lat >= 35.87 && lng >= 139.90 && lng < 139.98) return "流山";
-  if (lat >= 35.86 && lng < 139.90) return "我孫子";
-  if (lat >= 35.75 && lat < 35.79 && lng >= 139.87 && lng < 139.93) return "鎌ケ谷";
-
-  return "広域周辺";
+  if (lng >= 139.99) return "東京東部";
+  if (lat >= 35.84 && lng >= 139.94) return "柏";
+  if (lat >= 35.81 && lat < 35.86 && lng >= 139.90 && lng < 139.96) return "松戸";
+  if (lat >= 35.69 && lat < 35.80 && lng >= 139.93 && lng < 140.09) return "船橋";
+  return "周辺";
 }
 
 function guessArea(lat, lng, address = "") {
-  const byAddress = classifyAreaByAddress(address);
-  if (byAddress) return byAddress;
-  return classifyAreaByLatLng(lat, lng);
-}
-
-function getDisplayArea(cast) {
-  const manualArea = String(cast.area || "").trim();
-  if (manualArea) return manualArea;
-
-  const address = cast.address || "";
-  const byAddress = classifyAreaByAddress(address);
-  if (byAddress) return byAddress;
-
-  const lat = toNullableNumber(cast.latitude);
-  const lng = toNullableNumber(cast.longitude);
-
-  if (lat !== null && lng !== null) {
-    return classifyAreaByLatLng(lat, lng);
-  }
-
-  return "";
+  return classifyAreaByAddress(address) || classifyAreaByLatLng(lat, lng);
 }
 
 /* =========================
-   AI配車 v2
+   AI配車
 ========================= */
-
-function areaDistanceScore(areaA, areaB) {
-  if (!areaA || !areaB) return 999;
-  if (areaA === areaB) return 0;
-
-  const nearMap = {
-    "松戸": ["新松戸", "北松戸・馬橋", "常盤平", "八柱・みのり台", "東松戸・秋山", "北国分・矢切", "松戸駅周辺"],
-    "柏": ["柏", "柏駅周辺", "南柏・豊四季", "北柏・柏の葉", "流山", "南流山", "おおたかの森"],
-    "八千代": ["八千代", "船橋東部", "船橋中部", "習志野", "船橋"],
-    "三郷": ["三郷", "三郷北部", "三郷南部", "八潮", "草加", "吉川"],
-    "守谷": ["守谷", "守谷中心部", "守谷西部", "取手", "藤代", "みらい平", "つくばみらい"],
-    "江戸川": ["江戸川", "江戸川・小岩", "江戸川南部", "葛飾", "葛飾東部", "葛飾西部"],
-    "市川": ["市川", "市川・本八幡", "市川北部", "行徳・南行徳", "船橋西部"],
-    "船橋": ["船橋", "船橋西部", "船橋中部", "船橋東部", "八千代"]
-  };
-
-  const nearList = nearMap[areaB] || [];
-  if (nearList.includes(areaA)) return 1;
-  return 2;
-}
 
 function getVehicleAssignments(assignments, vehicleId) {
   return assignments.filter(x => Number(x.vehicle_id) === Number(vehicleId));
@@ -512,15 +319,6 @@ function getVehicleCurrentMaxDistance(assignments, vehicleId) {
   const rows = getVehicleAssignments(assignments, vehicleId);
   if (!rows.length) return 0;
   return Math.max(...rows.map(x => Number(x.distance_km || 0)));
-}
-
-function getGlobalWorstReturnDistance(assignments, vehicles) {
-  let worst = 0;
-  vehicles.forEach(vehicle => {
-    const d = getVehicleCurrentMaxDistance(assignments, vehicle.id);
-    if (d > worst) worst = d;
-  });
-  return worst;
 }
 
 function buildMonthlyDistanceMap(reports, targetMonth) {
@@ -551,74 +349,22 @@ function getVehicleMonthlyAvgDistance(monthlyMap, vehicleId) {
   return Number(row.avg_distance_per_day || 0);
 }
 
-function groupCastsByArea(casts) {
-  const grouped = new Map();
-  casts.forEach(cast => {
-    const key = cast.area || "未分類";
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(cast);
-  });
-
-  return [...grouped.entries()].map(([area, members]) => ({
-    area,
-    members
-  }));
-}
-
-function sortAreaGroupsByDistance(groups) {
-  return groups.sort((a, b) => {
-    const aMin = Math.min(...a.members.map(x => Number(x.distance_km || 9999)));
-    const bMin = Math.min(...b.members.map(x => Number(x.distance_km || 9999)));
-    return aMin - bMin;
-  });
-}
-
-function chooseBestVehicleForCastBalanced(
-  cast,
-  vehicles,
-  assignments,
-  isLast,
-  preferredArea = "",
-  monthlyDistanceMap = new Map()
-) {
+function chooseBestVehicleForCast(cast, vehicles, assignments, monthlyDistanceMap) {
   let bestVehicle = null;
   let bestScore = Infinity;
-  const currentWorst = getGlobalWorstReturnDistance(assignments, vehicles);
 
   vehicles.forEach(vehicle => {
     if (!canAssignToVehicle(vehicle, assignments)) return;
 
-    const vehicleAssignments = getVehicleAssignments(assignments, vehicle.id);
-    const currentLoad = vehicleAssignments.length;
-    const currentMaxDistance = getVehicleCurrentMaxDistance(assignments, vehicle.id);
-    const castDistance = Number(cast.distance_km || 0);
-    const newVehicleMaxDistance = Math.max(currentMaxDistance, castDistance);
-
-    let newGlobalWorst = 0;
-    vehicles.forEach(v => {
-      if (Number(v.id) === Number(vehicle.id)) {
-        if (newVehicleMaxDistance > newGlobalWorst) newGlobalWorst = newVehicleMaxDistance;
-      } else {
-        const d = getVehicleCurrentMaxDistance(assignments, v.id);
-        if (d > newGlobalWorst) newGlobalWorst = d;
-      }
-    });
+    const currentLoad = getVehicleLoad(assignments, vehicle.id);
+    const maxDistance = getVehicleCurrentMaxDistance(assignments, vehicle.id);
+    const avgDistance = getVehicleMonthlyAvgDistance(monthlyDistanceMap, vehicle.id);
 
     let score = 0;
-
-    score += newGlobalWorst * 30;
-    score += Math.max(0, newGlobalWorst - currentWorst) * 50;
-    score += currentLoad * 12;
-
-    const sameAreaCount = vehicleAssignments.filter(x => x.area === cast.area).length;
-    if (sameAreaCount > 0) score -= 8;
-
-    if (isLast) {
-      score += areaDistanceScore(cast.area, vehicle.home_area || preferredArea) * 25;
-    }
-
-    const avgDistance = getVehicleMonthlyAvgDistance(monthlyDistanceMap, vehicle.id);
+    score += currentLoad * 20;
+    score += maxDistance * 5;
     score += avgDistance * 0.15;
+    score += Number(cast.distance_km || 0);
 
     if (score < bestScore) {
       bestScore = score;
@@ -629,50 +375,33 @@ function chooseBestVehicleForCastBalanced(
   return bestVehicle;
 }
 
-function optimizeDispatchAssignmentsV2({ casts, vehicles, planDate, planHour, monthlyDistanceMap }) {
-  const result = [];
+function optimizeDispatchAssignmentsV2({ items, vehicles, monthlyDistanceMap }) {
   const activeVehicles = vehicles.filter(v =>
-    v.status === "working" || v.status === "waiting" || v.status === "running"
+    v.status === "waiting" || v.status === "running"
   );
-  const lastHour = isLastHour(planDate, planHour);
-  const groups = sortAreaGroupsByDistance(groupCastsByArea(casts));
 
-  groups.forEach(group => {
-    const sortedMembers = [...group.members].sort((a, b) => {
-      const aKm = Number(a.distance_km || 9999);
-      const bKm = Number(b.distance_km || 9999);
-      return aKm - bKm;
-    });
+  const sorted = [...items].sort((a, b) => {
+    const aBlock = String(a.destination_area || "無し");
+    const bBlock = String(b.destination_area || "無し");
+    if (aBlock !== bBlock) return aBlock.localeCompare(bBlock);
+    return Number(a.distance_km || 0) - Number(b.distance_km || 0);
+  });
 
-    sortedMembers.forEach(cast => {
-      const vehicle = chooseBestVehicleForCastBalanced(
-        cast,
-        activeVehicles,
-        result,
-        lastHour,
-        group.area,
-        monthlyDistanceMap
-      );
+  const assignments = [];
 
-      if (!vehicle) return;
+  sorted.forEach(item => {
+    const vehicle = chooseBestVehicleForCast(item, activeVehicles, assignments, monthlyDistanceMap);
+    if (!vehicle) return;
 
-      result.push({
-        cast_id: cast.id,
-        cast_name: cast.name,
-        area: cast.area || "",
-        distance_km: cast.distance_km || null,
-        vehicle_id: vehicle.id,
-        vehicle_label: `${vehicle.plate_number} ${vehicle.vehicle_name || ""}`.trim(),
-        driver_name: vehicle.driver_name || "",
-        home_area: vehicle.home_area || "",
-        line_id: vehicle.line_id || "",
-        plan_hour: planHour,
-        plan_date: planDate
-      });
+    assignments.push({
+      item_id: item.id,
+      vehicle_id: vehicle.id,
+      driver_name: vehicle.driver_name || "",
+      line_id: vehicle.line_id || ""
     });
   });
 
-  return result;
+  return assignments;
 }
 
 /* =========================
@@ -729,13 +458,13 @@ function buildLineDispatchText(items, vehicles) {
   items
     .filter(item => normalizeStatus(item.status) !== "cancel")
     .sort((a, b) => {
-      const aVehicle = String(a.vehicle_id || "");
-      const bVehicle = String(b.vehicle_id || "");
-      if (aVehicle !== bVehicle) return aVehicle.localeCompare(bVehicle);
+      const aDriver = String(a.driver_name || "");
+      const bDriver = String(b.driver_name || "");
+      if (aDriver !== bDriver) return aDriver.localeCompare(bDriver);
       return Number(a.stop_order || 0) - Number(b.stop_order || 0);
     })
     .forEach(item => {
-      const key = Number(item.vehicle_id || 0);
+      const key = item.driver_name || "未設定";
       if (!grouped.has(key)) grouped.set(key, []);
       grouped.get(key).push(item);
     });
@@ -744,20 +473,13 @@ function buildLineDispatchText(items, vehicles) {
   lines.push("【本日の送り配車】");
   lines.push("");
 
-  for (const [vehicleId, rows] of grouped.entries()) {
-    const vehicle = vehicles.find(v => Number(v.id) === Number(vehicleId));
-    const driverName = vehicle?.driver_name || rows[0]?.driver_name || "ドライバー未設定";
+  for (const [driverName, rows] of grouped.entries()) {
+    const vehicle = vehicles.find(v => (v.driver_name || "") === driverName);
     const lineId = vehicle?.line_id || "";
-    const header = `${lineId ? lineId + " " : ""}${driverName}`;
-
-    lines.push(header);
-
-    rows.forEach((row, index) => {
-      const castName = row.casts?.name || "不明";
-      const area = row.destination_area || "-";
-      lines.push(`${index + 1}件目 ${castName} / ${area}`);
+    lines.push(`${lineId ? lineId + " " : ""}${driverName}`);
+    rows.forEach(row => {
+      lines.push(`${row.casts?.name || "不明"} / ${row.destination_area || "-"}`);
     });
-
     lines.push("");
   }
 
@@ -850,7 +572,7 @@ function fillCastForm(cast) {
   els.castPhone.value = cast.phone || "";
   els.castAddress.value = cast.address || "";
   els.castLatLngText.value =
-    hasValue(cast.latitude) && hasValue(cast.longitude)
+    cast.latitude != null && cast.longitude != null
       ? `${cast.latitude},${cast.longitude}`
       : "";
   els.castArea.value = getDisplayArea(cast) || "";
@@ -893,16 +615,11 @@ async function saveCast() {
     return;
   }
 
-  const manualArea = els.castArea.value.trim();
-  const autoArea =
-    classifyAreaByAddress(els.castAddress.value) ||
-    (lat !== null && lng !== null ? classifyAreaByLatLng(lat, lng) : "");
-
   const payload = {
     name,
     phone: els.castPhone.value.trim(),
     address: els.castAddress.value.trim(),
-    area: manualArea || autoArea || null,
+    area: els.castArea.value.trim() || guessArea(lat, lng, els.castAddress.value) || null,
     latitude: lat,
     longitude: lng,
     memo: els.castMemo.value.trim(),
@@ -923,12 +640,7 @@ async function saveCast() {
     return;
   }
 
-  await addHistory(
-    null,
-    null,
-    editingCastId ? "update_cast" : "create_cast",
-    editingCastId ? "キャストを更新" : "キャストを作成"
-  );
+  await addHistory(null, null, editingCastId ? "update_cast" : "create_cast", editingCastId ? "キャストを更新" : "キャストを作成");
 
   resetCastForm();
   await loadCasts();
@@ -976,8 +688,6 @@ async function loadCasts() {
 }
 
 function renderCastSelect(casts) {
-  if (!els.castSelect) return;
-
   els.castSelect.innerHTML = `<option value="">選択してください</option>`;
   const usedCastIds = getUsedCastIdsInCurrentDispatch();
 
@@ -987,7 +697,7 @@ function renderCastSelect(casts) {
       const displayArea = getDisplayArea(cast);
       const option = document.createElement("option");
       option.value = cast.id;
-      option.textContent = `${cast.name} | ${displayArea || "地域未設定"}`;
+      option.textContent = `${cast.name} | ${displayArea || "方面未設定"}`;
       option.dataset.address = cast.address || "";
       option.dataset.lat = cast.latitude ?? "";
       option.dataset.lng = cast.longitude ?? "";
@@ -1016,7 +726,7 @@ function renderCastList(casts) {
       <h3>${escapeHtml(cast.name)}</h3>
       <p>電話: ${escapeHtml(cast.phone || "-")}</p>
       <p>住所: ${escapeHtml(cast.address || "-")}</p>
-      <p>地域: ${escapeHtml(displayArea || "-")}</p>
+      <p>方面: ${escapeHtml(displayArea || "-")}</p>
       <p>松戸駅から推定距離: ${km !== null ? `${km} km` : "-"}</p>
       <p>座標: ${cast.latitude ?? "-"}, ${cast.longitude ?? "-"}</p>
       <p>メモ: ${escapeHtml(cast.memo || "-")}</p>
@@ -1062,13 +772,11 @@ function exportCastsCsv() {
 function resetVehicleForm() {
   editingVehicleId = null;
   els.vehiclePlateNumber.value = "";
-  els.vehicleName.value = "";
   els.vehicleDriverName.value = "";
   els.vehicleLineId.value = "";
   els.vehicleStatus.value = "waiting";
   els.vehicleSeatCapacity.value = "4";
   els.vehicleHomeArea.value = "";
-  els.vehicleCapacityNote.value = "";
   els.vehicleMemo.value = "";
   els.saveVehicleBtn.textContent = "保存";
   els.cancelVehicleEditBtn.classList.add("hidden");
@@ -1077,13 +785,11 @@ function resetVehicleForm() {
 function fillVehicleForm(vehicle) {
   editingVehicleId = vehicle.id;
   els.vehiclePlateNumber.value = vehicle.plate_number || "";
-  els.vehicleName.value = vehicle.vehicle_name || "";
   els.vehicleDriverName.value = vehicle.driver_name || "";
   els.vehicleLineId.value = vehicle.line_id || "";
   els.vehicleStatus.value = vehicle.status || "waiting";
   els.vehicleSeatCapacity.value = String(vehicle.seat_capacity || 4);
   els.vehicleHomeArea.value = vehicle.home_area || "";
-  els.vehicleCapacityNote.value = vehicle.capacity_note || "";
   els.vehicleMemo.value = vehicle.memo || "";
   els.saveVehicleBtn.textContent = "更新";
   els.cancelVehicleEditBtn.classList.remove("hidden");
@@ -1099,13 +805,11 @@ async function saveVehicle() {
 
   const payload = {
     plate_number: plateNumber,
-    vehicle_name: els.vehicleName.value.trim(),
     driver_name: els.vehicleDriverName.value.trim(),
     line_id: els.vehicleLineId.value.trim(),
     status: els.vehicleStatus.value,
     seat_capacity: Number(els.vehicleSeatCapacity.value || 4),
     home_area: els.vehicleHomeArea.value.trim(),
-    capacity_note: els.vehicleCapacityNote.value.trim(),
     memo: els.vehicleMemo.value.trim(),
     is_active: true
   };
@@ -1123,12 +827,7 @@ async function saveVehicle() {
     return;
   }
 
-  await addHistory(
-    null,
-    null,
-    editingVehicleId ? "update_vehicle" : "create_vehicle",
-    editingVehicleId ? "車両を更新" : "車両を登録"
-  );
+  await addHistory(null, null, editingVehicleId ? "update_vehicle" : "create_vehicle", editingVehicleId ? "車両を更新" : "車両を登録");
 
   resetVehicleForm();
   await loadVehicles();
@@ -1167,32 +866,16 @@ async function loadVehicles() {
   }
 
   allVehiclesCache = data || [];
-  renderVehicleSelect(allVehiclesCache);
   renderVehicleList(allVehiclesCache);
   renderReportVehicleSelect(allVehiclesCache);
 }
 
-function renderVehicleSelect(vehicles) {
-  if (!els.vehicleSelect) return;
-
-  els.vehicleSelect.innerHTML = `<option value="">選択してください</option>`;
-  vehicles.forEach(vehicle => {
-    const option = document.createElement("option");
-    option.value = vehicle.id;
-    option.textContent = `${vehicle.plate_number} | ${vehicle.vehicle_name || "車種未設定"} | ${vehicleStatusLabel(vehicle.status)}`;
-    option.dataset.label = `${vehicle.plate_number} ${vehicle.vehicle_name || ""}`.trim();
-    els.vehicleSelect.appendChild(option);
-  });
-}
-
 function renderReportVehicleSelect(vehicles) {
-  if (!els.reportVehicleSelect) return;
-
   els.reportVehicleSelect.innerHTML = `<option value="">選択してください</option>`;
   vehicles.forEach(vehicle => {
     const option = document.createElement("option");
     option.value = vehicle.id;
-    option.textContent = `${vehicle.plate_number} | ${vehicle.vehicle_name || "車種未設定"} | ${vehicle.driver_name || "-"}`;
+    option.textContent = `${vehicle.plate_number} | ${vehicle.driver_name || "-"}`;
     option.dataset.driver = vehicle.driver_name || "";
     els.reportVehicleSelect.appendChild(option);
   });
@@ -1213,13 +896,11 @@ function renderVehicleList(vehicles) {
     div.className = "item";
     div.innerHTML = `
       <h3>${escapeHtml(vehicle.plate_number)}</h3>
-      <p>車両名: ${escapeHtml(vehicle.vehicle_name || "-")}</p>
       <p>担当ドライバー: ${escapeHtml(vehicle.driver_name || "-")}</p>
       <p>LINE ID: ${escapeHtml(vehicle.line_id || "-")}</p>
       <p>状態: <span class="badge ${badgeClass}">${escapeHtml(vehicleStatusLabel(vehicle.status))}</span></p>
       <p>乗車可能人数: ${escapeHtml(vehicle.seat_capacity || 4)}人</p>
       <p>帰宅方面: ${escapeHtml(vehicle.home_area || "-")}</p>
-      <p>積載メモ: ${escapeHtml(vehicle.capacity_note || "-")}</p>
       <p>メモ: ${escapeHtml(vehicle.memo || "-")}</p>
       <div class="actions">
         <button class="btn edit-vehicle-btn" data-id="${vehicle.id}">編集</button>
@@ -1235,13 +916,13 @@ function renderVehicleList(vehicles) {
 }
 
 /* =========================
-   送り予定表
+   予定表
 ========================= */
 
 function resetPlanForm() {
   editingPlanId = null;
   els.planDate.value = els.planDate.value || todayStr();
-  rebuildPlanHourOptions(els.planDate.value);
+  els.planHour.value = "0";
   els.planCastSelect.value = "";
   els.planArea.value = "";
   els.planNote.value = "";
@@ -1249,27 +930,7 @@ function resetPlanForm() {
   els.cancelPlanEditBtn.classList.add("hidden");
 }
 
-function rebuildPlanHourOptions(dateStr) {
-  const hours = getPlanHourOptions(dateStr);
-  const current = Number(els.planHour.value || hours[0]);
-  els.planHour.innerHTML = "";
-  hours.forEach(hour => {
-    const option = document.createElement("option");
-    option.value = String(hour);
-    option.textContent = `${hour}時`;
-    els.planHour.appendChild(option);
-  });
-
-  if (hours.includes(current)) {
-    els.planHour.value = String(current);
-  } else {
-    els.planHour.value = String(hours[0]);
-  }
-}
-
 function refreshPlanCastSelect() {
-  if (!els.planCastSelect) return;
-
   const blockedIds = getPlannedOrBlockedCastIds();
   const currentEditCastId = editingPlanId
     ? Number(currentPlansCache.find(x => Number(x.id) === Number(editingPlanId))?.cast_id || 0)
@@ -1280,11 +941,9 @@ function refreshPlanCastSelect() {
   allCastsCache
     .filter(cast => !blockedIds.has(Number(cast.id)) || Number(cast.id) === currentEditCastId)
     .forEach(cast => {
-      const displayArea = getDisplayArea(cast);
       const option = document.createElement("option");
       option.value = cast.id;
-      option.textContent = `${cast.name} | ${displayArea || "地域未設定"}`;
-      option.dataset.area = displayArea || "";
+      option.textContent = `${cast.name} | ${getDisplayArea(cast) || "方面未設定"}`;
       els.planCastSelect.appendChild(option);
     });
 }
@@ -1292,7 +951,6 @@ function refreshPlanCastSelect() {
 function fillPlanForm(plan) {
   editingPlanId = plan.id;
   els.planDate.value = plan.plan_date;
-  rebuildPlanHourOptions(plan.plan_date);
   els.planHour.value = String(plan.plan_hour);
   refreshPlanCastSelect();
   els.planCastSelect.value = String(plan.cast_id || "");
@@ -1323,14 +981,16 @@ async function savePlan() {
     return;
   }
 
-  const cast = allCastsCache.find(x => Number(x.id) === castId);
-  const plannedArea = els.planArea.value.trim() || getDisplayArea(cast);
+  if (!els.planArea.value) {
+    alert("方面ブロックを選択してください");
+    return;
+  }
 
   const payload = {
     plan_date: planDate,
     plan_hour: planHour,
     cast_id: castId,
-    planned_area: plannedArea || null,
+    planned_area: els.planArea.value,
     note: els.planNote.value.trim(),
     status: "planned"
   };
@@ -1348,12 +1008,7 @@ async function savePlan() {
     return;
   }
 
-  await addHistory(
-    null,
-    null,
-    editingPlanId ? "update_plan" : "create_plan",
-    editingPlanId ? "送り予定を更新" : "送り予定を作成"
-  );
+  await addHistory(null, null, editingPlanId ? "update_plan" : "create_plan", editingPlanId ? "送り予定を更新" : "送り予定を作成");
 
   resetPlanForm();
   await loadPlansByDate(planDate);
@@ -1432,8 +1087,6 @@ async function loadPlansByDate(dateStr) {
 }
 
 function renderPlanSelect(plans) {
-  if (!els.planSelect) return;
-
   const dispatchDate = els.dispatchDate?.value || "";
 
   els.planSelect.innerHTML = `<option value="">予定を選択してください</option>`;
@@ -1444,7 +1097,7 @@ function renderPlanSelect(plans) {
     .forEach(plan => {
       const option = document.createElement("option");
       option.value = plan.id;
-      option.textContent = `${plan.plan_hour}時 | ${plan.casts?.name || "不明"} | ${plan.planned_area || "-"}`;
+      option.textContent = `${BOARD_ROWS.find(r => r.key === Number(plan.plan_hour))?.label || plan.plan_hour} | ${plan.planned_area || "-"} | ${plan.casts?.name || "不明"}`;
       els.planSelect.appendChild(option);
     });
 }
@@ -1469,81 +1122,78 @@ function renderPlansSummary(plans, dateStr) {
 function renderPlansBoard(plans, dateStr) {
   els.plansBoard.innerHTML = "";
 
-  if (!plans.length) {
-    els.plansBoard.innerHTML = `<div class="item"><p>予定はまだありません。</p></div>`;
-    return;
-  }
+  const wrapper = document.createElement("div");
+  wrapper.className = "item";
 
-  const hours = getPlanHourOptions(dateStr);
+  let html = `
+    <div style="overflow:auto;">
+      <table style="width:100%; border-collapse:collapse; min-width:900px;">
+        <thead>
+          <tr>
+            <th style="border:1px solid rgba(255,255,255,.15); padding:10px;">時間</th>
+            ${BLOCKS.map(block => `<th style="border:1px solid rgba(255,255,255,.15); padding:10px;">${block}</th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+  `;
 
-  hours.forEach(hour => {
-    const hourPlans = plans.filter(x => Number(x.plan_hour) === Number(hour));
-    const wrapper = document.createElement("div");
-    wrapper.className = "item";
+  BOARD_ROWS.forEach(row => {
+    html += `<tr>`;
+    html += `<td style="border:1px solid rgba(255,255,255,.15); padding:10px; font-weight:700; text-align:center;">${row.label}</td>`;
 
-    if (!hourPlans.length) {
-      wrapper.innerHTML = `<h3>${hour}時</h3><p>予定なし</p>`;
-      els.plansBoard.appendChild(wrapper);
-      return;
-    }
+    BLOCKS.forEach(block => {
+      const cellPlans = plans.filter(
+        p => Number(p.plan_hour) === row.key && String(p.planned_area || "") === block
+      );
 
-    const grouped = new Map();
-    hourPlans.forEach(plan => {
-      const key = plan.planned_area || getDisplayArea(plan.casts || {}) || "未分類";
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(plan);
-    });
-
-    let inner = `<h3>${hour}時${isLastHour(dateStr, hour) ? "（ラスト便）" : ""}</h3>`;
-
-    [...grouped.entries()].forEach(([area, list]) => {
-      inner += `<p><strong>${escapeHtml(area)}</strong></p>`;
-      list.forEach(plan => {
+      let cellHtml = "";
+      cellPlans.forEach(plan => {
         const statusClass = planStatusBadgeClass(plan.status);
-        inner += `
-          <div class="item" style="margin-top:8px;">
-            <p>${escapeHtml(plan.casts?.name || "不明")} / <span class="badge ${statusClass}">${escapeHtml(planStatusLabel(plan.status))}</span></p>
-            <p>住所: ${escapeHtml(plan.casts?.address || "-")}</p>
-            <p>メモ: ${escapeHtml(plan.note || "-")}</p>
-            <div class="actions">
+        cellHtml += `
+          <div style="margin-bottom:8px; padding:8px; border:1px solid rgba(255,255,255,.10); border-radius:8px;">
+            <div style="font-weight:700;">${escapeHtml(plan.casts?.name || "不明")}</div>
+            <div class="badge ${statusClass}" style="margin-top:6px;">${escapeHtml(planStatusLabel(plan.status))}</div>
+            <div class="actions" style="margin-top:8px;">
               <button class="btn edit-plan-btn" data-id="${plan.id}">編集</button>
               <button class="btn secondary plan-done-btn" data-id="${plan.id}">完了</button>
               <button class="btn danger plan-cancel-btn" data-id="${plan.id}">キャンセル</button>
-              <button class="btn danger delete-plan-btn" data-id="${plan.id}">削除</button>
             </div>
           </div>
         `;
       });
+
+      html += `<td style="vertical-align:top; border:1px solid rgba(255,255,255,.15); padding:8px; min-height:80px;">${cellHtml}</td>`;
     });
 
-    wrapper.innerHTML = inner;
+    html += `</tr>`;
+  });
 
-    wrapper.querySelectorAll(".edit-plan-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const plan = currentPlansCache.find(x => Number(x.id) === Number(btn.dataset.id));
-        if (plan) fillPlanForm(plan);
-      });
+  html += `
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  wrapper.innerHTML = html;
+  els.plansBoard.appendChild(wrapper);
+
+  wrapper.querySelectorAll(".edit-plan-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const plan = currentPlansCache.find(x => Number(x.id) === Number(btn.dataset.id));
+      if (plan) fillPlanForm(plan);
     });
+  });
 
-    wrapper.querySelectorAll(".plan-done-btn").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        await updatePlanStatus(Number(btn.dataset.id), "done");
-      });
+  wrapper.querySelectorAll(".plan-done-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await updatePlanStatus(Number(btn.dataset.id), "done");
     });
+  });
 
-    wrapper.querySelectorAll(".plan-cancel-btn").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        await updatePlanStatus(Number(btn.dataset.id), "cancel");
-      });
+  wrapper.querySelectorAll(".plan-cancel-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await updatePlanStatus(Number(btn.dataset.id), "cancel");
     });
-
-    wrapper.querySelectorAll(".delete-plan-btn").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        await deletePlan(Number(btn.dataset.id));
-      });
-    });
-
-    els.plansBoard.appendChild(wrapper);
   });
 }
 
@@ -1575,11 +1225,9 @@ async function createDispatch() {
   if (existing?.length) {
     currentDispatchId = existing[0].id;
     els.driverName.value = existing[0].driver_name || "";
-    els.vehicleSelect.value = existing[0].vehicle_id ? String(existing[0].vehicle_id) : "";
 
     if (els.planDate) {
       els.planDate.value = dispatchDate;
-      rebuildPlanHourOptions(dispatchDate);
     }
 
     await loadDispatchItems(currentDispatchId);
@@ -1587,17 +1235,11 @@ async function createDispatch() {
     return;
   }
 
-  const selectedVehicle = els.vehicleSelect.selectedOptions?.[0] || null;
-  const vehicleId = els.vehicleSelect.value ? Number(els.vehicleSelect.value) : null;
-  const vehicleLabel = selectedVehicle?.dataset.label || null;
-
   const { data, error } = await supabaseClient
     .from("dispatches")
     .insert({
       dispatch_date: dispatchDate,
       driver_name: driverName,
-      vehicle_id: vehicleId,
-      vehicle_label: vehicleLabel,
       status: "draft",
       created_by: currentUser.id
     })
@@ -1613,7 +1255,6 @@ async function createDispatch() {
 
   if (els.planDate) {
     els.planDate.value = dispatchDate;
-    rebuildPlanHourOptions(dispatchDate);
   }
 
   await addHistory(currentDispatchId, null, "create_dispatch", `配車を作成: ${dispatchDate}`);
@@ -1640,19 +1281,16 @@ async function loadDispatchByDate(dateStr) {
 
   if (dispatch) {
     els.driverName.value = dispatch.driver_name || "";
-    els.vehicleSelect.value = dispatch.vehicle_id ? String(dispatch.vehicle_id) : "";
     await loadDispatchItems(dispatch.id);
   } else {
     currentDispatchItemsCache = [];
     renderCastSelect(allCastsCache);
     els.dispatchSummary.textContent = "";
     els.dispatchList.innerHTML = `<div class="item"><p>この日の配車はまだありません。</p></div>`;
-    els.vehicleSelect.value = "";
   }
 
   if (els.planDate) {
     els.planDate.value = dateStr;
-    rebuildPlanHourOptions(dateStr);
   }
 
   await loadPlansByDate(dateStr);
@@ -1670,8 +1308,7 @@ async function addCastToDispatch() {
     return;
   }
 
-  const alreadyExists = currentDispatchItemsCache.some(item => Number(item.cast_id) === castId);
-  if (alreadyExists) {
+  if (currentDispatchItemsCache.some(item => Number(item.cast_id) === castId)) {
     alert("このキャストはすでに配車に追加されています");
     return;
   }
@@ -1680,7 +1317,7 @@ async function addCastToDispatch() {
   const destinationAddress = selected?.dataset.address || "";
   const lat = toNullableNumber(selected?.dataset.lat);
   const lng = toNullableNumber(selected?.dataset.lng);
-  const area = selected?.dataset.area || (lat !== null && lng !== null ? guessArea(lat, lng, destinationAddress) : "");
+  const displayArea = selected?.dataset.area || "";
   const distanceKm = lat !== null && lng !== null ? estimateRoadKmFromStation(lat, lng) : null;
   const travelMinutes = distanceKm !== null ? estimateMinutes(distanceKm) : null;
 
@@ -1688,11 +1325,6 @@ async function addCastToDispatch() {
   if (!Number.isFinite(stopOrder) || stopOrder <= 0) {
     stopOrder = currentDispatchItemsCache.length + 1;
   }
-
-  const selectedVehicle = els.vehicleSelect.selectedOptions?.[0] || null;
-  const vehicleId = els.vehicleSelect.value ? Number(els.vehicleSelect.value) : null;
-  const vehicleLabel = selectedVehicle?.dataset.label || null;
-  const driverName = els.driverName.value.trim();
 
   const { data, error } = await supabaseClient
     .from("dispatch_items")
@@ -1702,14 +1334,11 @@ async function addCastToDispatch() {
       stop_order: stopOrder,
       pickup_label: ORIGIN_LABEL,
       destination_address: destinationAddress,
-      destination_area: area,
+      destination_area: displayArea || "無し",
       latitude: lat,
       longitude: lng,
       distance_km: distanceKm,
       travel_minutes: travelMinutes,
-      vehicle_id: vehicleId,
-      vehicle_label: vehicleLabel,
-      driver_name: driverName,
       plan_date: els.dispatchDate.value || null,
       status: "pending"
     })
@@ -1722,7 +1351,7 @@ async function addCastToDispatch() {
   }
 
   await normalizeStopOrders(currentDispatchId);
-  await addHistory(currentDispatchId, data.id, "add_cast", "キャストを配車に追加");
+  await addHistory(currentDispatchId, data.id, "add_cast", "予定外キャストを配車に追加");
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
@@ -1741,7 +1370,7 @@ async function addPlanToDispatch() {
     return;
   }
 
-  const plan = currentPlansCache.find(x => Number(x.id) === planId);
+  const plan = currentPlansCache.find(x => Number(x.id) === Number(planId));
   if (!plan) {
     alert("予定が見つかりません");
     return;
@@ -1765,15 +1394,9 @@ async function addPlanToDispatch() {
 
   const lat = toNullableNumber(cast.latitude);
   const lng = toNullableNumber(cast.longitude);
-  const area = plan.planned_area || getDisplayArea(cast);
   const distanceKm = lat !== null && lng !== null ? estimateRoadKmFromStation(lat, lng) : null;
   const travelMinutes = distanceKm !== null ? estimateMinutes(distanceKm) : null;
   const stopOrder = currentDispatchItemsCache.length + 1;
-
-  const selectedVehicle = els.vehicleSelect.selectedOptions?.[0] || null;
-  const vehicleId = els.vehicleSelect.value ? Number(els.vehicleSelect.value) : null;
-  const vehicleLabel = selectedVehicle?.dataset.label || null;
-  const driverName = els.driverName.value.trim();
 
   const { data, error } = await supabaseClient
     .from("dispatch_items")
@@ -1783,14 +1406,11 @@ async function addPlanToDispatch() {
       stop_order: stopOrder,
       pickup_label: ORIGIN_LABEL,
       destination_address: cast.address || "",
-      destination_area: area || "",
+      destination_area: plan.planned_area || "無し",
       latitude: lat,
       longitude: lng,
       distance_km: distanceKm,
       travel_minutes: travelMinutes,
-      vehicle_id: vehicleId,
-      vehicle_label: vehicleLabel,
-      driver_name: driverName,
       plan_hour: plan.plan_hour,
       plan_date: plan.plan_date,
       status: "pending"
@@ -1851,8 +1471,7 @@ async function loadDispatchItems(dispatchId) {
   renderDispatchItems(currentDispatchItemsCache);
   renderCastSelect(allCastsCache);
 
-  const nextOrder = currentDispatchItemsCache.length + 1;
-  els.stopOrder.value = String(nextOrder);
+  els.stopOrder.value = String(currentDispatchItemsCache.length + 1);
 }
 
 function renderDispatchSummary(items) {
@@ -1864,25 +1483,9 @@ function renderDispatchSummary(items) {
   const active = items.filter(x => normalizeStatus(x.status) === "pending");
   const done = items.filter(x => normalizeStatus(x.status) === "done");
   const cancel = items.filter(x => normalizeStatus(x.status) === "cancel");
-  const totalKm = active.reduce((sum, x) => sum + Number(x.distance_km || 0), 0);
-  const totalMin = active.reduce((sum, x) => sum + Number(x.travel_minutes || 0), 0);
-  const areas = [...new Set(active.map(x => x.destination_area).filter(Boolean))];
-  const vehicleText =
-    els.vehicleSelect && els.vehicleSelect.selectedOptions.length
-      ? els.vehicleSelect.selectedOptions[0]?.textContent || ""
-      : "";
 
   els.dispatchSummary.textContent =
-    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件 / 推定合計距離 ${totalKm.toFixed(1)} km / 推定合計時間 ${totalMin} 分${areas.length ? ` / 地域 ${areas.join("・")}` : ""}${vehicleText ? ` / 車両 ${vehicleText}` : ""}`;
-}
-
-function buildVehicleChangeOptions(selectedVehicleId) {
-  let html = `<option value="">未設定</option>`;
-  allVehiclesCache.forEach(vehicle => {
-    const selected = Number(vehicle.id) === Number(selectedVehicleId) ? "selected" : "";
-    html += `<option value="${vehicle.id}" ${selected}>${escapeHtml(vehicle.plate_number)} | ${escapeHtml(vehicle.vehicle_name || "車種未設定")} | ${escapeHtml(vehicle.driver_name || "-")}</option>`;
-  });
-  return html;
+    `未完了 ${active.length} 件 / 完了 ${done.length} 件 / キャンセル ${cancel.length} 件`;
 }
 
 function renderDispatchItems(items) {
@@ -1893,96 +1496,64 @@ function renderDispatchItems(items) {
     return;
   }
 
-  items.forEach((item, index) => {
-    const status = normalizeStatus(item.status);
-    const badgeClass = status === "done" ? "done" : status === "cancel" ? "cancel" : "";
-    const cardClass = status === "done" ? "done-card" : status === "cancel" ? "cancel-card" : "";
-    const displayArea = item.destination_area || (item.casts ? getDisplayArea(item.casts) : "") || "-";
+  const grouped = new Map();
 
-    const div = document.createElement("div");
-    div.className = `item ${cardClass}`;
-    div.innerHTML = `
-      <h3>${item.stop_order}件目 | ${escapeHtml(item.casts?.name || "不明")}</h3>
-      <p>地域: ${escapeHtml(displayArea)}</p>
-      <p>住所: ${escapeHtml(item.destination_address || "-")}</p>
-      <p>車両: ${escapeHtml(item.vehicle_label || "-")}</p>
-      <p>ドライバー: ${escapeHtml(item.driver_name || "-")}</p>
-      <p>推定距離: ${item.distance_km ?? "-"} km</p>
-      <p>推定時間: ${item.travel_minutes ?? "-"} 分</p>
-      <p><span class="badge ${badgeClass}">${escapeHtml(status)}</span></p>
+  items.forEach(item => {
+    const key = item.driver_name || "未割当";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(item);
+  });
 
-      <label>
-        <span>車両変更</span>
-        <select class="dispatch-vehicle-change" data-id="${item.id}">
-          ${buildVehicleChangeOptions(item.vehicle_id)}
-        </select>
-      </label>
+  [...grouped.entries()].forEach(([driverName, list]) => {
+    const vehicle = allVehiclesCache.find(v => (v.driver_name || "") === driverName);
+    const lineId = vehicle?.line_id || "";
+    const wrapper = document.createElement("div");
+    wrapper.className = "item";
 
-      <div class="actions">
-        <button class="btn secondary route-btn" data-address="${escapeHtml(item.destination_address || "")}">ルート</button>
-        <button class="btn secondary up-btn" data-id="${item.id}" ${index === 0 ? "disabled" : ""}>上へ</button>
-        <button class="btn secondary down-btn" data-id="${item.id}" ${index === items.length - 1 ? "disabled" : ""}>下へ</button>
-        <button class="btn done-btn" data-id="${item.id}">完了</button>
-        <button class="btn danger cancel-btn" data-id="${item.id}">キャンセル</button>
-        <button class="btn danger delete-item-btn" data-id="${item.id}">削除</button>
-      </div>
+    let html = `
+      <h3>${escapeHtml(lineId ? `${lineId} ${driverName}` : driverName)}</h3>
     `;
 
-    div.querySelector(".route-btn")?.addEventListener("click", e => {
-      const address = e.currentTarget.dataset.address;
-      if (address) openRouteFromMatsudo(address);
+    list.forEach(item => {
+      const status = normalizeStatus(item.status);
+      const badgeClass = status === "done" ? "done" : status === "cancel" ? "cancel" : "";
+      const cardClass = status === "done" ? "done-card" : status === "cancel" ? "cancel-card" : "";
+
+      html += `
+        <div class="item ${cardClass}" style="margin-top:8px;">
+          <p><strong>${escapeHtml(item.casts?.name || "不明")}</strong> / ${escapeHtml(item.destination_area || "-")}</p>
+          <p><span class="badge ${badgeClass}">${escapeHtml(status)}</span></p>
+          <div class="actions">
+            <button class="btn done-btn" data-id="${item.id}">完了</button>
+            <button class="btn danger cancel-btn" data-id="${item.id}">キャンセル</button>
+            <button class="btn danger delete-item-btn" data-id="${item.id}">削除</button>
+          </div>
+        </div>
+      `;
     });
 
-    div.querySelector(".done-btn")?.addEventListener("click", async e => {
-      await updateItemStatus(Number(e.currentTarget.dataset.id), "done");
+    wrapper.innerHTML = html;
+
+    wrapper.querySelectorAll(".done-btn").forEach(btn => {
+      btn.addEventListener("click", async e => {
+        await updateItemStatus(Number(e.currentTarget.dataset.id), "done");
+      });
     });
 
-    div.querySelector(".cancel-btn")?.addEventListener("click", async e => {
-      await updateItemStatus(Number(e.currentTarget.dataset.id), "cancel");
+    wrapper.querySelectorAll(".cancel-btn").forEach(btn => {
+      btn.addEventListener("click", async e => {
+        await updateItemStatus(Number(e.currentTarget.dataset.id), "cancel");
+      });
     });
 
-    div.querySelector(".delete-item-btn")?.addEventListener("click", async e => {
-      await deleteDispatchItem(Number(e.currentTarget.dataset.id));
+    wrapper.querySelectorAll(".delete-item-btn").forEach(btn => {
+      btn.addEventListener("click", async e => {
+        await deleteDispatchItem(Number(e.currentTarget.dataset.id));
+      });
     });
 
-    div.querySelector(".up-btn")?.addEventListener("click", async e => {
-      await moveDispatchItem(Number(e.currentTarget.dataset.id), -1);
-    });
-
-    div.querySelector(".down-btn")?.addEventListener("click", async e => {
-      await moveDispatchItem(Number(e.currentTarget.dataset.id), 1);
-    });
-
-    div.querySelector(".dispatch-vehicle-change")?.addEventListener("change", async e => {
-      await updateDispatchItemVehicle(Number(e.currentTarget.dataset.id), Number(e.currentTarget.value || 0));
-    });
-
-    els.dispatchList.appendChild(div);
+    els.dispatchList.appendChild(wrapper);
   });
-}
-
-async function updateDispatchItemVehicle(itemId, vehicleId) {
-  const vehicle = allVehiclesCache.find(v => Number(v.id) === Number(vehicleId));
-
-  const payload = {
-    vehicle_id: vehicleId || null,
-    vehicle_label: vehicle ? `${vehicle.plate_number} ${vehicle.vehicle_name || ""}`.trim() : null,
-    driver_name: vehicle?.driver_name || null
-  };
-
-  const { error } = await supabaseClient
-    .from("dispatch_items")
-    .update(payload)
-    .eq("id", itemId);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(currentDispatchId, itemId, "change_vehicle", "配車車両を変更");
-  await loadDispatchItems(currentDispatchId);
-  await loadHistory();
 }
 
 async function updateItemStatus(itemId, status) {
@@ -2051,35 +1622,6 @@ async function deleteDispatchItem(itemId) {
   await loadHistory();
 }
 
-async function moveDispatchItem(itemId, direction) {
-  const items = [...currentDispatchItemsCache].sort((a, b) => Number(a.stop_order) - Number(b.stop_order));
-  const index = items.findIndex(item => Number(item.id) === Number(itemId));
-  if (index < 0) return;
-
-  const targetIndex = index + direction;
-  if (targetIndex < 0 || targetIndex >= items.length) return;
-
-  const temp = items[index];
-  items[index] = items[targetIndex];
-  items[targetIndex] = temp;
-
-  for (let i = 0; i < items.length; i++) {
-    await supabaseClient
-      .from("dispatch_items")
-      .update({ stop_order: i + 1 })
-      .eq("id", items[i].id);
-  }
-
-  await addHistory(
-    currentDispatchId,
-    itemId,
-    "move_dispatch_item",
-    direction < 0 ? "配車項目を上へ移動" : "配車項目を下へ移動"
-  );
-  await loadDispatchItems(currentDispatchId);
-  await loadHistory();
-}
-
 async function normalizeStopOrders(dispatchId) {
   if (!dispatchId) return;
 
@@ -2116,42 +1658,27 @@ async function runOptimize() {
   }
 
   const dateStr = els.dispatchDate.value || todayStr();
-  const hour = currentPlansCache.find(x => x.status === "assigned")?.plan_hour ?? 0;
   const monthlyDistanceMap = buildMonthlyDistanceMap(currentDailyReportsCache, getMonthKey(dateStr));
 
-  const casts = activeItems.map(item => ({
-    id: item.cast_id,
-    name: item.casts?.name || "",
-    area: item.destination_area || getDisplayArea(item.casts || {}),
-    distance_km: Number(item.distance_km || 0)
-  }));
-
   const aiResult = optimizeDispatchAssignmentsV2({
-    casts,
+    items: activeItems,
     vehicles: allVehiclesCache,
-    planDate: dateStr,
-    planHour: hour,
     monthlyDistanceMap
   });
 
   for (let i = 0; i < aiResult.length; i++) {
-    const match = activeItems.find(x => Number(x.cast_id) === Number(aiResult[i].cast_id));
-    if (!match) continue;
-
+    const result = aiResult[i];
     await supabaseClient
       .from("dispatch_items")
       .update({
         stop_order: i + 1,
-        vehicle_id: aiResult[i].vehicle_id,
-        vehicle_label: aiResult[i].vehicle_label,
-        driver_name: aiResult[i].driver_name,
-        plan_hour: aiResult[i].plan_hour,
-        plan_date: aiResult[i].plan_date
+        vehicle_id: result.vehicle_id,
+        driver_name: result.driver_name
       })
-      .eq("id", match.id);
+      .eq("id", result.item_id);
   }
 
-  await addHistory(currentDispatchId, null, "optimize", "AI配車順を最適化");
+  await addHistory(currentDispatchId, null, "optimize", "AI配車を実行");
   await loadDispatchItems(currentDispatchId);
   await loadHistory();
 }
@@ -2209,8 +1736,7 @@ async function loadDailyReports(reportDate) {
       *,
       vehicles (
         id,
-        plate_number,
-        vehicle_name
+        plate_number
       )
     `)
     .eq("report_date", reportDate)
@@ -2238,7 +1764,7 @@ function renderDailyReports(reports) {
     const div = document.createElement("div");
     div.className = "item";
     div.innerHTML = `
-      <h3>${escapeHtml(row.vehicles?.plate_number || "-")} / ${escapeHtml(row.vehicles?.vehicle_name || "-")}</h3>
+      <h3>${escapeHtml(row.vehicles?.plate_number || "-")}</h3>
       <p>ドライバー: ${escapeHtml(row.driver_name || "-")}</p>
       <p>走行距離: ${escapeHtml(row.distance_km)} km</p>
       <p>メモ: ${escapeHtml(row.note || "-")}</p>
@@ -2261,8 +1787,7 @@ async function loadMonthlyAverages(reportDate) {
       *,
       vehicles (
         id,
-        plate_number,
-        vehicle_name
+        plate_number
       )
     `)
     .gte("report_date", monthStart)
@@ -2278,7 +1803,7 @@ async function loadMonthlyAverages(reportDate) {
   (data || []).forEach(row => {
     const id = Number(row.vehicle_id);
     const prev = grouped.get(id) || {
-      vehicle_label: `${row.vehicles?.plate_number || "-"} ${row.vehicles?.vehicle_name || ""}`.trim(),
+      vehicle_label: `${row.vehicles?.plate_number || "-"}`,
       worked_days: 0,
       total_distance_km: 0
     };
@@ -2287,13 +1812,15 @@ async function loadMonthlyAverages(reportDate) {
     grouped.set(id, prev);
   });
 
-  const rows = [...grouped.entries()].map(([vehicleId, value]) => ({
-    vehicle_id: vehicleId,
-    vehicle_label: value.vehicle_label,
-    worked_days: value.worked_days,
-    total_distance_km: value.total_distance_km,
-    avg_distance_per_day: value.worked_days > 0 ? value.total_distance_km / value.worked_days : 0
-  })).sort((a, b) => a.avg_distance_per_day - b.avg_distance_per_day);
+  const rows = [...grouped.entries()]
+    .map(([vehicleId, value]) => ({
+      vehicle_id: vehicleId,
+      vehicle_label: value.vehicle_label,
+      worked_days: value.worked_days,
+      total_distance_km: value.total_distance_km,
+      avg_distance_per_day: value.worked_days > 0 ? value.total_distance_km / value.worked_days : 0
+    }))
+    .sort((a, b) => a.avg_distance_per_day - b.avg_distance_per_day);
 
   renderMonthlyAverages(rows);
 }
@@ -2483,16 +2010,12 @@ async function importCsv() {
     .map(row => {
       const lat = toNullableNumber(row.latitude);
       const lng = toNullableNumber(row.longitude);
-      const manualArea = String(row.area || "").trim();
-      const autoArea =
-        classifyAreaByAddress(row.address) ||
-        (lat !== null && lng !== null ? classifyAreaByLatLng(lat, lng) : "");
 
       return {
         name: String(row.name || "").trim(),
         phone: String(row.phone || "").trim(),
         address: String(row.address || "").trim(),
-        area: manualArea || autoArea || null,
+        area: String(row.area || "").trim() || guessArea(lat, lng, row.address) || null,
         latitude: lat,
         longitude: lng,
         memo: String(row.memo || "").trim(),
@@ -2561,15 +2084,7 @@ function setupEvents() {
   });
 
   els.planDate?.addEventListener("change", async () => {
-    rebuildPlanHourOptions(els.planDate.value || todayStr());
     await loadPlansByDate(els.planDate.value || todayStr());
-  });
-
-  els.planCastSelect?.addEventListener("change", () => {
-    const selected = els.planCastSelect.selectedOptions?.[0];
-    if (!els.planArea.value.trim()) {
-      els.planArea.value = selected?.dataset.area || "";
-    }
   });
 
   els.createDispatchBtn?.addEventListener("click", createDispatch);
@@ -2583,12 +2098,7 @@ function setupEvents() {
 
   els.dispatchDate?.addEventListener("change", async () => {
     if (!els.dispatchDate.value) return;
-
-    if (els.planDate) {
-      els.planDate.value = els.dispatchDate.value;
-      rebuildPlanHourOptions(els.dispatchDate.value);
-    }
-
+    if (els.planDate) els.planDate.value = els.dispatchDate.value;
     await loadDispatchByDate(els.dispatchDate.value);
   });
 
@@ -2629,13 +2139,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     resetCastForm();
     resetVehicleForm();
+    resetPlanForm();
 
     const today = todayStr();
     if (els.dispatchDate) els.dispatchDate.value = today;
     if (els.planDate) els.planDate.value = today;
     if (els.reportDate) els.reportDate.value = today;
-
-    rebuildPlanHourOptions(today);
 
     await loadCasts();
     await loadVehicles();
@@ -2645,7 +2154,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadHistory();
 
     refreshPlanCastSelect();
-    resetPlanForm();
   } catch (err) {
     console.error("dashboard init error:", err);
     alert("初期化中にエラーが発生しました。F12 の Console を確認してください。");
