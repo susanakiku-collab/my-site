@@ -14,7 +14,10 @@ const supabaseClient = window.supabase.createClient(
 let currentUser = null;
 let currentDispatchId = null;
 let editingCastId = null;
-let searchTimer = null;
+
+let pinMap = null;
+let pinMarker = null;
+let selectedLatLng = null;
 
 const els = {
   userEmail: document.getElementById("userEmail"),
@@ -38,15 +41,20 @@ const els = {
   castLat: document.getElementById("castLat"),
   castLng: document.getElementById("castLng"),
   castMemo: document.getElementById("castMemo"),
-  geocodeBtn: document.getElementById("geocodeBtn"),
+  openPinMapBtn: document.getElementById("openPinMapBtn"),
   saveCastBtn: document.getElementById("saveCastBtn"),
   cancelEditBtn: document.getElementById("cancelEditBtn"),
   csvFileInput: document.getElementById("csvFileInput"),
   importCsvBtn: document.getElementById("importCsvBtn"),
   castsList: document.getElementById("castsList"),
-  addressSuggestions: document.getElementById("addressSuggestions"),
 
-  historyList: document.getElementById("historyList")
+  historyList: document.getElementById("historyList"),
+
+  pinMapModal: document.getElementById("pinMapModal"),
+  pinMapBackdrop: document.getElementById("pinMapBackdrop"),
+  closePinMapBtn: document.getElementById("closePinMapBtn"),
+  confirmPinBtn: document.getElementById("confirmPinBtn"),
+  pinMapEl: document.getElementById("pinMap")
 };
 
 function todayStr() {
@@ -107,132 +115,6 @@ function guessArea(lat, lng) {
   return "周辺方面";
 }
 
-function normalizeAddressForSearch(address) {
-  return String(address || "")
-    .replace(/〒\s*\d{3}-?\d{4}/g, "")
-    .replace(/^日本[、,\s]*/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function geocodeAddress(address) {
-  const normalized = normalizeAddressForSearch(address);
-
-  if (!normalized) {
-    throw new Error("住所が空です");
-  }
-
-  const candidates = [
-    `日本 ${normalized}`,
-    normalized,
-    normalized
-      .replace(/([0-9]+)-([0-9]+)-([0-9]+)/g, "$1丁目$2-$3")
-      .replace(/([0-9]+)-([0-9]+)/g, "$1丁目$2")
-  ];
-
-  for (const query of candidates) {
-    const url =
-      "https://nominatim.openstreetmap.org/search?" +
-      new URLSearchParams({
-        q: query,
-        format: "json",
-        limit: 1,
-        countrycodes: "jp",
-        addressdetails: "1"
-      });
-
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json"
-      }
-    });
-
-    if (!res.ok) {
-      throw new Error(`住所検索に失敗しました: HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-
-    if (Array.isArray(data) && data.length > 0) {
-      return {
-        lat: parseFloat(data[0].lat),
-        lng: parseFloat(data[0].lon),
-        displayName: data[0].display_name || query
-      };
-    }
-  }
-
-  throw new Error("住所が見つかりませんでした");
-}
-
-async function searchAddressCandidates(query) {
-  const normalized = normalizeAddressForSearch(query);
-  if (normalized.length < 3) return [];
-
-  const url =
-    "https://nominatim.openstreetmap.org/search?" +
-    new URLSearchParams({
-      q: `日本 ${normalized}`,
-      format: "json",
-      limit: 5,
-      countrycodes: "jp",
-      addressdetails: "1"
-    });
-
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (!res.ok) {
-    throw new Error(`候補取得に失敗しました: HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-
-function hideSuggestions() {
-  if (els.addressSuggestions) {
-    els.addressSuggestions.innerHTML = "";
-    els.addressSuggestions.classList.add("hidden");
-  }
-}
-
-function showSuggestions(items) {
-  if (!els.addressSuggestions) return;
-
-  els.addressSuggestions.innerHTML = "";
-
-  if (!items.length) {
-    hideSuggestions();
-    return;
-  }
-
-  items.forEach(place => {
-    const div = document.createElement("div");
-    div.className = "suggestion-item";
-    div.textContent = place.display_name || "";
-    div.addEventListener("click", () => {
-      els.castAddress.value = place.display_name || "";
-      els.castLat.value = place.lat || "";
-      els.castLng.value = place.lon || "";
-
-      const lat = parseFloat(place.lat);
-      const lng = parseFloat(place.lon);
-      if (!Number.isNaN(lat) && !Number.isNaN(lng) && !els.castArea.value.trim()) {
-        els.castArea.value = guessArea(lat, lng);
-      }
-
-      hideSuggestions();
-    });
-    els.addressSuggestions.appendChild(div);
-  });
-
-  els.addressSuggestions.classList.remove("hidden");
-}
-
 async function ensureAuth() {
   const { data, error } = await supabaseClient.auth.getUser();
 
@@ -285,7 +167,6 @@ function resetCastForm() {
   els.castMemo.value = "";
   els.saveCastBtn.textContent = "保存";
   els.cancelEditBtn.classList.add("hidden");
-  hideSuggestions();
 }
 
 function fillCastForm(cast) {
@@ -299,8 +180,81 @@ function fillCastForm(cast) {
   els.castMemo.value = cast.memo || "";
   els.saveCastBtn.textContent = "更新";
   els.cancelEditBtn.classList.remove("hidden");
-  hideSuggestions();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function openPinMapModal() {
+  els.pinMapModal.classList.remove("hidden");
+
+  const lat = parseFloat(els.castLat.value);
+  const lng = parseFloat(els.castLng.value);
+
+  const hasSavedPoint = !Number.isNaN(lat) && !Number.isNaN(lng);
+  const initialCenter = hasSavedPoint ? [lat, lng] : [ORIGIN_LAT, ORIGIN_LNG];
+  const initialZoom = hasSavedPoint ? 16 : 13;
+
+  if (!pinMap) {
+    pinMap = L.map(els.pinMapEl).setView(initialCenter, initialZoom);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(pinMap);
+
+    pinMap.on("click", e => {
+      selectedLatLng = e.latlng;
+
+      if (pinMarker) {
+        pinMarker.setLatLng(e.latlng);
+      } else {
+        pinMarker = L.marker(e.latlng).addTo(pinMap);
+      }
+    });
+  } else {
+    pinMap.setView(initialCenter, initialZoom);
+    setTimeout(() => pinMap.invalidateSize(), 150);
+  }
+
+  if (hasSavedPoint) {
+    selectedLatLng = L.latLng(lat, lng);
+
+    if (pinMarker) {
+      pinMarker.setLatLng(selectedLatLng);
+    } else {
+      pinMarker = L.marker(selectedLatLng).addTo(pinMap);
+    }
+  } else {
+    selectedLatLng = null;
+    if (pinMarker) {
+      pinMap.removeLayer(pinMarker);
+      pinMarker = null;
+    }
+  }
+
+  setTimeout(() => pinMap.invalidateSize(), 150);
+}
+
+function closePinMapModal() {
+  els.pinMapModal.classList.add("hidden");
+}
+
+function confirmPinSelection() {
+  if (!selectedLatLng) {
+    alert("地図をクリックして位置を選択してください");
+    return;
+  }
+
+  const lat = Number(selectedLatLng.lat.toFixed(6));
+  const lng = Number(selectedLatLng.lng.toFixed(6));
+
+  els.castLat.value = lat;
+  els.castLng.value = lng;
+
+  if (!els.castArea.value.trim()) {
+    els.castArea.value = guessArea(lat, lng);
+  }
+
+  closePinMapModal();
 }
 
 async function saveCast() {
@@ -892,62 +846,13 @@ function setupTabs() {
   });
 }
 
-function setupAddressAutocomplete() {
-  if (!els.castAddress || !els.addressSuggestions) return;
-
-  els.castAddress.addEventListener("input", () => {
-    clearTimeout(searchTimer);
-
-    const q = els.castAddress.value.trim();
-
-    if (q.length < 3) {
-      hideSuggestions();
-      return;
-    }
-
-    searchTimer = setTimeout(async () => {
-      try {
-        const results = await searchAddressCandidates(q);
-        showSuggestions(results);
-      } catch (err) {
-        console.error(err);
-        hideSuggestions();
-      }
-    }, 400);
-  });
-
-  document.addEventListener("click", e => {
-    if (
-      e.target !== els.castAddress &&
-      !els.addressSuggestions.contains(e.target)
-    ) {
-      hideSuggestions();
-    }
-  });
-}
-
 function setupEvents() {
   els.logoutBtn.addEventListener("click", logout);
 
-  els.geocodeBtn.addEventListener("click", async () => {
-    const address = els.castAddress.value.trim();
-    if (!address) {
-      alert("住所を入力してください");
-      return;
-    }
-
-    try {
-      const { lat, lng } = await geocodeAddress(address);
-      els.castLat.value = lat;
-      els.castLng.value = lng;
-      if (!els.castArea.value) {
-        els.castArea.value = guessArea(lat, lng);
-      }
-    } catch (err) {
-      console.error(err);
-      alert(err.message);
-    }
-  });
+  els.openPinMapBtn.addEventListener("click", openPinMapModal);
+  els.closePinMapBtn.addEventListener("click", closePinMapModal);
+  els.pinMapBackdrop.addEventListener("click", closePinMapModal);
+  els.confirmPinBtn.addEventListener("click", confirmPinSelection);
 
   els.saveCastBtn.addEventListener("click", saveCast);
   els.cancelEditBtn.addEventListener("click", resetCastForm);
@@ -969,7 +874,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   setupTabs();
   setupEvents();
-  setupAddressAutocomplete();
   resetCastForm();
   els.dispatchDate.value = todayStr();
   await loadCasts();
