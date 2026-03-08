@@ -207,16 +207,12 @@ function classifyAreaByAddress(address) {
 
   const rules = [
     {
-      name: "松戸駅周辺",
-      keywords: ["松戸", "根本", "小根本", "樋野口", "古ケ崎", "古ヶ崎", "上本郷", "岩瀬", "胡録台", "緑ケ丘", "緑ヶ丘"]
-    },
-    {
       name: "新松戸",
-      keywords: ["新松戸", "新松戸北", "新松戸東", "幸谷", "馬橋", "西馬橋", "八ケ崎", "八ヶ崎", "二ツ木", "中和倉"]
+      keywords: ["新松戸", "新松戸北", "新松戸東", "幸谷", "八ケ崎", "八ヶ崎", "二ツ木", "中和倉"]
     },
     {
       name: "北松戸・馬橋",
-      keywords: ["北松戸", "栄町", "栄町西", "馬橋", "西馬橋", "中根", "中根長津町"]
+      keywords: ["北松戸", "馬橋", "西馬橋", "栄町", "栄町西", "中根", "中根長津町"]
     },
     {
       name: "常盤平",
@@ -235,8 +231,12 @@ function classifyAreaByAddress(address) {
       keywords: ["北国分", "下矢切", "上矢切", "栗山", "三矢小台", "矢切"]
     },
     {
+      name: "松戸駅周辺",
+      keywords: ["根本", "小根本", "樋野口", "古ケ崎", "古ヶ崎", "上本郷", "岩瀬", "胡録台", "緑ケ丘", "緑ヶ丘"]
+    },
+    {
       name: "市川北部",
-      keywords: ["市川", "中国分", "国分", "国府台", "堀之内", "須和田", "曽谷", "宮久保", "菅野"]
+      keywords: ["中国分", "国分", "国府台", "堀之内", "須和田", "曽谷", "宮久保", "菅野"]
     },
     {
       name: "市川・本八幡",
@@ -248,7 +248,7 @@ function classifyAreaByAddress(address) {
     },
     {
       name: "柏",
-      keywords: ["柏", "旭町", "明原", "あけぼの", "末広町", "泉町", "東", "中央", "豊四季", "南柏", "北柏", "柏の葉"]
+      keywords: ["柏", "旭町", "明原", "あけぼの", "末広町", "泉町", "豊四季", "南柏", "北柏", "柏の葉"]
     },
     {
       name: "流山",
@@ -317,6 +317,18 @@ function guessArea(lat, lng, address = "") {
   if (byAddress) return byAddress;
 
   return classifyAreaByLatLng(lat, lng);
+}
+
+function getDisplayArea(cast) {
+  const lat = toNullableNumber(cast.latitude);
+  const lng = toNullableNumber(cast.longitude);
+  const address = cast.address || "";
+
+  if (lat !== null && lng !== null) {
+    return guessArea(lat, lng, address);
+  }
+
+  return cast.area || "";
 }
 
 function getUsedCastIdsInCurrentDispatch() {
@@ -395,7 +407,7 @@ function fillCastForm(cast) {
     hasValue(cast.latitude) && hasValue(cast.longitude)
       ? `${cast.latitude},${cast.longitude}`
       : "";
-  els.castArea.value = cast.area || "";
+  els.castArea.value = getDisplayArea(cast) || "";
   els.castLat.value = cast.latitude ?? "";
   els.castLng.value = cast.longitude ?? "";
   els.castMemo.value = cast.memo || "";
@@ -524,13 +536,15 @@ function renderCastSelect(casts) {
   casts
     .filter(cast => !usedCastIds.has(Number(cast.id)))
     .forEach(cast => {
+      const displayArea = getDisplayArea(cast);
+
       const option = document.createElement("option");
       option.value = cast.id;
-      option.textContent = `${cast.name} | ${cast.area || "地域未設定"}`;
+      option.textContent = `${cast.name} | ${displayArea || "地域未設定"}`;
       option.dataset.address = cast.address || "";
       option.dataset.lat = cast.latitude ?? "";
       option.dataset.lng = cast.longitude ?? "";
-      option.dataset.area = cast.area || "";
+      option.dataset.area = displayArea || "";
       els.castSelect.appendChild(option);
     });
 }
@@ -551,13 +565,15 @@ function renderCastList(casts) {
         ? estimateRoadKmFromStation(lat, lng)
         : null;
 
+    const displayArea = getDisplayArea(cast);
+
     const div = document.createElement("div");
     div.className = "item";
     div.innerHTML = `
       <h3>${escapeHtml(cast.name)}</h3>
       <p>電話: ${escapeHtml(cast.phone || "-")}</p>
       <p>住所: ${escapeHtml(cast.address || "-")}</p>
-      <p>地域: ${escapeHtml(cast.area || "-")}</p>
+      <p>地域: ${escapeHtml(displayArea || "-")}</p>
       <p>松戸駅から推定距離: ${km !== null ? `${km} km` : "-"}</p>
       <p>座標: ${cast.latitude ?? "-"}, ${cast.longitude ?? "-"}</p>
       <p>メモ: ${escapeHtml(cast.memo || "-")}</p>
@@ -922,7 +938,10 @@ async function loadDispatchItems(dispatchId) {
         id,
         name,
         phone,
-        area
+        area,
+        address,
+        latitude,
+        longitude
       )
     `)
     .eq("dispatch_id", dispatchId)
@@ -984,11 +1003,16 @@ function renderDispatchItems(items) {
     const disableDone = isDone ? "disabled" : "";
     const disableCancel = isCancel ? "disabled" : "";
 
+    const displayArea =
+      item.destination_area ||
+      (item.casts ? getDisplayArea(item.casts) : "") ||
+      "-";
+
     const div = document.createElement("div");
     div.className = `item ${cardClass}`;
     div.innerHTML = `
       <h3>${item.stop_order}件目 | ${escapeHtml(item.casts?.name || "不明")}</h3>
-      <p>地域: ${escapeHtml(item.destination_area || item.casts?.area || "-")}</p>
+      <p>地域: ${escapeHtml(displayArea)}</p>
       <p>住所: ${escapeHtml(item.destination_address || "-")}</p>
       <p>推定距離: ${item.distance_km ?? "-"} km</p>
       <p>推定時間: ${item.travel_minutes ?? "-"} 分</p>
