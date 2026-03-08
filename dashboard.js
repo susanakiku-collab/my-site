@@ -24,7 +24,7 @@ const state = {
   vehicles: [],
   plans: [],
   autoAssignments: []
-}
+};
 
 /* =========================
    DOM
@@ -426,4 +426,5 @@ async function importDispatch(){
   showStatus("dispatch登録完了")
 
 }
+
 
