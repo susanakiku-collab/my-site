@@ -842,15 +842,17 @@ async function loadCasts() {
   const { data, error } = await supabaseClient
     .from("casts")
     .select("*")
-    .eq("is_active", true)
-    .order("id", { ascending: true });
+    .eq("is_active", true);
 
   if (error) {
     console.error(error);
     return;
   }
 
-  allCastsCache = data || [];
+  allCastsCache = [...(data || [])].sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""), "ja")
+  );
+
   renderCastsTable();
   renderCastSelects();
   renderHomeSummary();
@@ -861,7 +863,7 @@ function renderCastsTable() {
   els.castsTableBody.innerHTML = "";
 
   if (!allCastsCache.length) {
-    els.castsTableBody.innerHTML = `<tr><td colspan="8" class="muted">キャストがありません</td></tr>`;
+    els.castsTableBody.innerHTML = `<tr><td colspan="6" class="muted">キャストがありません</td></tr>`;
     return;
   }
 
@@ -872,8 +874,6 @@ function renderCastsTable() {
       <td>${escapeHtml(cast.address || "")}</td>
       <td>${escapeHtml(cast.area || "")}</td>
       <td>${cast.distance_km ?? ""}</td>
-      <td>${cast.latitude ?? ""}</td>
-      <td>${cast.longitude ?? ""}</td>
       <td>${escapeHtml(cast.memo || "")}</td>
       <td class="actions-cell">
         <button class="btn ghost cast-edit-btn" data-id="${cast.id}">編集</button>
