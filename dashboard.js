@@ -341,6 +341,47 @@ function buildMapUrlFromAddressOrLatLng(address, lat, lng) {
   return "";
 }
 
+function buildCastMapUrl(cast) {
+  return buildMapUrlFromAddressOrLatLng(
+    cast?.address,
+    cast?.latitude,
+    cast?.longitude
+  );
+}
+
+function buildDispatchItemMapUrl(item) {
+  return buildMapUrlFromAddressOrLatLng(
+    item?.destination_address || item?.casts?.address || "",
+    item?.casts?.latitude,
+    item?.casts?.longitude
+  );
+}
+
+function buildMapLinkHtml({ name, address, lat, lng, className = "map-name-link" }) {
+  const safeName = escapeHtml(name || "-");
+  const mapUrl = buildMapUrlFromAddressOrLatLng(address, lat, lng);
+
+  if (!mapUrl) return safeName;
+
+  return `<a href="${mapUrl}" target="_blank" rel="noopener noreferrer" class="${className}">${safeName} 📍</a>`;
+}
+
+function buildMapUrlFromAddressOrLatLng(address, lat, lng) {
+  const numLat = toNullableNumber(lat);
+  const numLng = toNullableNumber(lng);
+
+  if (isValidLatLng(numLat, numLng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${numLat},${numLng}`;
+  }
+
+  const safeAddress = String(address || "").trim();
+  if (safeAddress) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(safeAddress)}`;
+  }
+
+  return "";
+}
+
 function buildMapLinkHtml({ name, address, lat, lng, className = "map-name-link" }) {
   const safeName = escapeHtml(name || "-");
   const mapUrl = buildMapUrlFromAddressOrLatLng(address, lat, lng);
@@ -933,23 +974,23 @@ function renderCastsTable() {
   allCastsCache.forEach(cast => {
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td>
-      ${
-        buildCastMapUrl(cast)
-          ? `<a href="${buildCastMapUrl(cast)}" target="_blank" rel="noopener noreferrer" class="cast-name-link">${escapeHtml(cast.name || "")}</a>`
-          : `${escapeHtml(cast.name || "")}`
-      }
-    </td>
-    <td>${escapeHtml(cast.address || "")}</td>
-    <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
-    <td>${cast.distance_km ?? ""}</td>
-    <td>${escapeHtml(cast.memo || "")}</td>
-    <td class="actions-cell">
-      <button class="btn ghost cast-edit-btn" data-id="${cast.id}">編集</button>
-      <button class="btn ghost cast-route-btn" data-address="${escapeHtml(cast.address || "")}">ルート</button>
-      <button class="btn danger cast-delete-btn" data-id="${cast.id}">削除</button>
-    </td>
-  `;
+  <td>
+    ${
+      buildCastMapUrl(cast)
+        ? `<a href="${buildCastMapUrl(cast)}" target="_blank" rel="noopener noreferrer" class="cast-name-link">${escapeHtml(cast.name || "")} 📍</a>`
+        : `${escapeHtml(cast.name || "")}`
+    }
+  </td>
+  <td>${escapeHtml(cast.address || "")}</td>
+  <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
+  <td>${cast.distance_km ?? ""}</td>
+  <td>${escapeHtml(cast.memo || "")}</td>
+  <td class="actions-cell">
+    <button class="btn ghost cast-edit-btn" data-id="${cast.id}">編集</button>
+    <button class="btn ghost cast-route-btn" data-address="${escapeHtml(cast.address || "")}">ルート</button>
+    <button class="btn danger cast-delete-btn" data-id="${cast.id}">削除</button>
+  </td>
+`;
   els.castsTableBody.appendChild(tr);
 });
 
@@ -1592,10 +1633,15 @@ function renderPlanGroupedTable() {
         html += `
           <div class="grouped-row">
             <div>${getHourLabel(hour)}</div>
-            <div><strong>${escapeHtml(plan.casts?.name || "-")}</strong></div>
-            <div>${escapeHtml(normalizeAreaLabel(plan.planned_area || "無し"))}</div>
-            <div>${plan.distance_km ?? ""}</div>
-            <div class="op-cell">
+            <div><strong>${buildMapLinkHtml({
+             name: plan.casts?.name,
+             address: plan.destination_address || plan.casts?.address,
+             lat: plan.casts?.latitude,
+             lng: plan.casts?.longitude
+             })}</strong></div>
+             <div>${escapeHtml(normalizeAreaLabel(plan.planned_area || "無し"))}</div>
+             <div>${plan.distance_km ?? ""}</div>
+             <div class="op-cell">
               <span class="badge-status ${normalizeStatus(plan.status)}">${escapeHtml(getStatusText(plan.status))}</span>
               <button class="btn ghost plan-edit-btn" data-id="${plan.id}">編集</button>
               <button class="btn ghost plan-route-btn" data-address="${escapeHtml(plan.destination_address || plan.casts?.address || "")}">ルート</button>
@@ -1680,7 +1726,12 @@ function renderPlansTimeAreaMatrix() {
               ${rows.map(row => `
                 <div class="matrix-item">
                   <span class="badge-status ${normalizeStatus(row.status)}">${escapeHtml(getStatusText(row.status))}</span>
-                  <span>${escapeHtml(row.casts?.name || "-")} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
+                  <span>${buildMapLinkHtml({
+                   name: row.casts?.name,
+                   address: row.destination_address || row.casts?.address,
+                   lat: row.casts?.latitude,
+                   lng: row.casts?.longitude
+                  })} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
                 </div>
               `).join("")}
             </div>
@@ -2106,7 +2157,12 @@ function renderActualTable() {
           html += `
             <div class="grouped-row">
               <div>${getHourLabel(hour)}</div>
-              <div><strong>${escapeHtml(item.casts?.name || "-")}</strong></div>
+              <div><strong>${buildMapLinkHtml({
+               name: item.casts?.name,
+               address: item.destination_address || item.casts?.address,
+               lat: item.casts?.latitude,
+               lng: item.casts?.longitude
+               })}</strong></div>
               <div>${escapeHtml(normalizeAreaLabel(item.destination_area || "無し"))}</div>
               <div>${item.distance_km ?? ""}</div>
               <div class="op-cell">
@@ -2200,7 +2256,12 @@ function renderActualTimeAreaMatrix() {
                   row => `
                     <div class="matrix-item">
                       <span class="badge-status ${normalizeStatus(row.status)}">${escapeHtml(getStatusText(row.status))}</span>
-                      <span>${escapeHtml(row.casts?.name || "-")} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
+                      <span>${buildMapLinkHtml({
+                      name: row.casts?.name,
+                      address: row.destination_address || row.casts?.address,
+                      lat: row.casts?.latitude,
+                      lng: row.casts?.longitude
+                      })} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
                     </div>
                   `
                 )
@@ -2524,7 +2585,13 @@ function renderDailyDispatchResult() {
                   <div class="dispatch-left">
                     <span class="badge-time">${escapeHtml(getHourLabel(row.actual_hour))}</span>
                     <span class="badge-order">順番 ${index + 1}</span>
-                    <span class="dispatch-name">${escapeHtml(row.casts?.name || "-")}</span>
+                    <span class="dispatch-name">${buildMapLinkHtml({
+                     name: row.casts?.name,
+                     address: row.destination_address || row.casts?.address,
+                     lat: row.casts?.latitude,
+                     lng: row.casts?.longitude,
+                     className: "dispatch-name-link"
+                    })}</span>
                     <span class="dispatch-area">${escapeHtml(normalizeAreaLabel(row.destination_area || "-"))}</span>
                   </div>
                   <div class="dispatch-right">
@@ -2627,7 +2694,13 @@ function buildCopyResultText() {
       lines.push("送りなし");
     } else {
       rows.forEach(row => {
-        lines.push(`${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} ${normalizeAreaLabel(row.destination_area || "-")}`);
+        const mapUrl = buildDispatchItemMapUrl(row);
+        lines.push(
+          `・${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} / ${normalizeAreaLabel(row.destination_area || "-")} / ${Number(row.distance_km || 0).toFixed(1)}km`
+        );
+        if (mapUrl) {
+          lines.push(`  MAP: ${mapUrl}`);
+        }
       });
     }
 
