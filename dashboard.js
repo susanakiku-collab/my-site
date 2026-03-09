@@ -38,6 +38,7 @@ const els = {
 
   exportAllBtn: document.getElementById("exportAllBtn"),
   importAllBtn: document.getElementById("importAllBtn"),
+  importAllFileInput: document.getElementById("importAllFileInput"),
   exportCsvBtnHeader: document.getElementById("exportCsvBtnHeader"),
   dangerResetBtn: document.getElementById("dangerResetBtn"),
 
@@ -963,10 +964,7 @@ async function importCastCsvFile() {
         String(c.name || "").trim() === name &&
         String(c.address || "").trim() === address
       );
-      if (exists) {
-        console.log("重複スキップ:", name, address);
-        continue;
-      }
+      if (exists) continue;
 
       const lat = toNullableNumber(row.latitude);
       const lng = toNullableNumber(row.longitude);
@@ -1259,10 +1257,7 @@ async function importVehicleCsvFile() {
       const exists = allVehiclesCache.find(v =>
         String(v.plate_number || "").trim() === plateNumber
       );
-      if (exists) {
-        console.log("車両重複スキップ:", plateNumber);
-        continue;
-      }
+      if (exists) continue;
 
       inserts.push({
         plate_number: plateNumber,
@@ -1357,7 +1352,6 @@ function fillPlanFormFromSelectedCast() {
     els.planDistanceKm.value = distance ?? "";
   }
 }
-
 async function loadPlansByDate(dateStr) {
   const { data, error } = await supabaseClient
     .from("dispatch_plans")
@@ -1646,7 +1640,7 @@ function fillActualFormFromSelectedPlan() {
   const planId = Number(els.planSelect?.value || 0);
   if (!planId) return;
 
-  const plan = currentPlansCache.find(p => Number(p.id) === planId);
+  const plan = currentPlansCache.find(p => Number(p.id) === Number(planId));
   if (!plan) return;
 
   if (els.castSelect) els.castSelect.value = String(plan.cast_id || "");
@@ -2046,7 +2040,8 @@ function renderActualTimeAreaMatrix() {
 
     areas.forEach(area => {
       const rows = currentActualsCache.filter(
-        x => Number(x.actual_hour ?? 0) === hour &&
+        x =>
+          Number(x.actual_hour ?? 0) === hour &&
           normalizeAreaLabel(x.destination_area || "無し") === area
       );
 
@@ -2299,7 +2294,6 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
   return assignments;
 }
-
 async function runAutoDispatch() {
   const selectedVehicles = getSelectedVehiclesForToday();
   if (!selectedVehicles.length) {
@@ -2707,7 +2701,243 @@ async function exportAllData() {
 }
 
 function triggerImportAll() {
-  alert("全体インポートは未実装です。まずはキャストCSV・車両CSVをご利用ください。");
+  els.importAllFileInput?.click();
+}
+
+async function importAllDataFile() {
+  const file = els.importAllFileInput?.files?.[0];
+  if (!file) {
+    alert("JSONファイルを選択してください");
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const json = JSON.parse(text);
+
+    const casts = Array.isArray(json.casts) ? json.casts : [];
+    const vehicles = Array.isArray(json.vehicles) ? json.vehicles : [];
+    const plans = Array.isArray(json.plans) ? json.plans : [];
+    const actuals = Array.isArray(json.actuals) ? json.actuals : [];
+
+    if (!casts.length && !vehicles.length && !plans.length && !actuals.length) {
+      alert("インポート対象データがありません");
+      els.importAllFileInput.value = "";
+      return;
+    }
+
+    if (!window.confirm("現在のデータに追加でインポートしますか？")) {
+      els.importAllFileInput.value = "";
+      return;
+    }
+
+    const castIdMap = new Map();
+    const vehicleIdMap = new Map();
+
+    for (const cast of casts) {
+      const name = String(cast.name || "").trim();
+      const address = String(cast.address || "").trim();
+      if (!name) continue;
+
+      const existing = allCastsCache.find(c =>
+        String(c.name || "").trim() === name &&
+        String(c.address || "").trim() === address
+      );
+
+      if (existing) {
+        castIdMap.set(Number(cast.id), Number(existing.id));
+        continue;
+      }
+
+      const payload = {
+        name,
+        phone: String(cast.phone || "").trim(),
+        address,
+        area: normalizeAreaLabel(String(cast.area || "").trim() || ""),
+        distance_km: toNullableNumber(cast.distance_km),
+        latitude: toNullableNumber(cast.latitude),
+        longitude: toNullableNumber(cast.longitude),
+        memo: String(cast.memo || "").trim(),
+        is_active: true,
+        created_by: currentUser.id
+      };
+
+      const { data: inserted, error } = await supabaseClient
+        .from("casts")
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        console.error("cast import error:", error);
+        alert("キャスト取込エラー: " + error.message);
+        els.importAllFileInput.value = "";
+        return;
+      }
+
+      castIdMap.set(Number(cast.id), Number(inserted.id));
+    }
+
+    await loadCasts();
+
+    for (const vehicle of vehicles) {
+      const plateNumber = String(vehicle.plate_number || "").trim();
+      if (!plateNumber) continue;
+
+      const existing = allVehiclesCache.find(v =>
+        String(v.plate_number || "").trim() === plateNumber
+      );
+
+      if (existing) {
+        vehicleIdMap.set(Number(vehicle.id), Number(existing.id));
+        continue;
+      }
+
+      const payload = {
+        plate_number: plateNumber,
+        vehicle_area: normalizeAreaLabel(String(vehicle.vehicle_area || "").trim() || ""),
+        home_area: normalizeAreaLabel(String(vehicle.home_area || "").trim() || ""),
+        seat_capacity: Number(vehicle.seat_capacity || 4),
+        driver_name: String(vehicle.driver_name || "").trim(),
+        line_id: String(vehicle.line_id || "").trim(),
+        status: String(vehicle.status || "waiting").trim() || "waiting",
+        memo: String(vehicle.memo || "").trim(),
+        is_active: true,
+        created_by: currentUser.id
+      };
+
+      const { data: inserted, error } = await supabaseClient
+        .from("vehicles")
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        console.error("vehicle import error:", error);
+        alert("車両取込エラー: " + error.message);
+        els.importAllFileInput.value = "";
+        return;
+      }
+
+      vehicleIdMap.set(Number(vehicle.id), Number(inserted.id));
+    }
+
+    await loadVehicles();
+
+    const dateStr = els.dispatchDate?.value || todayStr();
+
+    let targetDispatchId = currentDispatchId;
+
+    if (!targetDispatchId) {
+      const { data: dispatchInserted, error: dispatchInsertError } = await supabaseClient
+        .from("dispatches")
+        .insert({
+          dispatch_date: dateStr,
+          status: "draft",
+          created_by: currentUser.id
+        })
+        .select()
+        .single();
+
+      if (dispatchInsertError) {
+        console.error(dispatchInsertError);
+        alert("dispatch作成エラー: " + dispatchInsertError.message);
+        els.importAllFileInput.value = "";
+        return;
+      }
+
+      targetDispatchId = dispatchInserted.id;
+      currentDispatchId = targetDispatchId;
+    }
+
+    for (const plan of plans) {
+      const mappedCastId = castIdMap.get(Number(plan.cast_id));
+      if (!mappedCastId) continue;
+
+      const duplicate = currentPlansCache.find(p =>
+        p.plan_date === (plan.plan_date || dateStr) &&
+        Number(p.plan_hour) === Number(plan.plan_hour || 0) &&
+        Number(p.cast_id) === Number(mappedCastId)
+      );
+      if (duplicate) continue;
+
+      const payload = {
+        plan_date: plan.plan_date || dateStr,
+        plan_hour: Number(plan.plan_hour || 0),
+        cast_id: mappedCastId,
+        destination_address: String(plan.destination_address || "").trim(),
+        planned_area: normalizeAreaLabel(String(plan.planned_area || "").trim() || "無し"),
+        distance_km: toNullableNumber(plan.distance_km),
+        note: String(plan.note || "").trim(),
+        status: String(plan.status || "planned"),
+        created_by: currentUser.id
+      };
+
+      const { error } = await supabaseClient.from("dispatch_plans").insert(payload);
+      if (error) {
+        console.error("plan import error:", error);
+        alert("予定取込エラー: " + error.message);
+        els.importAllFileInput.value = "";
+        return;
+      }
+    }
+
+    await loadPlansByDate(dateStr);
+
+    for (const item of actuals) {
+      const mappedCastId = castIdMap.get(Number(item.cast_id));
+      if (!mappedCastId) continue;
+
+      const mappedVehicleId = item.vehicle_id
+        ? (vehicleIdMap.get(Number(item.vehicle_id)) || null)
+        : null;
+
+      const duplicate = currentActualsCache.find(a =>
+        Number(a.cast_id) === Number(mappedCastId) &&
+        Number(a.actual_hour) === Number(item.actual_hour || 0) &&
+        (a.destination_address || "") === String(item.destination_address || "")
+      );
+      if (duplicate) continue;
+
+      const vehicle = mappedVehicleId
+        ? allVehiclesCache.find(v => Number(v.id) === Number(mappedVehicleId))
+        : null;
+
+      const payload = {
+        dispatch_id: targetDispatchId,
+        cast_id: mappedCastId,
+        actual_hour: Number(item.actual_hour || 0),
+        stop_order: Number(item.stop_order || 1),
+        pickup_label: ORIGIN_LABEL,
+        destination_address: String(item.destination_address || "").trim(),
+        destination_area: normalizeAreaLabel(String(item.destination_area || "").trim() || "無し"),
+        distance_km: toNullableNumber(item.distance_km),
+        vehicle_id: mappedVehicleId,
+        driver_name: vehicle?.driver_name || String(item.driver_name || "").trim(),
+        status: String(item.status || "pending"),
+        note: String(item.note || "").trim(),
+        plan_date: item.plan_date || dateStr
+      };
+
+      const { error } = await supabaseClient.from("dispatch_items").insert(payload);
+      if (error) {
+        console.error("actual import error:", error);
+        alert("Actual取込エラー: " + error.message);
+        els.importAllFileInput.value = "";
+        return;
+      }
+    }
+
+    els.importAllFileInput.value = "";
+
+    await addHistory(null, null, "import_all", "全体JSONインポートを実行");
+    await loadHomeAndAll();
+    alert("全体インポートが完了しました");
+  } catch (error) {
+    console.error("importAllDataFile error:", error);
+    alert("全体インポート中にエラーが発生しました");
+    if (els.importAllFileInput) els.importAllFileInput.value = "";
+  }
 }
 
 async function resetAllDataDanger() {
@@ -2835,6 +3065,7 @@ function setupEvents() {
 
   els.exportAllBtn?.addEventListener("click", exportAllData);
   els.importAllBtn?.addEventListener("click", triggerImportAll);
+  els.importAllFileInput?.addEventListener("change", importAllDataFile);
   els.exportCsvBtnHeader?.addEventListener("click", exportCastsCsv);
   els.dangerResetBtn?.addEventListener("click", resetAllDataDanger);
 
@@ -2886,8 +3117,6 @@ function setupEvents() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    console.log("SUPABASE_URL:", SUPABASE_URL);
-
     const ok = await ensureAuth();
     if (!ok) return;
 
