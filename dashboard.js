@@ -325,6 +325,47 @@ function openGoogleMap(address) {
   );
 }
 
+function buildMapUrlFromAddressOrLatLng(address, lat, lng) {
+  const numLat = toNullableNumber(lat);
+  const numLng = toNullableNumber(lng);
+
+  if (isValidLatLng(numLat, numLng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${numLat},${numLng}`;
+  }
+
+  const safeAddress = String(address || "").trim();
+  if (safeAddress) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(safeAddress)}`;
+  }
+
+  return "";
+}
+
+function buildMapLinkHtml({ name, address, lat, lng, className = "map-name-link" }) {
+  const safeName = escapeHtml(name || "-");
+  const mapUrl = buildMapUrlFromAddressOrLatLng(address, lat, lng);
+
+  if (!mapUrl) return safeName;
+
+  return `<a href="${mapUrl}" target="_blank" rel="noopener noreferrer" class="${className}">${safeName} 📍</a>`;
+}
+
+function buildCastMapUrl(cast) {
+  const lat = toNullableNumber(cast?.latitude);
+  const lng = toNullableNumber(cast?.longitude);
+
+  if (isValidLatLng(lat, lng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  }
+
+  const address = String(cast?.address || "").trim();
+  if (address) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  }
+
+  return "";
+}
+
 function downloadTextFile(filename, text, mimeType = "text/plain;charset=utf-8") {
   const blob = new Blob([text], { type: mimeType });
   const url = URL.createObjectURL(blob);
@@ -890,21 +931,27 @@ function renderCastsTable() {
   }
 
   allCastsCache.forEach(cast => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(cast.name || "")}</td>
-      <td>${escapeHtml(cast.address || "")}</td>
-      <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
-      <td>${cast.distance_km ?? ""}</td>
-      <td>${escapeHtml(cast.memo || "")}</td>
-      <td class="actions-cell">
-        <button class="btn ghost cast-edit-btn" data-id="${cast.id}">編集</button>
-        <button class="btn ghost cast-route-btn" data-address="${escapeHtml(cast.address || "")}">ルート</button>
-        <button class="btn danger cast-delete-btn" data-id="${cast.id}">削除</button>
-      </td>
-    `;
-    els.castsTableBody.appendChild(tr);
-  });
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td>
+      ${
+        buildCastMapUrl(cast)
+          ? `<a href="${buildCastMapUrl(cast)}" target="_blank" rel="noopener noreferrer" class="cast-name-link">${escapeHtml(cast.name || "")}</a>`
+          : `${escapeHtml(cast.name || "")}`
+      }
+    </td>
+    <td>${escapeHtml(cast.address || "")}</td>
+    <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
+    <td>${cast.distance_km ?? ""}</td>
+    <td>${escapeHtml(cast.memo || "")}</td>
+    <td class="actions-cell">
+      <button class="btn ghost cast-edit-btn" data-id="${cast.id}">編集</button>
+      <button class="btn ghost cast-route-btn" data-address="${escapeHtml(cast.address || "")}">ルート</button>
+      <button class="btn danger cast-delete-btn" data-id="${cast.id}">削除</button>
+    </td>
+  `;
+  els.castsTableBody.appendChild(tr);
+});
 
   els.castsTableBody.querySelectorAll(".cast-edit-btn").forEach(btn => {
     btn.addEventListener("click", () => {
