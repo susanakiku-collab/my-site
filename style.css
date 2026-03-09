@@ -783,3 +783,14 @@ textarea{
     min-width:760px;
   }
 }
+.cast-name-link{
+  color:#ffffff;
+  text-decoration:none;
+  font-weight:800;
+  transition:.18s ease;
+}
+
+.cast-name-link:hover{
+  color:#8fb4ff;
+  text-decoration:underline;
+}
