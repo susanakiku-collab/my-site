@@ -9,6 +9,8 @@ PART 1 / 9
 Supabase
 ================================ */
 
+console.log(window.APP_CONFIG);
+
 const {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
