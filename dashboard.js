@@ -9,19 +9,18 @@ PART 1 / 9
 Supabase
 ================================ */
 
+const {
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  ORIGIN_LABEL,
+  ORIGIN_LAT,
+  ORIGIN_LNG
+} = window.APP_CONFIG;
+
 const supabaseClient = supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
-)
-
-/* ================================
-起点
-================================ */
-
-const ORIGIN_LABEL = "松戸駅"
-
-const ORIGIN_LAT = 35.7843
-const ORIGIN_LNG = 139.9006
+);
 
 
 /* ================================
