@@ -350,7 +350,7 @@ textarea{
 
 .data-table{
   width:100%;
-  min-width:1080px;
+  min-width:980px;
   border-collapse:collapse;
 }
 
@@ -788,5 +788,9 @@ textarea{
 
   .main-tab{
     white-space:nowrap;
+  }
+
+  .data-table{
+    min-width:760px;
   }
 }
