@@ -26,17 +26,12 @@ let currentActualsCache = [];
 let currentDailyReportsCache = [];
 let activeVehicleIdsForToday = new Set();
 
-const DEFAULT_BLOCKS = ["A1", "A2", "B", "C1", "D", "無し"];
 const SPECIAL_LATE_NIGHT_DATES = [
   // "2026-03-20",
   // "2026-04-28"
 ];
 
 const els = {
-  importVehicleCsvBtn: document.getElementById("importVehicleCsvBtn"),
-  exportVehicleCsvBtn: document.getElementById("exportVehicleCsvBtn"),
-  vehicleCsvFileInput: document.getElementById("vehicleCsvFileInput"),
-
   userEmail: document.getElementById("userEmail"),
   originLabelText: document.getElementById("originLabelText"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -84,6 +79,9 @@ const els = {
   vehicleMemo: document.getElementById("vehicleMemo"),
   saveVehicleBtn: document.getElementById("saveVehicleBtn"),
   cancelVehicleEditBtn: document.getElementById("cancelVehicleEditBtn"),
+  importVehicleCsvBtn: document.getElementById("importVehicleCsvBtn"),
+  exportVehicleCsvBtn: document.getElementById("exportVehicleCsvBtn"),
+  vehicleCsvFileInput: document.getElementById("vehicleCsvFileInput"),
   vehiclesTableBody: document.getElementById("vehiclesTableBody"),
 
   dispatchDate: document.getElementById("dispatchDate"),
@@ -392,7 +390,6 @@ function normalizeCsvHeader(header) {
   const h = raw.toLowerCase();
 
   const map = {
-    // cast
     name: "name",
     名前: "name",
     cast_name: "name",
@@ -420,28 +417,22 @@ function normalizeCsvHeader(header) {
     距離: "distance_km",
     想定距離: "distance_km",
 
-    // vehicle
     plate_number: "plate_number",
     vehicle_id: "plate_number",
     車両id: "plate_number",
     車両ID: "plate_number",
     車両: "plate_number",
-
     vehicle_area: "vehicle_area",
     担当方面: "vehicle_area",
-
     home_area: "home_area",
     帰宅方面: "home_area",
-
     seat_capacity: "seat_capacity",
     定員: "seat_capacity",
     乗車可能人員: "seat_capacity",
-
     driver_name: "driver_name",
     driver: "driver_name",
     ドライバー: "driver_name",
     ドライバー名: "driver_name",
-
     line_id: "line_id",
     line: "line_id",
     lineid: "line_id",
@@ -449,7 +440,6 @@ function normalizeCsvHeader(header) {
     LINEID: "line_id",
     "LINE ID": "line_id",
     line_id_: "line_id",
-
     status: "status",
     状態: "status"
   };
@@ -583,11 +573,9 @@ function getRemainingPlannedCastIds(dateStr) {
 
 function isLastClusterOfTheDay(cluster, dateStr) {
   const remainingIds = getRemainingPlannedCastIds(dateStr);
-
   cluster.items.forEach(item => {
     remainingIds.delete(Number(item.cast_id));
   });
-
   return remainingIds.size === 0;
 }
 
@@ -676,10 +664,7 @@ async function ensureAuth() {
     return false;
   }
 
-  if (els.userEmail) {
-    els.userEmail.value = currentUser.email || "";
-  }
-
+  if (els.userEmail) els.userEmail.value = currentUser.email || "";
   return true;
 }
 
@@ -950,33 +935,6 @@ function exportCastsCsv() {
   downloadTextFile(`casts_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
 }
 
-function exportVehiclesCsv() {
-  const headers = [
-    "plate_number",
-    "vehicle_area",
-    "home_area",
-    "seat_capacity",
-    "driver_name",
-    "line_id",
-    "status",
-    "memo"
-  ];
-
-  const rows = allVehiclesCache.map(vehicle => [
-    vehicle.plate_number || "",
-    normalizeAreaLabel(vehicle.vehicle_area || ""),
-    normalizeAreaLabel(vehicle.home_area || ""),
-    vehicle.seat_capacity ?? "",
-    vehicle.driver_name || "",
-    vehicle.line_id || "",
-    vehicle.status || "waiting",
-    vehicle.memo || ""
-  ]);
-
-  const csv = [headers.join(","), ...rows.map(r => r.map(csvEscape).join(","))].join("\n");
-  downloadTextFile(`vehicles_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
-}
-
 async function importCastCsvFile() {
   const file = els.csvFileInput?.files?.[0];
   if (!file) {
@@ -999,14 +957,12 @@ async function importCastCsvFile() {
     for (const row of rows) {
       const name = String(row.name || "").trim();
       const address = String(row.address || "").trim();
-
       if (!name) continue;
 
       const exists = allCastsCache.find(c =>
         String(c.name || "").trim() === name &&
         String(c.address || "").trim() === address
       );
-
       if (exists) {
         console.log("重複スキップ:", name, address);
         continue;
@@ -1039,7 +995,6 @@ async function importCastCsvFile() {
     }
 
     const { error } = await supabaseClient.from("casts").insert(inserts);
-
     if (error) {
       console.error("CSV import supabase error:", error);
       alert("CSV取込エラー: " + error.message);
@@ -1053,78 +1008,6 @@ async function importCastCsvFile() {
   } catch (error) {
     console.error("importCastCsvFile error:", error);
     alert("CSV取込中にエラーが発生しました");
-  }
-}
-
-async function importVehicleCsvFile() {
-  const file = els.vehicleCsvFileInput?.files?.[0];
-  if (!file) {
-    alert("CSVファイルを選択してください");
-    return;
-  }
-
-  try {
-    const text = await readCsvFileAsText(file);
-    let rows = parseCsv(text);
-    rows = normalizeCsvRows(rows);
-
-    if (!rows.length) {
-      alert("CSVデータが空です");
-      return;
-    }
-
-    const inserts = [];
-
-    for (const row of rows) {
-      const plateNumber = String(row.plate_number || "").trim();
-      if (!plateNumber) continue;
-
-      const exists = allVehiclesCache.find(v =>
-        String(v.plate_number || "").trim() === plateNumber
-      );
-
-      if (exists) {
-        console.log("車両重複スキップ:", plateNumber);
-        continue;
-      }
-
-      inserts.push({
-        plate_number: plateNumber,
-        vehicle_area: normalizeAreaLabel(String(row.vehicle_area || "").trim() || ""),
-        home_area: normalizeAreaLabel(String(row.home_area || "").trim() || ""),
-        seat_capacity: Number(row.seat_capacity || 4),
-        driver_name: String(row.driver_name || "").trim(),
-        line_id: String(row.line_id || "").trim(),
-        status: String(row.status || "waiting").trim() || "waiting",
-        memo: String(row.memo || "").trim(),
-        is_active: true,
-        created_by: currentUser.id
-      });
-    }
-
-    if (!inserts.length) {
-      alert("新規車両はありません");
-      els.vehicleCsvFileInput.value = "";
-      return;
-    }
-
-    const { error } = await supabaseClient
-      .from("vehicles")
-      .insert(inserts);
-
-    if (error) {
-      console.error("Vehicle CSV import error:", error);
-      alert("車両CSV取込エラー: " + error.message);
-      return;
-    }
-
-    els.vehicleCsvFileInput.value = "";
-    await addHistory(null, null, "import_vehicle_csv", `${inserts.length}件の車両をCSV取込`);
-    alert(`${inserts.length}件の車両を取り込みました`);
-    await loadVehicles();
-  } catch (error) {
-    console.error("importVehicleCsvFile error:", error);
-    alert("車両CSV取込中にエラーが発生しました");
   }
 }
 
@@ -1182,6 +1065,14 @@ function fillVehicleForm(vehicle) {
   if (els.vehicleMemo) els.vehicleMemo.value = vehicle.memo || "";
   if (els.cancelVehicleEditBtn) els.cancelVehicleEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function isDuplicateVehicle(plateNumber) {
+  const normalizedPlate = String(plateNumber || "").trim();
+  return allVehiclesCache.find(v =>
+    String(v.plate_number || "").trim() === normalizedPlate &&
+    Number(v.id) !== Number(editingVehicleId)
+  );
 }
 
 async function saveVehicle() {
@@ -1267,15 +1158,6 @@ async function loadVehicles() {
   renderHomeSummary();
 }
 
-function isDuplicateVehicle(plateNumber) {
-  const normalizedPlate = String(plateNumber || "").trim();
-
-  return allVehiclesCache.find(v =>
-    String(v.plate_number || "").trim() === normalizedPlate &&
-    Number(v.id) !== Number(editingVehicleId)
-  );
-}
-
 function renderVehiclesTable() {
   if (!els.vehiclesTableBody) return;
   const monthKey = getMonthKey(els.dispatchDate?.value || todayStr());
@@ -1324,6 +1206,101 @@ function renderVehiclesTable() {
   });
 }
 
+function exportVehiclesCsv() {
+  const headers = [
+    "plate_number",
+    "vehicle_area",
+    "home_area",
+    "seat_capacity",
+    "driver_name",
+    "line_id",
+    "status",
+    "memo"
+  ];
+
+  const rows = allVehiclesCache.map(vehicle => [
+    vehicle.plate_number || "",
+    normalizeAreaLabel(vehicle.vehicle_area || ""),
+    normalizeAreaLabel(vehicle.home_area || ""),
+    vehicle.seat_capacity ?? "",
+    vehicle.driver_name || "",
+    vehicle.line_id || "",
+    vehicle.status || "waiting",
+    vehicle.memo || ""
+  ]);
+
+  const csv = [headers.join(","), ...rows.map(r => r.map(csvEscape).join(","))].join("\n");
+  downloadTextFile(`vehicles_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
+}
+
+async function importVehicleCsvFile() {
+  const file = els.vehicleCsvFileInput?.files?.[0];
+  if (!file) {
+    alert("CSVファイルを選択してください");
+    return;
+  }
+
+  try {
+    const text = await readCsvFileAsText(file);
+    let rows = parseCsv(text);
+    rows = normalizeCsvRows(rows);
+
+    if (!rows.length) {
+      alert("CSVデータが空です");
+      return;
+    }
+
+    const inserts = [];
+
+    for (const row of rows) {
+      const plateNumber = String(row.plate_number || "").trim();
+      if (!plateNumber) continue;
+
+      const exists = allVehiclesCache.find(v =>
+        String(v.plate_number || "").trim() === plateNumber
+      );
+      if (exists) {
+        console.log("車両重複スキップ:", plateNumber);
+        continue;
+      }
+
+      inserts.push({
+        plate_number: plateNumber,
+        vehicle_area: normalizeAreaLabel(String(row.vehicle_area || "").trim() || ""),
+        home_area: normalizeAreaLabel(String(row.home_area || "").trim() || ""),
+        seat_capacity: Number(row.seat_capacity || 4),
+        driver_name: String(row.driver_name || "").trim(),
+        line_id: String(row.line_id || "").trim(),
+        status: String(row.status || "waiting").trim() || "waiting",
+        memo: String(row.memo || "").trim(),
+        is_active: true,
+        created_by: currentUser.id
+      });
+    }
+
+    if (!inserts.length) {
+      alert("新規車両はありません");
+      els.vehicleCsvFileInput.value = "";
+      return;
+    }
+
+    const { error } = await supabaseClient.from("vehicles").insert(inserts);
+    if (error) {
+      console.error("Vehicle CSV import error:", error);
+      alert("車両CSV取込エラー: " + error.message);
+      return;
+    }
+
+    els.vehicleCsvFileInput.value = "";
+    await addHistory(null, null, "import_vehicle_csv", `${inserts.length}件の車両をCSV取込`);
+    alert(`${inserts.length}件の車両を取り込みました`);
+    await loadVehicles();
+  } catch (error) {
+    console.error("importVehicleCsvFile error:", error);
+    alert("車両CSV取込中にエラーが発生しました");
+  }
+}
+
 function resetPlanForm() {
   editingPlanId = null;
   if (els.planCastSelect) els.planCastSelect.value = "";
@@ -1370,7 +1347,6 @@ function fillPlanFormFromSelectedCast() {
 
   if (els.planDistanceKm && !els.planDistanceKm.value.trim()) {
     let distance = toNullableNumber(cast.distance_km);
-
     if (distance === null) {
       const lat = toNullableNumber(cast.latitude);
       const lng = toNullableNumber(cast.longitude);
@@ -1378,7 +1354,6 @@ function fillPlanFormFromSelectedCast() {
         distance = estimateRoadKmFromStation(lat, lng);
       }
     }
-
     els.planDistanceKm.value = distance ?? "";
   }
 }
@@ -1619,7 +1594,6 @@ function resetActualForm() {
 
 function fillActualForm(item) {
   editingActualId = item.id;
-
   if (els.castSelect) els.castSelect.value = String(item.cast_id || "");
   if (els.actualHour) els.actualHour.value = String(item.actual_hour ?? 0);
   if (els.actualDistanceKm) els.actualDistanceKm.value = item.distance_km ?? "";
@@ -1627,11 +1601,7 @@ function fillActualForm(item) {
   if (els.actualAddress) els.actualAddress.value = item.destination_address || item.casts?.address || "";
   if (els.actualArea) els.actualArea.value = normalizeAreaLabel(item.destination_area || item.casts?.area || "");
   if (els.actualNote) els.actualNote.value = item.note || "";
-
-  if (els.cancelActualEditBtn) {
-    els.cancelActualEditBtn.classList.remove("hidden");
-  }
-
+  if (els.cancelActualEditBtn) els.cancelActualEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1658,7 +1628,6 @@ function fillActualFormFromSelectedCast() {
 
   if (els.actualDistanceKm && !els.actualDistanceKm.value.trim()) {
     let distance = toNullableNumber(cast.distance_km);
-
     if (distance === null) {
       const lat = toNullableNumber(cast.latitude);
       const lng = toNullableNumber(cast.longitude);
@@ -1666,7 +1635,6 @@ function fillActualFormFromSelectedCast() {
         distance = estimateRoadKmFromStation(lat, lng);
       }
     }
-
     els.actualDistanceKm.value = distance ?? "";
   }
 }
@@ -1682,9 +1650,7 @@ function fillActualFormFromSelectedPlan() {
   if (els.actualHour) els.actualHour.value = String(plan.plan_hour ?? 0);
   if (els.actualAddress) els.actualAddress.value = plan.destination_address || plan.casts?.address || "";
   if (els.actualArea) els.actualArea.value = normalizeAreaLabel(plan.planned_area || plan.casts?.area || "無し");
-  if (els.actualDistanceKm) {
-    els.actualDistanceKm.value = plan.distance_km ?? plan.casts?.distance_km ?? "";
-  }
+  if (els.actualDistanceKm) els.actualDistanceKm.value = plan.distance_km ?? plan.casts?.distance_km ?? "";
   if (els.actualNote) els.actualNote.value = plan.note || "";
 }
 
@@ -1815,9 +1781,7 @@ async function saveActual() {
   const stopOrder = existingActual
     ? Number(existingActual.stop_order || 1)
     : currentActualsCache.filter(
-        x =>
-          Number(x.actual_hour) === hour &&
-          Number(x.id) !== Number(editingActualId || 0)
+        x => Number(x.actual_hour) === hour && Number(x.id) !== Number(editingActualId || 0)
       ).length + 1;
 
   const payload = {
@@ -1895,31 +1859,19 @@ async function updateActualStatus(itemId, status) {
   if (targetPlan) {
     let nextPlanStatus = targetPlan.status;
 
-    if (status === "done") {
-      nextPlanStatus = "done";
-    } else if (status === "cancel") {
-      nextPlanStatus = "planned";
-    } else if (status === "pending") {
-      nextPlanStatus = "assigned";
-    }
+    if (status === "done") nextPlanStatus = "done";
+    else if (status === "cancel") nextPlanStatus = "planned";
+    else if (status === "pending") nextPlanStatus = "assigned";
 
     const { error: planError } = await supabaseClient
       .from("dispatch_plans")
       .update({ status: nextPlanStatus })
       .eq("id", targetPlan.id);
 
-    if (planError) {
-      console.error(planError);
-    }
+    if (planError) console.error(planError);
   }
 
-  await addHistory(
-    currentDispatchId,
-    itemId,
-    "update_actual_status",
-    `Actual状態を ${status} に変更`
-  );
-
+  await addHistory(currentDispatchId, itemId, "update_actual_status", `Actual状態を ${status} に変更`);
   await loadActualsByDate(els.actualDate?.value || todayStr());
   await loadPlansByDate(els.planDate?.value || todayStr());
 }
@@ -1963,10 +1915,7 @@ async function addPlanToActual() {
     plan_date: plan.plan_date
   };
 
-  const { error } = await supabaseClient
-    .from("dispatch_items")
-    .insert(payload);
-
+  const { error } = await supabaseClient.from("dispatch_items").insert(payload);
   if (error) {
     alert(error.message);
     return;
@@ -1991,7 +1940,6 @@ function renderActualTable() {
   }
 
   const hours = [...new Set(currentActualsCache.map(x => Number(x.actual_hour ?? 0)))].sort((a, b) => a - b);
-
   let html = `<div class="grouped-actual-list">`;
 
   hours.forEach(hour => {
@@ -2085,8 +2033,7 @@ function renderActualTimeAreaMatrix() {
 
     areas.forEach(area => {
       const rows = currentActualsCache.filter(
-        x =>
-          Number(x.actual_hour ?? 0) === hour &&
+        x => Number(x.actual_hour ?? 0) === hour &&
           normalizeAreaLabel(x.destination_area || "無し") === area
       );
 
@@ -2135,7 +2082,6 @@ function renderDailyVehicleChecklist() {
   allVehiclesCache.forEach(vehicle => {
     const row = document.createElement("div");
     row.className = "vehicle-check-item";
-
     row.innerHTML = `
       <div class="vehicle-check-label">
         ${escapeHtml(vehicle.plate_number || "")}
@@ -2144,27 +2090,16 @@ function renderDailyVehicleChecklist() {
         / 定員${vehicle.seat_capacity ?? "-"}
         / ${escapeHtml(vehicle.driver_name || "-")}）
       </div>
-      <input
-        class="vehicle-check-input"
-        type="checkbox"
-        data-id="${vehicle.id}"
-        ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""}
-      />
+      <input class="vehicle-check-input" type="checkbox" data-id="${vehicle.id}" ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""} />
     `;
-
     els.dailyVehicleChecklist.appendChild(row);
   });
 
   els.dailyVehicleChecklist.querySelectorAll(".vehicle-check-input").forEach(input => {
     input.addEventListener("change", () => {
       const id = Number(input.dataset.id);
-
-      if (input.checked) {
-        activeVehicleIdsForToday.add(id);
-      } else {
-        activeVehicleIdsForToday.delete(id);
-      }
-
+      if (input.checked) activeVehicleIdsForToday.add(id);
+      else activeVehicleIdsForToday.delete(id);
       renderDailyDispatchResult();
     });
   });
@@ -2180,7 +2115,6 @@ function toggleAllVehicles(checked) {
   } else {
     activeVehicleIdsForToday = new Set();
   }
-
   renderDailyVehicleChecklist();
   renderDailyDispatchResult();
 }
@@ -2195,9 +2129,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
   const clusters = buildDispatchClusters(items);
   const assignments = [];
 
-  if (!workingVehicles.length || !clusters.length) {
-    return assignments;
-  }
+  if (!workingVehicles.length || !clusters.length) return assignments;
 
   const vehicleUsage = new Map();
 
@@ -2248,7 +2180,6 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
 
         let score = 1000;
-
         score -= getVehicleAreaMatchScore(vehicle, cluster.area);
         score += sameHourLoad * 35;
         score += getVehicleState(vehicle.id).totalAssigned * 8;
@@ -2257,17 +2188,12 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         score += cluster.totalDistance * 0.15;
 
         if (isLastRun) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-            score -= 120;
-          } else {
-            score += 40;
-          }
+          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 120;
+          else score += 40;
         }
 
         if (!isLastRun && isDefaultLastHourCluster) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-            score -= 25;
-          }
+          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 25;
         }
 
         return { vehicle, score };
@@ -2289,10 +2215,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           item_id: item.id,
           actual_hour: cluster.hour,
           vehicle_id: bestVehicle.id,
-          vehicle_code: bestVehicle.plate_number || "",
           driver_name: bestVehicle.driver_name || "",
-          distance_km: Number(item.distance_km || 0),
-          cluster_area: cluster.area
+          distance_km: Number(item.distance_km || 0)
         });
       });
 
@@ -2323,7 +2247,6 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
 
           let score = 1000;
-
           score -= getVehicleAreaMatchScore(vehicle, cluster.area);
           score += sameHourLoad * 35;
           score += getVehicleState(vehicle.id).totalAssigned * 8;
@@ -2332,17 +2255,12 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           score += Number(item.distance_km || 0) * 0.15;
 
           if (isLastRun) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-              score -= 120;
-            } else {
-              score += 40;
-            }
+            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 120;
+            else score += 40;
           }
 
           if (!isLastRun && isDefaultLastHourCluster) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-              score -= 25;
-            }
+            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 25;
           }
 
           return { vehicle, score };
@@ -2358,10 +2276,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         item_id: item.id,
         actual_hour: cluster.hour,
         vehicle_id: bestVehicle.id,
-        vehicle_code: bestVehicle.plate_number || "",
         driver_name: bestVehicle.driver_name || "",
-        distance_km: Number(item.distance_km || 0),
-        cluster_area: cluster.area
+        distance_km: Number(item.distance_km || 0)
       });
 
       addHourLoad(bestVehicle.id, cluster.hour, 1, Number(item.distance_km || 0));
@@ -2523,7 +2439,6 @@ function buildCopyResultText() {
   );
 
   const lines = [];
-
   vehicles.forEach(vehicle => {
     const rows = activeItems
       .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
@@ -2540,17 +2455,13 @@ function buildCopyResultText() {
       });
 
     lines.push(`${vehicle.line_id ? vehicle.line_id + " " : ""}${vehicle.driver_name || vehicle.plate_number || ""}`);
-
     if (!rows.length) {
       lines.push("送りなし");
     } else {
       rows.forEach(row => {
-        lines.push(
-          `${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} ${normalizeAreaLabel(row.destination_area || "-")}`
-        );
+        lines.push(`${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} ${normalizeAreaLabel(row.destination_area || "-")}`);
       });
     }
-
     lines.push("");
   });
 
@@ -2559,7 +2470,6 @@ function buildCopyResultText() {
 
 async function copyDispatchResult() {
   const text = buildCopyResultText();
-
   try {
     await navigator.clipboard.writeText(text);
     alert("結果をコピーしました");
@@ -2597,7 +2507,6 @@ async function clearAllActuals() {
 async function loadDailyReports(dateStr) {
   const monthKey = getMonthKey(dateStr);
   const monthStart = `${monthKey}-01`;
-
   const start = new Date(monthStart);
   const next = new Date(start.getFullYear(), start.getMonth() + 1, 1);
   const nextStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
@@ -2628,14 +2537,12 @@ async function loadDailyReports(dateStr) {
 
 async function confirmDailyToMonthly() {
   const doneRows = currentActualsCache.filter(x => normalizeStatus(x.status) === "done");
-
   if (!doneRows.length) {
     alert("完了したActualがありません");
     return;
   }
 
   const grouped = new Map();
-
   doneRows.forEach(row => {
     const vehicleId = Number(row.vehicle_id);
     if (!vehicleId) return;
@@ -2646,11 +2553,7 @@ async function confirmDailyToMonthly() {
     };
 
     prev.distance += Number(row.distance_km || 0);
-
-    if (!prev.driver_name && row.driver_name) {
-      prev.driver_name = row.driver_name;
-    }
-
+    if (!prev.driver_name && row.driver_name) prev.driver_name = row.driver_name;
     grouped.set(vehicleId, prev);
   });
 
@@ -2680,9 +2583,7 @@ async function confirmDailyToMonthly() {
         })
         .eq("id", existing.id);
 
-      if (updateError) {
-        console.error(updateError);
-      }
+      if (updateError) console.error(updateError);
     } else {
       const { error: insertError } = await supabaseClient
         .from("vehicle_daily_reports")
@@ -2695,9 +2596,7 @@ async function confirmDailyToMonthly() {
           created_by: currentUser.id
         });
 
-      if (insertError) {
-        console.error(insertError);
-      }
+      if (insertError) console.error(insertError);
     }
   }
 
@@ -2743,9 +2642,7 @@ async function addHistory(dispatchId, itemId, action, message) {
       acted_by: currentUser.id
     });
 
-  if (error) {
-    console.error(error);
-  }
+  if (error) console.error(error);
 }
 
 async function loadHistory() {
@@ -2788,6 +2685,7 @@ async function exportAllData() {
     actuals: currentActualsCache,
     exported_at: new Date().toISOString()
   };
+
   downloadTextFile(
     `themis_export_${todayStr()}.json`,
     JSON.stringify(payload, null, 2),
@@ -2796,7 +2694,7 @@ async function exportAllData() {
 }
 
 function triggerImportAll() {
-  alert("全体インポートは未実装です。まずはキャストCSVをご利用ください。");
+  alert("全体インポートは未実装です。まずはキャストCSV・車両CSVをご利用ください。");
 }
 
 async function resetAllDataDanger() {
@@ -2813,11 +2711,7 @@ async function resetAllDataDanger() {
     ];
 
     for (const table of deleteTargets) {
-      const { error } = await supabaseClient
-        .from(table)
-        .delete()
-        .neq("id", 0);
-
+      const { error } = await supabaseClient.from(table).delete().neq("id", 0);
       if (error) {
         console.error(`${table} delete error:`, error);
         alert(`${table} の削除でエラー: ${error.message}`);
@@ -2854,7 +2748,6 @@ async function resetAllDataDanger() {
 
 async function loadHomeAndAll() {
   const dateStr = els.dispatchDate?.value || todayStr();
-
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.planDate) els.planDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
@@ -2874,7 +2767,6 @@ async function loadHomeAndAll() {
 
 async function syncDateAndReloadFromDispatchDate() {
   const dateStr = els.dispatchDate?.value || todayStr();
-
   if (els.planDate) els.planDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
 
@@ -2887,7 +2779,6 @@ async function syncDateAndReloadFromDispatchDate() {
 
 async function syncDateAndReloadFromPlanDate() {
   const dateStr = els.planDate?.value || todayStr();
-
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
 
@@ -2898,7 +2789,6 @@ async function syncDateAndReloadFromPlanDate() {
 
 async function syncDateAndReloadFromActualDate() {
   const dateStr = els.actualDate?.value || todayStr();
-
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.planDate) els.planDate.value = dateStr;
 
@@ -2908,58 +2798,27 @@ async function syncDateAndReloadFromActualDate() {
 }
 
 function bindPlanAndActualFormEvents() {
-  if (els.planCastSelect) {
-    els.planCastSelect.addEventListener("change", fillPlanFormFromSelectedCast);
-  }
-
-  if (els.castSelect) {
-    els.castSelect.addEventListener("change", fillActualFormFromSelectedCast);
-  }
-
-  if (els.planSelect) {
-    els.planSelect.addEventListener("change", fillActualFormFromSelectedPlan);
-  }
-
-  if (els.cancelPlanEditBtn) {
-    els.cancelPlanEditBtn.addEventListener("click", resetPlanForm);
-  }
-
-  if (els.cancelActualEditBtn) {
-    els.cancelActualEditBtn.addEventListener("click", resetActualForm);
-  }
-
-  if (els.addSelectedPlanBtn) {
-    els.addSelectedPlanBtn.addEventListener("click", addPlanToActual);
-  }
+  if (els.planCastSelect) els.planCastSelect.addEventListener("change", fillPlanFormFromSelectedCast);
+  if (els.castSelect) els.castSelect.addEventListener("change", fillActualFormFromSelectedCast);
+  if (els.planSelect) els.planSelect.addEventListener("change", fillActualFormFromSelectedPlan);
+  if (els.cancelPlanEditBtn) els.cancelPlanEditBtn.addEventListener("click", resetPlanForm);
+  if (els.cancelActualEditBtn) els.cancelActualEditBtn.addEventListener("click", resetActualForm);
+  if (els.addSelectedPlanBtn) els.addSelectedPlanBtn.addEventListener("click", addPlanToActual);
 }
 
 function bindDispatchEvents() {
-  if (els.optimizeBtn) {
-    els.optimizeBtn.addEventListener("click", runAutoDispatch);
-  }
+  if (els.optimizeBtn) els.optimizeBtn.addEventListener("click", runAutoDispatch);
 }
 
 function bindPostDispatchEvents() {
-  if (els.copyResultBtn) {
-    els.copyResultBtn.addEventListener("click", copyDispatchResult);
-  }
-
-  if (els.confirmDailyBtn) {
-    els.confirmDailyBtn.addEventListener("click", confirmDailyToMonthly);
-  }
-
-  if (els.clearActualBtn) {
-    els.clearActualBtn.addEventListener("click", clearAllActuals);
-  }
+  if (els.copyResultBtn) els.copyResultBtn.addEventListener("click", copyDispatchResult);
+  if (els.confirmDailyBtn) els.confirmDailyBtn.addEventListener("click", confirmDailyToMonthly);
+  if (els.clearActualBtn) els.clearActualBtn.addEventListener("click", clearAllActuals);
 }
 
 function setupEvents() {
   els.logoutBtn?.addEventListener("click", logout);
-  
-  els.importVehicleCsvBtn?.addEventListener("click", () => els.vehicleCsvFileInput?.click());
-  els.exportVehicleCsvBtn?.addEventListener("click", exportVehiclesCsv);
-  els.vehicleCsvFileInput?.addEventListener("change", importVehicleCsvFile);
-  
+
   els.exportAllBtn?.addEventListener("click", exportAllData);
   els.importAllBtn?.addEventListener("click", triggerImportAll);
   els.exportCsvBtnHeader?.addEventListener("click", exportCastsCsv);
@@ -2976,6 +2835,9 @@ function setupEvents() {
 
   els.saveVehicleBtn?.addEventListener("click", saveVehicle);
   els.cancelVehicleEditBtn?.addEventListener("click", resetVehicleForm);
+  els.importVehicleCsvBtn?.addEventListener("click", () => els.vehicleCsvFileInput?.click());
+  els.exportVehicleCsvBtn?.addEventListener("click", exportVehiclesCsv);
+  els.vehicleCsvFileInput?.addEventListener("change", importVehicleCsvFile);
 
   els.savePlanBtn?.addEventListener("click", savePlan);
   els.guessPlanAreaBtn?.addEventListener("click", guessPlanArea);
