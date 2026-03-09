@@ -1591,7 +1591,8 @@ function renderPlansTimeAreaMatrix() {
   ];
 
   if (!areas.length) {
-    els.plansTimeAreaMatrix.innerHTML = `<div class="muted" style="padding:14px;">一覧がありません</div>`;
+    els.plansTimeAreaMatrix.innerHTML =
+      `<div class="muted" style="padding:14px;">一覧がありません</div>`;
     return;
   }
 
@@ -1628,16 +1629,12 @@ function renderPlansTimeAreaMatrix() {
           <td>
             <div class="matrix-card">
               <div class="matrix-summary">${rows.length}人 / ${totalDistance.toFixed(1)}km</div>
-              ${rows
-                .map(
-                  row => `
-                    <div class="matrix-item">
-                      <span class="badge-status ${normalizeStatus(row.status)}">${escapeHtml(getStatusText(row.status))}</span>
-                      <span>${escapeHtml(row.casts?.name || "-")} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
-                    </div>
-                  `
-                )
-                .join("")}
+              ${rows.map(row => `
+                <div class="matrix-item">
+                  <span class="badge-status ${normalizeStatus(row.status)}">${escapeHtml(getStatusText(row.status))}</span>
+                  <span>${escapeHtml(row.casts?.name || "-")} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
+                </div>
+              `).join("")}
             </div>
           </td>
         `;
