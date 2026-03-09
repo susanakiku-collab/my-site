@@ -34,6 +34,7 @@ const SPECIAL_LATE_NIGHT_DATES = [
 const els = {
   plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
   userEmail: document.getElementById("userEmail"),
+  sendLineBtn: document.getElementById("sendLineBtn"),
   originLabelText: document.getElementById("originLabelText"),
   logoutBtn: document.getElementById("logoutBtn"),
 
@@ -3202,7 +3203,6 @@ function bindPostDispatchEvents() {
 }
 
 function setupEvents() {
-  
   els.logoutBtn?.addEventListener("click", logout);
   els.exportAllBtn?.addEventListener("click", exportAllData);
   els.importAllBtn?.addEventListener("click", triggerImportAll);
@@ -3244,6 +3244,9 @@ function setupEvents() {
   els.planDate?.addEventListener("change", syncDateAndReloadFromPlanDate);
   els.actualDate?.addEventListener("change", syncDateAndReloadFromActualDate);
 
+  els.copyResultBtn?.addEventListener("click", copyDispatchResult);
+  els.sendLineBtn?.addEventListener("click", sendDispatchResultToLine);
+
   els.copyActualTableBtn?.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(els.actualTableWrap?.innerText || "");
@@ -3253,6 +3256,12 @@ function setupEvents() {
       alert("コピーに失敗しました");
     }
   });
+}
+
+function sendDispatchResultToLine() {
+  const text = buildCopyResultText();
+  const url = "https://line.me/R/msg/text/?" + encodeURIComponent(text);
+  window.open(url, "_blank");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
