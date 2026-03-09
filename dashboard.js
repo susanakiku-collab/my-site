@@ -1402,6 +1402,7 @@ async function loadPlansByDate(dateStr) {
 
   currentPlansCache = data || [];
   renderPlanGroupedTable();
+  renderPlansTimeAreaMatrix();
   renderPlanSelect();
   renderPlanCastSelect();
   renderHomeSummary();
