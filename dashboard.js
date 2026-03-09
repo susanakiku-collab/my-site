@@ -30,7 +30,6 @@ const DEFAULT_BLOCKS = ["A1", "A2", "B", "C1", "D", "無し"];
 
 const els = {
   userEmail: document.getElementById("userEmail"),
-  originLabelText: document.getElementById("originLabelText"),
   logoutBtn: document.getElementById("logoutBtn"),
 
   exportAllBtn: document.getElementById("exportAllBtn"),
@@ -349,10 +348,46 @@ function parseCsvLine(line) {
   return result;
 }
 
-function normalizeCsvHeader(header) {
-  const raw = String(header || "").trim();
-  const h = raw.toLowerCase();
+async function readCsvFileAsText(file) {
+  const buffer = await file.arrayBuffer();
 
+  // UTF-8で先に試す
+  let text = new TextDecoder("utf-8").decode(buffer);
+
+  // 文字化けっぽい場合は Shift-JIS を試す
+  const mojibakeLike =
+    text.includes("�") ||
+    (!text.includes("name") &&
+      !text.includes("address") &&
+      !text.includes("名前") &&
+      !text.includes("住所"));
+
+  if (mojibakeLike) {
+    try {
+      text = new TextDecoder("shift_jis").decode(buffer);
+    } catch (e) {
+      console.warn("shift_jis decode failed:", e);
+    }
+  }
+
+  return text;
+}
+
+function normalizeCsvRows(rows) {
+  return rows.map(row => {
+    const normalized = {};
+
+    Object.keys(row).forEach(key => {
+      const nk = normalizeCsvHeader(key);
+      normalized[nk] = row[key];
+    });
+
+    return normalized;
+  });
+}
+
+function normalizeCsvHeader(header) {
+  const h = String(header || "").trim().toLowerCase();
   const map = {
     name: "name",
     名前: "name",
@@ -381,8 +416,7 @@ function normalizeCsvHeader(header) {
     距離: "distance_km",
     想定距離: "distance_km"
   };
-
-  return map[raw] || map[h] || h;
+  return map[header] || map[h] || h;
 }
 
 function parseCsv(text) {
@@ -410,40 +444,6 @@ function parseCsv(text) {
   return rows;
 }
 
-async function readCsvFileAsText(file) {
-  const buffer = await file.arrayBuffer();
-
-  let text = new TextDecoder("utf-8").decode(buffer);
-
-  const mojibakeLike =
-    text.includes("�") ||
-    (!text.includes("name") &&
-      !text.includes("address") &&
-      !text.includes("名前") &&
-      !text.includes("住所"));
-
-  if (mojibakeLike) {
-    try {
-      text = new TextDecoder("shift_jis").decode(buffer);
-    } catch (e) {
-      console.warn("shift_jis decode failed:", e);
-    }
-  }
-
-  return text;
-}
-
-function normalizeCsvRows(rows) {
-  return rows.map(row => {
-    const normalized = {};
-    Object.keys(row).forEach(key => {
-      const nk = normalizeCsvHeader(key);
-      normalized[nk] = row[key];
-    });
-    return normalized;
-  });
-}
-
 function getVehicleMonthlyStatsMap(reportRows, targetMonth) {
   const map = new Map();
 
@@ -466,6 +466,16 @@ function getVehicleMonthlyStatsMap(reportRows, targetMonth) {
 
 function getActiveActuals() {
   return currentActualsCache.filter(item => normalizeStatus(item.status) !== "cancel");
+}
+
+function getDoneCastIdsInActuals() {
+  const ids = new Set();
+  currentActualsCache.forEach(item => {
+    if (Number(item.cast_id) && normalizeStatus(item.status) === "done") {
+      ids.add(Number(item.cast_id));
+    }
+  });
+  return ids;
 }
 
 function getUsedCastIdsInActuals() {
@@ -680,12 +690,7 @@ async function saveCast() {
     return;
   }
 
-  await addHistory(
-    null,
-    null,
-    editingCastId ? "update_cast" : "create_cast",
-    editingCastId ? "キャストを更新" : "キャストを作成"
-  );
+  await addHistory(null, null, editingCastId ? "update_cast" : "create_cast", editingCastId ? "キャストを更新" : "キャストを作成");
   resetCastForm();
   await loadCasts();
 }
@@ -805,7 +810,7 @@ async function importCastCsvFile() {
     console.log("CSV rows:", rows);
 
     const payload = rows
-      .map(row => {
+      .map((row, index) => {
         const lat = toNullableNumber(row.latitude);
         const lng = toNullableNumber(row.longitude);
         const address = String(row.address || "").trim();
@@ -816,9 +821,7 @@ async function importCastCsvFile() {
           phone: String(row.phone || "").trim(),
           address,
           area: String(row.area || "").trim() || guessArea(lat, lng, address) || "",
-          distance_km:
-            toNullableNumber(row.distance_km) ??
-            (isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null),
+          distance_km: toNullableNumber(row.distance_km),
           latitude: lat,
           longitude: lng,
           memo: String(row.memo || "").trim(),
@@ -856,6 +859,7 @@ async function importCastCsvFile() {
   }
 }
 
+
 function applyCastLatLng() {
   const parsed = parseLatLngText(els.castLatLngText?.value || "");
   if (!parsed) {
@@ -866,9 +870,6 @@ function applyCastLatLng() {
   if (els.castLng) els.castLng.value = parsed.lng;
   if (els.castArea && !els.castArea.value.trim()) {
     els.castArea.value = guessArea(parsed.lat, parsed.lng, els.castAddress?.value || "");
-  }
-  if (els.castDistanceKm && !els.castDistanceKm.value.trim()) {
-    els.castDistanceKm.value = String(estimateRoadKmFromStation(parsed.lat, parsed.lng));
   }
 }
 
@@ -943,12 +944,7 @@ async function saveVehicle() {
     return;
   }
 
-  await addHistory(
-    null,
-    null,
-    editingVehicleId ? "update_vehicle" : "create_vehicle",
-    editingVehicleId ? "車両を更新" : "車両を登録"
-  );
+  await addHistory(null, null, editingVehicleId ? "update_vehicle" : "create_vehicle", editingVehicleId ? "車両を更新" : "車両を登録");
   resetVehicleForm();
   await loadVehicles();
 }
@@ -1098,14 +1094,10 @@ async function loadPlansByDate(dateStr) {
 function renderPlanCastSelect() {
   if (!els.planCastSelect) return;
   const plannedIds = getPlannedCastIds();
-  const editingPlan = editingPlanId
-    ? currentPlansCache.find(x => Number(x.id) === Number(editingPlanId))
-    : null;
-  const editingCastIdForPlan = Number(editingPlan?.cast_id || 0);
 
   els.planCastSelect.innerHTML = `<option value="">選択してください</option>`;
   allCastsCache
-    .filter(cast => Number(cast.id) === editingCastIdForPlan || !plannedIds.has(Number(cast.id)))
+    .filter(cast => Number(cast.id) === Number(editingPlanId ? currentPlansCache.find(x => Number(x.id) === Number(editingPlanId))?.cast_id : 0) || !plannedIds.has(Number(cast.id)))
     .forEach(cast => {
       const option = document.createElement("option");
       option.value = cast.id;
@@ -1120,11 +1112,14 @@ function renderPlanCastSelect() {
 function renderPlanSelect() {
   if (!els.planSelect) return;
   const targetDate = els.actualDate?.value || todayStr();
+  const doneCastIds = getDoneCastIdsInActuals();
 
   els.planSelect.innerHTML = `<option value="">予定から選択</option>`;
+
   currentPlansCache
     .filter(plan => plan.plan_date === targetDate)
     .filter(plan => plan.status === "planned")
+    .filter(plan => !doneCastIds.has(Number(plan.cast_id)))
     .forEach(plan => {
       const option = document.createElement("option");
       option.value = plan.id;
@@ -1171,12 +1166,7 @@ async function savePlan() {
     return;
   }
 
-  await addHistory(
-    null,
-    null,
-    editingPlanId ? "update_plan" : "create_plan",
-    editingPlanId ? "予定を更新" : "予定を作成"
-  );
+  await addHistory(null, null, editingPlanId ? "update_plan" : "create_plan", editingPlanId ? "予定を更新" : "予定を作成");
   resetPlanForm();
   await loadPlansByDate(planDate);
 }
@@ -1311,15 +1301,11 @@ function fillActualForm(actual) {
 
 function renderCastSelects() {
   const usedCastIds = getUsedCastIdsInActuals();
-  const editingActual = editingActualId
-    ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))
-    : null;
-  const editingCastIdForActual = Number(editingActual?.cast_id || 0);
 
   if (els.castSelect) {
     els.castSelect.innerHTML = `<option value="">選択してください</option>`;
     allCastsCache
-      .filter(cast => Number(cast.id) === editingCastIdForActual || !usedCastIds.has(Number(cast.id)))
+      .filter(cast => Number(cast.id) === Number(editingActualId ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))?.cast_id : 0) || !usedCastIds.has(Number(cast.id)))
       .forEach(cast => {
         const option = document.createElement("option");
         option.value = cast.id;
@@ -1415,18 +1401,7 @@ async function saveActual() {
   const distanceKm = toNullableNumber(els.actualDistanceKm?.value);
   const status = els.actualStatus?.value || "pending";
   const note = els.actualNote?.value.trim() || "";
-
-  const existingActual = editingActualId
-    ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))
-    : null;
-
-  const stopOrder = existingActual
-    ? Number(existingActual.stop_order || 1)
-    : currentActualsCache.filter(
-        x =>
-          Number(x.actual_hour) === hour &&
-          Number(x.id) !== Number(editingActualId || 0)
-      ).length + 1;
+  const stopOrder = currentActualsCache.filter(x => Number(x.actual_hour) === hour).length + 1;
 
   const payload = {
     dispatch_id: currentDispatchId,
@@ -1454,12 +1429,7 @@ async function saveActual() {
     return;
   }
 
-  await addHistory(
-    currentDispatchId,
-    editingActualId || null,
-    editingActualId ? "update_actual" : "create_actual",
-    editingActualId ? "実際の送りを更新" : "実際の送りを追加"
-  );
+  await addHistory(currentDispatchId, editingActualId || null, editingActualId ? "update_actual" : "create_actual", editingActualId ? "実際の送りを更新" : "実際の送りを追加");
   resetActualForm();
   await loadActualsByDate(dateStr);
 }
@@ -1476,13 +1446,52 @@ async function deleteActual(itemId) {
 }
 
 async function updateActualStatus(itemId, status) {
-  const { error } = await supabaseClient.from("dispatch_items").update({ status }).eq("id", itemId);
+  const item = currentActualsCache.find(x => Number(x.id) === Number(itemId));
+  if (!item) {
+    alert("対象のActualが見つかりません");
+    return;
+  }
+
+  const { error } = await supabaseClient
+    .from("dispatch_items")
+    .update({ status })
+    .eq("id", itemId);
+
   if (error) {
     alert(error.message);
     return;
   }
+
+  const targetPlan = currentPlansCache.find(plan =>
+    Number(plan.cast_id) === Number(item.cast_id) &&
+    plan.plan_date === (els.actualDate?.value || todayStr()) &&
+    Number(plan.plan_hour) === Number(item.actual_hour ?? -1)
+  );
+
+  if (targetPlan) {
+    let nextPlanStatus = targetPlan.status;
+
+    if (status === "done") {
+      nextPlanStatus = "done";
+    } else if (status === "cancel") {
+      nextPlanStatus = "planned";
+    } else if (status === "pending") {
+      nextPlanStatus = "assigned";
+    }
+
+    const { error: planError } = await supabaseClient
+      .from("dispatch_plans")
+      .update({ status: nextPlanStatus })
+      .eq("id", targetPlan.id);
+
+    if (planError) {
+      console.error(planError);
+    }
+  }
+
   await addHistory(currentDispatchId, itemId, "update_actual_status", `Actual状態を ${status} に変更`);
   await loadActualsByDate(els.actualDate?.value || todayStr());
+  await loadPlansByDate(els.planDate?.value || todayStr());
 }
 
 async function addPlanToActual() {
@@ -1502,13 +1511,17 @@ async function addPlanToActual() {
     alert("そのキャストはすでにActualにあります");
     return;
   }
+  const doneCastIds = getDoneCastIdsInActuals();
+if (doneCastIds.has(Number(plan.cast_id))) {
+  alert("このキャストはすでに送り完了です");
+  return;
+}
 
   const payload = {
     dispatch_id: currentDispatchId,
     cast_id: plan.cast_id,
     actual_hour: Number(plan.plan_hour || 0),
-    stop_order:
-      currentActualsCache.filter(x => Number(x.actual_hour) === Number(plan.plan_hour || 0)).length + 1,
+    stop_order: currentActualsCache.filter(x => Number(x.actual_hour) === Number(plan.plan_hour || 0)).length + 1,
     pickup_label: ORIGIN_LABEL,
     destination_address: plan.destination_address || plan.casts?.address || "",
     destination_area: plan.planned_area || "無し",
@@ -1720,49 +1733,36 @@ function buildMonthlyDistanceMapForCurrentMonth() {
 }
 
 function optimizeAssignments(items, vehicles, monthlyMap) {
+  const assignments = [];
   const working = vehicles.filter(v => v.status !== "maintenance");
-  const activeItems = [...items]
-    .filter(item => !["done", "cancel"].includes(normalizeStatus(item.status)))
-    .sort((a, b) => {
-      const ah = Number(a.actual_hour ?? 0);
-      const bh = Number(b.actual_hour ?? 0);
-      if (ah !== bh) return ah - bh;
 
+  const sorted = [...items]
+    .filter(item => normalizeStatus(item.status) !== "done" && normalizeStatus(item.status) !== "cancel")
+    .sort((a, b) => {
       const aDist = Number(a.distance_km || 9999);
       const bDist = Number(b.distance_km || 9999);
       if (aDist !== bDist) return aDist - bDist;
-
-      return Number(a.id) - Number(b.id);
+      return Number(a.actual_hour || 0) - Number(b.actual_hour || 0);
     });
 
-  const assignments = [];
-
-  function getVehicleHourLoad(vehicleId, hour) {
-    return assignments.filter(
-      a => Number(a.vehicle_id) === Number(vehicleId) && Number(a.actual_hour) === Number(hour)
-    ).length;
-  }
-
-  function getVehicleTotalAssigned(vehicleId) {
+  function getLoad(vehicleId) {
     return assignments.filter(a => Number(a.vehicle_id) === Number(vehicleId)).length;
   }
 
-  function getVehicleAssignedMaxDistance(vehicleId) {
+  function getMaxDistance(vehicleId) {
     const rows = assignments.filter(a => Number(a.vehicle_id) === Number(vehicleId));
     if (!rows.length) return 0;
     return Math.max(...rows.map(r => Number(r.distance_km || 0)));
   }
 
-  activeItems.forEach(item => {
-    let bestVehicle = null;
+  sorted.forEach(item => {
+    let best = null;
     let bestScore = Infinity;
 
     working.forEach(vehicle => {
-      const seatCapacity = Number(vehicle.seat_capacity || 4);
-      const hour = Number(item.actual_hour ?? 0);
-
-      const sameHourLoad = getVehicleHourLoad(vehicle.id, hour);
-      if (sameHourLoad >= seatCapacity) return;
+      const capacity = Number(vehicle.seat_capacity || 4);
+      const load = getLoad(vehicle.id);
+      if (load >= capacity) return;
 
       const monthly = monthlyMap.get(Number(vehicle.id)) || {
         totalDistance: 0,
@@ -1770,43 +1770,28 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         avgDistance: 0
       };
 
-      const vehicleArea = String(vehicle.vehicle_area || "");
-      const destArea = String(item.destination_area || "");
-      const itemDistance = Number(item.distance_km || 0);
-
       let score = 0;
-      score += sameHourLoad * 30;
-      score += getVehicleTotalAssigned(vehicle.id) * 8;
-      score += monthly.avgDistance * 0.25;
-      score += getVehicleAssignedMaxDistance(vehicle.id) * 1.5;
-      score += itemDistance;
+      score += load * 20;
+      score += getMaxDistance(vehicle.id) * 4;
+      score += monthly.avgDistance * 0.2;
+      score += Number(item.distance_km || 0);
 
-      if (vehicleArea && destArea) {
-        if (destArea.includes(vehicleArea) || vehicleArea.includes(destArea)) {
-          score -= 18;
-        }
-      }
-
-      const homeArea = String(vehicle.home_area || "");
-      if (homeArea && destArea) {
-        if (destArea.includes(homeArea) || homeArea.includes(destArea)) {
-          score -= 6;
-        }
+      if ((vehicle.vehicle_area || "") && (item.destination_area || "")) {
+        if ((item.destination_area || "").includes(vehicle.vehicle_area || "")) score -= 8;
       }
 
       if (score < bestScore) {
         bestScore = score;
-        bestVehicle = vehicle;
+        best = vehicle;
       }
     });
 
-    if (bestVehicle) {
+    if (best) {
       assignments.push({
         item_id: item.id,
-        actual_hour: Number(item.actual_hour ?? 0),
-        vehicle_id: bestVehicle.id,
-        vehicle_code: bestVehicle.plate_number || "",
-        driver_name: bestVehicle.driver_name || "",
+        vehicle_id: best.id,
+        vehicle_code: best.plate_number || "",
+        driver_name: best.driver_name || "",
         distance_km: Number(item.distance_km || 0)
       });
     }
@@ -1830,28 +1815,16 @@ async function runAutoDispatch() {
   const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
   const assignments = optimizeAssignments(currentActualsCache, selectedVehicles, monthlyMap);
 
-  const groupedOrderMap = new Map();
-
-  for (const a of assignments) {
-    const key = `${a.vehicle_id}_${a.actual_hour}`;
-    const nextOrder = (groupedOrderMap.get(key) || 0) + 1;
-    groupedOrderMap.set(key, nextOrder);
-
-    const { error } = await supabaseClient
+  for (let i = 0; i < assignments.length; i++) {
+    const a = assignments[i];
+    await supabaseClient
       .from("dispatch_items")
       .update({
         vehicle_id: a.vehicle_id,
         driver_name: a.driver_name,
-        stop_order: nextOrder,
-        status: "pending"
+        stop_order: i + 1
       })
       .eq("id", a.item_id);
-
-    if (error) {
-      console.error(error);
-      alert(`配車更新エラー: ${error.message}`);
-      return;
-    }
   }
 
   await addHistory(currentDispatchId, null, "auto_dispatch", "自動配車を実行");
@@ -1963,12 +1936,7 @@ function buildCopyResultText() {
   vehicles.forEach(vehicle => {
     const rows = activeItems
       .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-      .sort((a, b) => {
-        const ah = Number(a.actual_hour || 0);
-        const bh = Number(b.actual_hour || 0);
-        if (ah !== bh) return ah - bh;
-        return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-      });
+      .sort((a, b) => Number(a.actual_hour || 0) - Number(b.actual_hour || 0));
 
     lines.push(`${vehicle.line_id ? vehicle.line_id + " " : ""}${vehicle.driver_name || vehicle.plate_number || ""}`);
     if (!rows.length) {
@@ -2018,15 +1986,8 @@ async function clearAllActuals() {
     return;
   }
 
-  await supabaseClient
-    .from("dispatch_plans")
-    .update({ status: "planned" })
-    .eq("plan_date", els.actualDate?.value || todayStr())
-    .eq("status", "assigned");
-
   await addHistory(currentDispatchId, null, "clear_actual", "Actualを全消去");
   await loadActualsByDate(els.actualDate?.value || todayStr());
-  await loadPlansByDate(els.planDate?.value || todayStr());
 }
 
 async function confirmDailyToMonthly() {
@@ -2040,64 +2001,30 @@ async function confirmDailyToMonthly() {
   doneRows.forEach(row => {
     const vehicleId = Number(row.vehicle_id);
     if (!vehicleId) return;
-
     const prev = grouped.get(vehicleId) || {
       distance: 0,
       driver_name: row.driver_name || ""
     };
-
     prev.distance += Number(row.distance_km || 0);
-    if (!prev.driver_name && row.driver_name) {
-      prev.driver_name = row.driver_name;
-    }
-
     grouped.set(vehicleId, prev);
   });
 
   const reportDate = els.dispatchDate?.value || todayStr();
 
   for (const [vehicleId, info] of grouped.entries()) {
-    const { data: existing, error: selectError } = await supabaseClient
+    const { error } = await supabaseClient
       .from("vehicle_daily_reports")
-      .select("id, distance_km")
-      .eq("report_date", reportDate)
-      .eq("vehicle_id", vehicleId)
-      .maybeSingle();
+      .insert({
+        report_date: reportDate,
+        vehicle_id: vehicleId,
+        driver_name: info.driver_name || null,
+        distance_km: Number(info.distance.toFixed(1)),
+        note: "当日運用の完了データから自動反映",
+        created_by: currentUser.id
+      });
 
-    if (selectError) {
-      console.error(selectError);
-      continue;
-    }
-
-    if (existing) {
-      const { error: updateError } = await supabaseClient
-        .from("vehicle_daily_reports")
-        .update({
-          driver_name: info.driver_name || null,
-          distance_km: Number(info.distance.toFixed(1)),
-          note: "当日運用の完了データから更新",
-          created_by: currentUser.id
-        })
-        .eq("id", existing.id);
-
-      if (updateError) {
-        console.error(updateError);
-      }
-    } else {
-      const { error: insertError } = await supabaseClient
-        .from("vehicle_daily_reports")
-        .insert({
-          report_date: reportDate,
-          vehicle_id: vehicleId,
-          driver_name: info.driver_name || null,
-          distance_km: Number(info.distance.toFixed(1)),
-          note: "当日運用の完了データから自動反映",
-          created_by: currentUser.id
-        });
-
-      if (insertError) {
-        console.error(insertError);
-      }
+    if (error) {
+      console.error(error);
     }
   }
 
@@ -2280,6 +2207,7 @@ async function resetAllDataDanger() {
   if (!window.confirm("本当に全消去しますか？")) return;
 
   try {
+    // まず履歴以外を消す
     const deleteTargets = [
       "dispatch_items",
       "dispatch_plans",
@@ -2301,6 +2229,7 @@ async function resetAllDataDanger() {
       }
     }
 
+    // 履歴は最後に消す
     const { error: historyDeleteError } = await supabaseClient
       .from("dispatch_history")
       .delete()
@@ -2312,6 +2241,7 @@ async function resetAllDataDanger() {
       return;
     }
 
+    // 画面側の状態も初期化
     currentDispatchId = null;
     activeVehicleIdsForToday = new Set();
 
@@ -2376,10 +2306,7 @@ function setupEvents() {
   els.cancelPlanEditBtn?.addEventListener("click", resetPlanForm);
   els.clearPlansBtn?.addEventListener("click", clearAllPlans);
   els.planDate?.addEventListener("change", async () => {
-    const dateStr = els.planDate.value || todayStr();
-    if (els.dispatchDate) els.dispatchDate.value = dateStr;
-    if (els.actualDate) els.actualDate.value = dateStr;
-    await loadPlansByDate(dateStr);
+    await loadPlansByDate(els.planDate.value || todayStr());
   });
 
   els.planSelect?.addEventListener("change", populateActualFromPlanSelect);
@@ -2431,8 +2358,6 @@ function setupEvents() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    console.log("SUPABASE_URL:", SUPABASE_URL);
-
     const ok = await ensureAuth();
     if (!ok) return;
 
@@ -2443,10 +2368,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     resetVehicleForm();
     resetPlanForm();
     resetActualForm();
-
-    if (els.originLabelText) {
-      els.originLabelText.value = ORIGIN_LABEL || "松戸駅";
-    }
 
     const today = todayStr();
     if (els.dispatchDate) els.dispatchDate.value = today;
