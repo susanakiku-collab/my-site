@@ -10,16 +10,14 @@
   <div class="app-shell">
     <header class="app-header">
       <div class="brand-wrap">
-        <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
-        <p class="app-subtitle">緯度経度対応 / 方面自動判定 / 自動配車 / ルート確認</p>
+        <h1 class="app-title">THEMIS AI Dispatch 🚐</h1>
+        <p class="app-subtitle">配車AI / 方面クラスタリング / ルート最適化</p>
       </div>
 
       <div class="header-actions">
         <button id="exportAllBtn" class="btn ghost">エクスポート</button>
         <button id="importAllBtn" class="btn ghost">インポート</button>
-        <input id="importAllFileInput" type="file" accept=".json,application/json" class="hidden" />
-        <button id="exportCsvBtnHeader" class="btn ghost">キャストCSV</button>
-        <button id="dangerResetBtn" class="btn danger">全消去</button>
+        <button id="dangerResetBtn" class="btn danger">全削除</button>
       </div>
     </header>
 
@@ -30,7 +28,6 @@
       <button class="main-tab" data-tab="dailyTab">当日運用</button>
       <button class="main-tab" data-tab="plansTab">予定表</button>
       <button class="main-tab" data-tab="actualTab">実際の送り</button>
-      <button class="main-tab" data-tab="settingsTab">設定</button>
     </nav>
 
     <main class="page-body">
@@ -40,46 +37,20 @@
           <section class="panel-card">
             <h2>今日の状況</h2>
             <div class="status-chips">
-              <span class="chip"><span id="homeCastCount">0</span>人</span>
-              <span class="chip">車両 <span id="homeVehicleCount">0</span>台</span>
-              <span class="chip">Plan <span id="homePlanCount">0</span>件</span>
-              <span class="chip">Actual <span id="homeActualCount">0</span>件</span>
-              <span class="chip">完了 <span id="homeDoneCount">0</span>件</span>
-              <span class="chip">キャンセル <span id="homeCancelCount">0</span>件</span>
+              <span class="chip">キャスト <span id="homeCastCount">0</span></span>
+              <span class="chip">車両 <span id="homeVehicleCount">0</span></span>
+              <span class="chip">予定 <span id="homePlanCount">0</span></span>
+              <span class="chip">実績 <span id="homeActualCount">0</span></span>
             </div>
+          </section>
 
+          <section class="panel-card">
+            <h2>クイック操作</h2>
             <div class="quick-actions">
-              <button class="btn primary go-tab-btn" data-go-tab="dailyTab">当日運用へ</button>
-              <button class="btn ghost go-tab-btn" data-go-tab="plansTab">予定表へ</button>
-              <button class="btn ghost go-tab-btn" data-go-tab="actualTab">実際の送りへ</button>
+              <button class="btn primary go-tab-btn" data-go-tab="dailyTab">当日運用</button>
+              <button class="btn ghost go-tab-btn" data-go-tab="plansTab">予定表</button>
+              <button class="btn ghost go-tab-btn" data-go-tab="actualTab">実績</button>
             </div>
-          </section>
-
-          <section class="panel-card">
-            <h2>月間（車両別）</h2>
-            <div id="homeMonthlyVehicleList" class="home-monthly-list"></div>
-            <div class="panel-actions">
-              <button id="resetMonthlySummaryBtn" class="btn danger">月間距離/出勤日数リセット</button>
-            </div>
-          </section>
-
-          <section class="panel-card">
-            <h2>運用メモ</h2>
-            <ul class="memo-list">
-              <li>キャストには住所・緯度経度・方面を保存</li>
-              <li>完了した送りは次回の自動配車から除外</li>
-              <li>予定表は時間別・方面別で整理表示</li>
-              <li>ルートボタンで松戸駅起点のGoogleマップを開く</li>
-              <li>自動配車後に車両変更も可能</li>
-            </ul>
-          </section>
-
-          <section class="panel-card">
-            <h2>補足</h2>
-            <p class="soft-text">
-              緯度経度は住所から自動取得し、方面判定や距離推定に利用します。<br />
-              実際の送りで「完了」にしたキャストは、配車結果から外れます。
-            </p>
           </section>
         </div>
       </section>
@@ -87,44 +58,37 @@
       <!-- キャスト -->
       <section id="castsTab" class="page-panel">
         <section class="panel-card">
-          <div class="section-head">
-            <h2>キャスト（事前登録）</h2>
-          </div>
+          <h2>キャスト登録</h2>
 
           <div class="form-grid two-col">
             <div class="field">
               <label for="castName">氏名</label>
-              <input id="castName" type="text" placeholder="例：佐藤" />
+              <input id="castName" type="text" />
             </div>
 
             <div class="field">
-              <label for="castDistanceKm">想定距離(km)</label>
-              <input id="castDistanceKm" type="number" step="0.1" placeholder="例：18" />
+              <label for="castDistanceKm">距離</label>
+              <input id="castDistanceKm" type="number" step="0.1" />
             </div>
 
             <div class="field full">
               <label for="castAddress">住所</label>
-              <input id="castAddress" type="text" placeholder="例：千葉県柏市若柴..." />
+              <input id="castAddress" type="text" />
             </div>
 
             <div class="field">
               <label for="castArea">方面</label>
-              <input id="castArea" type="text" placeholder="自動判定 / 手修正可" />
-            </div>
-
-            <div class="field">
-              <label for="castMemo">メモ</label>
-              <input id="castMemo" type="text" placeholder="例：新人 / 注意事項など" />
-            </div>
-
-            <div class="field">
-              <label for="castLatLngText">座標貼り付け</label>
-              <input id="castLatLngText" type="text" placeholder="例：35.12345,139.12345" />
+              <input id="castArea" type="text" />
             </div>
 
             <div class="field">
               <label for="castPhone">電話</label>
-              <input id="castPhone" type="text" placeholder="任意" />
+              <input id="castPhone" type="text" />
+            </div>
+
+            <div class="field full">
+              <label for="castMemo">メモ</label>
+              <input id="castMemo" type="text" />
             </div>
 
             <input id="castLat" type="hidden" />
@@ -132,24 +96,17 @@
           </div>
 
           <div class="action-row">
-            <button id="saveCastBtn" class="btn primary">追加/更新</button>
-            <button id="guessAreaBtn" class="btn ghost">住所から方面判定</button>
-            <button id="applyLatLngBtn" class="btn ghost">座標反映</button>
-            <button id="openGoogleMapBtn" class="btn ghost">ルート</button>
-            <button id="cancelEditBtn" class="btn ghost hidden">入力リセット</button>
-            <button id="importCsvBtn" class="btn ghost">インポート</button>
-            <button id="exportCsvBtn" class="btn ghost">キャストCSV</button>
-            <input id="csvFileInput" type="file" accept=".csv,text/csv" class="hidden" />
+            <button id="saveCastBtn" class="btn primary">保存</button>
           </div>
 
           <div class="table-wrap">
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>氏名</th>
+                  <th>名前</th>
                   <th>住所</th>
                   <th>方面</th>
-                  <th>想定距離(km)</th>
+                  <th>距離</th>
                   <th>メモ</th>
                   <th>操作</th>
                 </tr>
@@ -163,39 +120,37 @@
       <!-- 車両 -->
       <section id="vehiclesTab" class="page-panel">
         <section class="panel-card">
-          <div class="section-head">
-            <h2>車両マスタ</h2>
-          </div>
+          <h2>車両管理</h2>
 
-          <div class="form-grid five-col">
+          <div class="form-grid three-col">
             <div class="field">
               <label for="vehiclePlateNumber">車両ID</label>
-              <input id="vehiclePlateNumber" type="text" placeholder="例：車A" />
+              <input id="vehiclePlateNumber" type="text" />
             </div>
 
             <div class="field">
               <label for="vehicleArea">担当方面</label>
-              <input id="vehicleArea" type="text" placeholder="例：柏方面" />
+              <input id="vehicleArea" type="text" />
             </div>
 
             <div class="field">
               <label for="vehicleHomeArea">帰宅方面</label>
-              <input id="vehicleHomeArea" type="text" placeholder="例：柏方面" />
+              <input id="vehicleHomeArea" type="text" />
             </div>
 
             <div class="field">
-              <label for="vehicleSeatCapacity">乗車可能人員</label>
-              <input id="vehicleSeatCapacity" type="number" min="1" max="10" placeholder="例：4" />
+              <label for="vehicleSeatCapacity">定員</label>
+              <input id="vehicleSeatCapacity" type="number" />
             </div>
 
             <div class="field">
-              <label for="vehicleDriverName">ドライバー名</label>
-              <input id="vehicleDriverName" type="text" placeholder="例：田中" />
+              <label for="vehicleDriverName">ドライバー</label>
+              <input id="vehicleDriverName" type="text" />
             </div>
 
             <div class="field">
               <label for="vehicleLineId">LINE ID</label>
-              <input id="vehicleLineId" type="text" placeholder="例：@kikuchi" />
+              <input id="vehicleLineId" type="text" />
             </div>
 
             <div class="field">
@@ -209,16 +164,12 @@
 
             <div class="field full">
               <label for="vehicleMemo">メモ</label>
-              <input id="vehicleMemo" type="text" placeholder="任意" />
+              <input id="vehicleMemo" type="text" />
             </div>
           </div>
 
           <div class="action-row">
-            <button id="saveVehicleBtn" class="btn primary">追加/更新</button>
-            <button id="cancelVehicleEditBtn" class="btn ghost hidden">入力リセット</button>
-            <button id="importVehicleCsvBtn" class="btn ghost">インポート</button>
-            <button id="exportVehicleCsvBtn" class="btn ghost">車両CSV</button>
-            <input id="vehicleCsvFileInput" type="file" accept=".csv,text/csv" class="hidden" />
+            <button id="saveVehicleBtn" class="btn primary">保存</button>
           </div>
 
           <div class="table-wrap">
@@ -226,13 +177,13 @@
               <thead>
                 <tr>
                   <th>車両</th>
-                  <th>担当方面</th>
-                  <th>帰宅方面</th>
+                  <th>方面</th>
+                  <th>帰宅</th>
                   <th>定員</th>
                   <th>ドライバー</th>
-                  <th>月間距離(km)</th>
+                  <th>月間距離</th>
                   <th>出勤日数</th>
-                  <th>1日平均(km)</th>
+                  <th>平均</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -249,30 +200,15 @@
             <h2>当日運用</h2>
 
             <div class="daily-top-actions">
-              <div class="field compact">
-                <label for="dispatchDate">日付：</label>
-                <input id="dispatchDate" type="date" />
-              </div>
-
+              <input type="date" id="dispatchDate" />
               <button id="optimizeBtn" class="btn primary">自動配車</button>
-              <button id="confirmDailyBtn" class="btn ghost">確定（月間へ反映）</button>
-              <button id="clearActualBtn" class="btn danger">Actual全消去</button>
-              <button id="checkAllVehiclesBtn" class="btn ghost">全選択</button>
-              <button id="uncheckAllVehiclesBtn" class="btn danger">全解除</button>
+              <button id="copyResultBtn" class="btn ghost">コピー</button>
             </div>
           </div>
 
-          <div class="daily-vehicles-block">
-            <h3>本日使用する車両（出勤車）</h3>
-            <div id="dailyVehicleChecklist" class="vehicle-checklist"></div>
-          </div>
+          <div id="dailyVehicleChecklist" class="vehicle-checklist"></div>
 
           <div class="divider"></div>
-
-          <div class="result-head-row">
-            <h3>配車結果</h3>
-            <button id="copyResultBtn" class="btn ghost">結果をコピー</button>
-          </div>
 
           <div id="dailyDispatchResult" class="dispatch-result-cards"></div>
         </section>
@@ -281,21 +217,16 @@
       <!-- 予定表 -->
       <section id="plansTab" class="page-panel">
         <section class="panel-card">
-          <div class="daily-header-row">
-            <h2>予定表</h2>
+          <h2>予定表</h2>
 
-            <div class="daily-top-actions">
-              <div class="field compact">
-                <label for="planDate">日付：</label>
-                <input id="planDate" type="date" />
-              </div>
-              <button id="clearPlansBtn" class="btn danger">予定を全消去</button>
-            </div>
+          <div class="field compact">
+            <label for="planDate">日付</label>
+            <input type="date" id="planDate" />
           </div>
 
           <div class="form-grid three-col">
             <div class="field">
-              <label for="planCastSelect">キャスト選択</label>
+              <label for="planCastSelect">キャスト</label>
               <select id="planCastSelect">
                 <option value="">選択してください</option>
               </select>
@@ -304,60 +235,52 @@
             <div class="field">
               <label for="planHour">時間</label>
               <select id="planHour">
-                <option value="0">0時</option>
-                <option value="1">1時</option>
-                <option value="2">2時</option>
-                <option value="3">3時</option>
-                <option value="4">4時</option>
-                <option value="5">5時</option>
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
               </select>
             </div>
 
             <div class="field">
-              <label for="planDistanceKm">距離上書き(km)</label>
-              <input id="planDistanceKm" type="number" step="0.1" placeholder="例：22" />
+              <label for="planDistanceKm">距離</label>
+              <input id="planDistanceKm" type="number" step="0.1" />
             </div>
 
             <div class="field full">
-              <label for="planAddress">送り先住所</label>
-              <input id="planAddress" type="text" placeholder="キャスト住所が入ります" />
+              <label for="planAddress">住所</label>
+              <input id="planAddress" type="text" />
             </div>
 
             <div class="field">
               <label for="planArea">方面</label>
-              <input id="planArea" type="text" placeholder="自動判定 / 手修正可" />
+              <input id="planArea" type="text" />
             </div>
 
             <div class="field">
               <label for="planNote">メモ</label>
-              <input id="planNote" type="text" placeholder="例：同乗 / 注意事項など" />
+              <input id="planNote" type="text" />
             </div>
           </div>
 
           <div class="action-row">
-            <button id="savePlanBtn" class="btn primary">追加/更新</button>
-            <button id="guessPlanAreaBtn" class="btn ghost">住所から方面判定</button>
-            <button id="cancelPlanEditBtn" class="btn ghost hidden">入力リセット</button>
+            <button id="savePlanBtn" class="btn primary">追加</button>
           </div>
 
-          <div id="plansGroupedTable" class="table-wrap"></div>
+          <div id="plansGroupedTable"></div>
         </section>
       </section>
 
       <!-- 実際の送り -->
       <section id="actualTab" class="page-panel">
         <section class="panel-card">
-          <div class="daily-header-row">
-            <h2>実際の送り</h2>
+          <h2>実際の送り</h2>
 
-            <div class="daily-top-actions">
-              <div class="field compact">
-                <label for="actualDate">日付：</label>
-                <input id="actualDate" type="date" />
-              </div>
-              <button id="addSelectedPlanBtn" class="btn ghost">予定から追加</button>
-              <button id="copyActualTableBtn" class="btn ghost">表をコピー</button>
-            </div>
+          <div class="field compact">
+            <label for="actualDate">日付</label>
+            <input type="date" id="actualDate" />
           </div>
 
           <div class="form-grid three-col">
@@ -369,7 +292,7 @@
             </div>
 
             <div class="field">
-              <label for="castSelect">キャスト選択</label>
+              <label for="castSelect">キャスト</label>
               <select id="castSelect">
                 <option value="">選択してください</option>
               </select>
@@ -378,85 +301,55 @@
             <div class="field">
               <label for="actualHour">時間</label>
               <select id="actualHour">
-                <option value="0">0時</option>
-                <option value="1">1時</option>
-                <option value="2">2時</option>
-                <option value="3">3時</option>
-                <option value="4">4時</option>
-                <option value="5">5時</option>
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
               </select>
             </div>
 
             <div class="field">
-              <label for="actualDistanceKm">距離上書き(km)</label>
-              <input id="actualDistanceKm" type="number" step="0.1" placeholder="例：22" />
+              <label for="actualAddress">住所</label>
+              <input id="actualAddress" type="text" />
+            </div>
+
+            <div class="field">
+              <label for="actualArea">方面</label>
+              <input id="actualArea" type="text" />
+            </div>
+
+            <div class="field">
+              <label for="actualDistanceKm">距離</label>
+              <input id="actualDistanceKm" type="number" step="0.1" />
             </div>
 
             <div class="field">
               <label for="actualStatus">状態</label>
               <select id="actualStatus">
-                <option value="pending">未完了</option>
-                <option value="done">完了</option>
-                <option value="cancel">キャンセル</option>
+                <option value="pending">pending</option>
+                <option value="done">done</option>
+                <option value="cancel">cancel</option>
               </select>
             </div>
 
             <div class="field full">
-              <label for="actualAddress">送り先住所</label>
-              <input id="actualAddress" type="text" placeholder="キャスト住所が入ります" />
-            </div>
-
-            <div class="field">
-              <label for="actualArea">方面</label>
-              <input id="actualArea" type="text" placeholder="自動判定 / 手修正可" />
-            </div>
-
-            <div class="field">
               <label for="actualNote">メモ</label>
-              <input id="actualNote" type="text" placeholder="例：同乗 / 注意事項など" />
+              <input id="actualNote" type="text" />
             </div>
           </div>
 
           <div class="action-row">
-            <button id="saveActualBtn" class="btn primary">追加/更新</button>
-            <button id="guessActualAreaBtn" class="btn ghost">住所から方面判定</button>
-            <button id="cancelActualEditBtn" class="btn ghost hidden">入力リセット</button>
+            <button id="saveActualBtn" class="btn primary">追加</button>
+            <button id="addSelectedPlanBtn" class="btn ghost">予定→追加</button>
           </div>
 
-          <div id="actualTableWrap" class="table-wrap"></div>
+          <div id="actualTableWrap"></div>
 
           <div class="divider"></div>
 
-          <h3>時間帯 × 方面 一覧</h3>
-          <div id="actualTimeAreaMatrix" class="table-wrap"></div>
-        </section>
-      </section>
-
-      <!-- 設定 -->
-      <section id="settingsTab" class="page-panel">
-        <section class="panel-card">
-          <h2>設定</h2>
-
-          <div class="form-grid two-col">
-            <div class="field">
-              <label for="userEmail">ログイン中ユーザー</label>
-              <input id="userEmail" type="text" readonly />
-            </div>
-
-            <div class="field">
-              <label for="originLabelText">起点名</label>
-              <input id="originLabelText" type="text" value="松戸駅" readonly />
-            </div>
-          </div>
-
-          <div class="action-row">
-            <button id="logoutBtn" class="btn danger">ログアウト</button>
-          </div>
-
-          <div class="divider"></div>
-
-          <h3>履歴</h3>
-          <div id="historyList" class="history-list"></div>
+          <div id="actualTimeAreaMatrix"></div>
         </section>
       </section>
     </main>
