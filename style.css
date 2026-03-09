@@ -148,6 +148,10 @@ textarea{
   display:block;
 }
 
+.page-body{
+  width:100%;
+}
+
 .panel-grid{
   display:grid;
   gap:18px;
@@ -362,6 +366,7 @@ textarea{
   padding:14px 12px;
   border-bottom:1px solid rgba(255,255,255,.10);
   background:rgba(255,255,255,.02);
+  white-space:nowrap;
 }
 
 .data-table tbody td{
@@ -482,6 +487,7 @@ textarea{
 .vehicle-result-meta{
   color:#c7d3e6;
   font-size:13px;
+  line-height:1.6;
 }
 
 .vehicle-result-badges{
@@ -669,6 +675,7 @@ textarea{
 .matrix-table th{
   font-size:13px;
   font-weight:800;
+  white-space:nowrap;
 }
 
 .matrix-card{
