@@ -281,8 +281,80 @@ function classifyAreaByLatLng(lat, lng) {
   return "周辺";
 }
 
-function guessArea(lat, lng, address = "") {
-  return classifyAreaByAddress(address) || classifyAreaByLatLng(lat, lng);
+function normalizeAreaLabel(area) {
+  const value = String(area || "").trim();
+  if (!value) return "無し";
+
+  if (value.includes("柏")) return "柏方面";
+  if (value.includes("松戸")) return "松戸近郊";
+  if (value.includes("船橋")) return "船橋方面";
+  if (value.includes("市川")) return "市川方面";
+  if (value.includes("流山")) return "流山方面";
+  if (value.includes("八千代")) return "八千代方面";
+  if (value.includes("三郷")) return "三郷方面";
+  if (value.includes("守谷")) return "守谷方面";
+  if (value.includes("葛飾")) return "葛飾方面";
+  if (value.includes("都内") || value.includes("東京") || value.includes("江戸川")) return "都内方面";
+
+  return value;
+}
+
+function getVehicleAreaMatchScore(vehicle, area) {
+  const normalizedArea = normalizeAreaLabel(area);
+  const vehicleArea = normalizeAreaLabel(vehicle?.vehicle_area || "");
+  const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+
+  let score = 0;
+
+  if (vehicleArea && normalizedArea && vehicleArea === normalizedArea) {
+    score += 30;
+  }
+
+  if (homeArea && normalizedArea && homeArea === normalizedArea) {
+    score += 12;
+  }
+
+  return score;
+}
+
+function buildDispatchClusters(items) {
+  const activeItems = [...items]
+    .filter(item => !["done", "cancel"].includes(normalizeStatus(item.status)))
+    .map(item => ({
+      ...item,
+      cluster_hour: Number(item.actual_hour ?? 0),
+      cluster_area: normalizeAreaLabel(item.destination_area || "無し"),
+      cluster_distance: Number(item.distance_km || 0)
+    }));
+
+  const clusterMap = new Map();
+
+  activeItems.forEach(item => {
+    const key = `${item.cluster_hour}__${item.cluster_area}`;
+    if (!clusterMap.has(key)) {
+      clusterMap.set(key, {
+        key,
+        hour: item.cluster_hour,
+        area: item.cluster_area,
+        items: [],
+        totalDistance: 0,
+        count: 0
+      });
+    }
+
+    const cluster = clusterMap.get(key);
+    cluster.items.push(item);
+    cluster.totalDistance += item.cluster_distance;
+    cluster.count += 1;
+  });
+
+  return [...clusterMap.values()].sort((a, b) => {
+    if (a.hour !== b.hour) return a.hour - b.hour;
+
+    if (b.count !== a.count) return b.count - a.count;
+
+    return b.totalDistance - a.totalDistance;
+  });
 }
 
 function openGoogleMap(address) {
@@ -1734,69 +1806,149 @@ function buildMonthlyDistanceMapForCurrentMonth() {
 }
 
 function optimizeAssignments(items, vehicles, monthlyMap) {
+  const workingVehicles = vehicles.filter(v => v.status !== "maintenance");
+  const clusters = buildDispatchClusters(items);
   const assignments = [];
-  const working = vehicles.filter(v => v.status !== "maintenance");
 
-  const sorted = [...items]
-    .filter(item => normalizeStatus(item.status) !== "done" && normalizeStatus(item.status) !== "cancel")
-    .sort((a, b) => {
-      const aDist = Number(a.distance_km || 9999);
-      const bDist = Number(b.distance_km || 9999);
-      if (aDist !== bDist) return aDist - bDist;
-      return Number(a.actual_hour || 0) - Number(b.actual_hour || 0);
-    });
-
-  function getLoad(vehicleId) {
-    return assignments.filter(a => Number(a.vehicle_id) === Number(vehicleId)).length;
+  if (!workingVehicles.length || !clusters.length) {
+    return assignments;
   }
 
-  function getMaxDistance(vehicleId) {
-    const rows = assignments.filter(a => Number(a.vehicle_id) === Number(vehicleId));
-    if (!rows.length) return 0;
-    return Math.max(...rows.map(r => Number(r.distance_km || 0)));
-  }
+  const vehicleUsage = new Map();
 
-  sorted.forEach(item => {
-    let best = null;
-    let bestScore = Infinity;
-
-    working.forEach(vehicle => {
-      const capacity = Number(vehicle.seat_capacity || 4);
-      const load = getLoad(vehicle.id);
-      if (load >= capacity) return;
-
-      const monthly = monthlyMap.get(Number(vehicle.id)) || {
+  function getVehicleState(vehicleId) {
+    if (!vehicleUsage.has(vehicleId)) {
+      vehicleUsage.set(vehicleId, {
+        totalAssigned: 0,
         totalDistance: 0,
-        workedDays: 0,
-        avgDistance: 0
-      };
-
-      let score = 0;
-      score += load * 20;
-      score += getMaxDistance(vehicle.id) * 4;
-      score += monthly.avgDistance * 0.2;
-      score += Number(item.distance_km || 0);
-
-      if ((vehicle.vehicle_area || "") && (item.destination_area || "")) {
-        if ((item.destination_area || "").includes(vehicle.vehicle_area || "")) score -= 8;
-      }
-
-      if (score < bestScore) {
-        bestScore = score;
-        best = vehicle;
-      }
-    });
-
-    if (best) {
-      assignments.push({
-        item_id: item.id,
-        vehicle_id: best.id,
-        vehicle_code: best.plate_number || "",
-        driver_name: best.driver_name || "",
-        distance_km: Number(item.distance_km || 0)
+        hourLoads: new Map()
       });
     }
-  });
+    return vehicleUsage.get(vehicleId);
+  }
+
+  function getHourLoad(vehicleId, hour) {
+    const state = getVehicleState(vehicleId);
+    return Number(state.hourLoads.get(hour) || 0);
+  }
+
+  function addHourLoad(vehicleId, hour, count, distance) {
+    const state = getVehicleState(vehicleId);
+    state.totalAssigned += count;
+    state.totalDistance += distance;
+    state.hourLoads.set(hour, getHourLoad(vehicleId, hour) + count);
+  }
+
+  for (const cluster of clusters) {
+    const candidateScores = workingVehicles
+      .map(vehicle => {
+        const seatCapacity = Number(vehicle.seat_capacity || 4);
+        const sameHourLoad = getHourLoad(vehicle.id, cluster.hour);
+
+        if (sameHourLoad >= seatCapacity) return null;
+        if (sameHourLoad + cluster.count > seatCapacity) return null;
+
+        const monthly = monthlyMap.get(Number(vehicle.id)) || {
+          totalDistance: 0,
+          workedDays: 0,
+          avgDistance: 0
+        };
+
+        let score = 1000;
+
+        score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+        score += sameHourLoad * 35;
+        score += getVehicleState(vehicle.id).totalAssigned * 8;
+        score += getVehicleState(vehicle.id).totalDistance * 0.08;
+        score += monthly.avgDistance * 0.25;
+        score += cluster.totalDistance * 0.15;
+
+        return {
+          vehicle,
+          score
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.score - b.score);
+
+    if (candidateScores.length) {
+      const bestVehicle = candidateScores[0].vehicle;
+
+      const sortedItems = [...cluster.items].sort((a, b) => {
+        const aDist = Number(a.distance_km || 0);
+        const bDist = Number(b.distance_km || 0);
+        return aDist - bDist;
+      });
+
+      sortedItems.forEach(item => {
+        assignments.push({
+          item_id: item.id,
+          actual_hour: cluster.hour,
+          vehicle_id: bestVehicle.id,
+          vehicle_code: bestVehicle.plate_number || "",
+          driver_name: bestVehicle.driver_name || "",
+          distance_km: Number(item.distance_km || 0),
+          cluster_area: cluster.area
+        });
+      });
+
+      addHourLoad(bestVehicle.id, cluster.hour, cluster.count, cluster.totalDistance);
+      continue;
+    }
+
+    // 1台に収まらない場合は分割して割当
+    const splitItems = [...cluster.items].sort((a, b) => {
+      const aDist = Number(a.distance_km || 0);
+      const bDist = Number(b.distance_km || 0);
+      return aDist - bDist;
+    });
+
+    for (const item of splitItems) {
+      const perItemCandidates = workingVehicles
+        .map(vehicle => {
+          const seatCapacity = Number(vehicle.seat_capacity || 4);
+          const sameHourLoad = getHourLoad(vehicle.id, cluster.hour);
+          if (sameHourLoad >= seatCapacity) return null;
+
+          const monthly = monthlyMap.get(Number(vehicle.id)) || {
+            totalDistance: 0,
+            workedDays: 0,
+            avgDistance: 0
+          };
+
+          let score = 1000;
+          score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+          score += sameHourLoad * 35;
+          score += getVehicleState(vehicle.id).totalAssigned * 8;
+          score += getVehicleState(vehicle.id).totalDistance * 0.08;
+          score += monthly.avgDistance * 0.25;
+          score += Number(item.distance_km || 0) * 0.15;
+
+          return {
+            vehicle,
+            score
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.score - b.score);
+
+      if (!perItemCandidates.length) continue;
+
+      const bestVehicle = perItemCandidates[0].vehicle;
+
+      assignments.push({
+        item_id: item.id,
+        actual_hour: cluster.hour,
+        vehicle_id: bestVehicle.id,
+        vehicle_code: bestVehicle.plate_number || "",
+        driver_name: bestVehicle.driver_name || "",
+        distance_km: Number(item.distance_km || 0),
+        cluster_area: cluster.area
+      });
+
+      addHourLoad(bestVehicle.id, cluster.hour, 1, Number(item.distance_km || 0));
+    }
+  }
 
   return assignments;
 }
@@ -1850,11 +2002,16 @@ function renderDailyDispatchResult() {
     const rows = activeItems
       .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
       .sort((a, b) => {
-        const ah = Number(a.actual_hour ?? 0);
-        const bh = Number(b.actual_hour ?? 0);
-        if (ah !== bh) return ah - bh;
-        return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-      });
+      const ah = Number(a.actual_hour ?? 0);
+      const bh = Number(b.actual_hour ?? 0);
+     if (ah !== bh) return ah - bh;
+
+     const aa = normalizeAreaLabel(a.destination_area || "");
+     const ba = normalizeAreaLabel(b.destination_area || "");
+     if (aa !== ba) return aa.localeCompare(ba, "ja");
+
+     return Number(a.stop_order || 0) - Number(b.stop_order || 0);
+    });
 
     const totalDistance = rows.reduce((sum, row) => sum + Number(row.distance_km || 0), 0);
 
