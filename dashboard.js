@@ -38,6 +38,7 @@ const els = {
 
   exportAllBtn: document.getElementById("exportAllBtn"),
   importAllBtn: document.getElementById("importAllBtn"),
+  importAllFileInput: document.getElementById("importAllFileInput"),
   exportCsvBtnHeader: document.getElementById("exportCsvBtnHeader"),
   dangerResetBtn: document.getElementById("dangerResetBtn"),
 
@@ -1441,7 +1442,6 @@ function renderPlanSelect() {
   currentPlansCache
     .filter(plan => plan.plan_date === targetDate)
     .filter(plan => plan.status === "planned")
-    .filter(plan => plan.status !== "done")
     .filter(plan => !doneCastIds.has(Number(plan.cast_id)))
     .forEach(plan => {
       const option = document.createElement("option");
@@ -2728,24 +2728,288 @@ async function loadHistory() {
   });
 }
 
-async function exportAllData() {
-  const payload = {
-    casts: allCastsCache,
-    vehicles: allVehiclesCache,
-    plans: currentPlansCache,
-    actuals: currentActualsCache,
-    exported_at: new Date().toISOString()
-  };
+async function fetchAllTableRows(tableName, orderColumn = "id") {
+  const pageSize = 1000;
+  let from = 0;
+  let allRows = [];
 
-  downloadTextFile(
-    `themis_export_${todayStr()}.json`,
-    JSON.stringify(payload, null, 2),
-    "application/json;charset=utf-8"
-  );
+  while (true) {
+    const { data, error } = await supabaseClient
+      .from(tableName)
+      .select("*")
+      .order(orderColumn, { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+
+    const rows = data || [];
+    allRows = allRows.concat(rows);
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+}
+
+function stripMetaForInsert(row, extraRemoveKeys = []) {
+  const clone = { ...row };
+  const removeKeys = [
+    "id",
+    "created_at",
+    "updated_at",
+    ...extraRemoveKeys
+  ];
+
+  removeKeys.forEach(key => {
+    if (key in clone) delete clone[key];
+  });
+
+  return clone;
+}
+
+async function exportAllData() {
+  try {
+    const [
+      casts,
+      vehicles,
+      dispatches,
+      dispatchPlans,
+      dispatchItems,
+      vehicleDailyReports,
+      dispatchHistory
+    ] = await Promise.all([
+      fetchAllTableRows("casts"),
+      fetchAllTableRows("vehicles"),
+      fetchAllTableRows("dispatches"),
+      fetchAllTableRows("dispatch_plans"),
+      fetchAllTableRows("dispatch_items"),
+      fetchAllTableRows("vehicle_daily_reports"),
+      fetchAllTableRows("dispatch_history")
+    ]);
+
+    const payload = {
+      app: "THEMIS AI Dispatch",
+      version: 2,
+      exported_at: new Date().toISOString(),
+      origin: {
+        label: ORIGIN_LABEL,
+        lat: ORIGIN_LAT,
+        lng: ORIGIN_LNG
+      },
+      data: {
+        casts,
+        vehicles,
+        dispatches,
+        dispatch_plans: dispatchPlans,
+        dispatch_items: dispatchItems,
+        vehicle_daily_reports: vehicleDailyReports,
+        dispatch_history: dispatchHistory
+      }
+    };
+
+    downloadTextFile(
+      `themis_full_backup_${todayStr()}.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json;charset=utf-8"
+    );
+
+    await addHistory(null, null, "export_all", "全体バックアップを出力");
+  } catch (error) {
+    console.error("exportAllData error:", error);
+    alert("全体エクスポートに失敗しました: " + error.message);
+  }
 }
 
 function triggerImportAll() {
-  alert("全体インポートは未実装です。まずはキャストCSV・車両CSVをご利用ください。");
+  els.importAllFileInput?.click();
+}
+
+async function importAllDataFromFile() {
+  const file = els.importAllFileInput?.files?.[0];
+  if (!file) {
+    alert("JSONファイルを選択してください");
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const json = JSON.parse(text);
+
+    if (!json?.data) {
+      alert("バックアップJSONの形式が正しくありません");
+      return;
+    }
+
+    const backup = json.data;
+
+    const proceed = window.confirm(
+      "現在のデータを全消去して、バックアップJSONから復元しますか？"
+    );
+    if (!proceed) {
+      els.importAllFileInput.value = "";
+      return;
+    }
+
+    const proceed2 = window.confirm(
+      "本当に実行しますか？現在のデータは上書きではなく、一度削除してから復元します。"
+    );
+    if (!proceed2) {
+      els.importAllFileInput.value = "";
+      return;
+    }
+
+    const deleteTargets = [
+      "dispatch_items",
+      "dispatch_plans",
+      "vehicle_daily_reports",
+      "dispatch_history",
+      "dispatches",
+      "casts",
+      "vehicles"
+    ];
+
+    for (const table of deleteTargets) {
+      const { error } = await supabaseClient
+        .from(table)
+        .delete()
+        .neq("id", 0);
+
+      if (error) {
+        console.error(`${table} delete error:`, error);
+        alert(`${table} の削除に失敗しました: ${error.message}`);
+        return;
+      }
+    }
+
+    const castIdMap = new Map();
+    const vehicleIdMap = new Map();
+    const dispatchIdMap = new Map();
+    const planIdMap = new Map();
+    const itemIdMap = new Map();
+
+    // 1. casts
+    for (const oldRow of backup.casts || []) {
+      const row = stripMetaForInsert(oldRow);
+      if (!row.created_by) row.created_by = currentUser.id;
+
+      const { data, error } = await supabaseClient
+        .from("casts")
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) throw error;
+      castIdMap.set(Number(oldRow.id), Number(data.id));
+    }
+
+    // 2. vehicles
+    for (const oldRow of backup.vehicles || []) {
+      const row = stripMetaForInsert(oldRow);
+      if (!row.created_by) row.created_by = currentUser.id;
+
+      const { data, error } = await supabaseClient
+        .from("vehicles")
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) throw error;
+      vehicleIdMap.set(Number(oldRow.id), Number(data.id));
+    }
+
+    // 3. dispatches
+    for (const oldRow of backup.dispatches || []) {
+      const row = stripMetaForInsert(oldRow);
+      if (!row.created_by) row.created_by = currentUser.id;
+
+      const { data, error } = await supabaseClient
+        .from("dispatches")
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) throw error;
+      dispatchIdMap.set(Number(oldRow.id), Number(data.id));
+    }
+
+    // 4. dispatch_plans
+    for (const oldRow of backup.dispatch_plans || []) {
+      const row = stripMetaForInsert(oldRow);
+      row.cast_id = castIdMap.get(Number(oldRow.cast_id)) || null;
+      if (!row.created_by) row.created_by = currentUser.id;
+
+      const { data, error } = await supabaseClient
+        .from("dispatch_plans")
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) throw error;
+      planIdMap.set(Number(oldRow.id), Number(data.id));
+    }
+
+    // 5. dispatch_items
+    for (const oldRow of backup.dispatch_items || []) {
+      const row = stripMetaForInsert(oldRow);
+      row.dispatch_id = dispatchIdMap.get(Number(oldRow.dispatch_id)) || null;
+      row.cast_id = castIdMap.get(Number(oldRow.cast_id)) || null;
+      row.vehicle_id = oldRow.vehicle_id != null
+        ? (vehicleIdMap.get(Number(oldRow.vehicle_id)) || null)
+        : null;
+
+      const { data, error } = await supabaseClient
+        .from("dispatch_items")
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) throw error;
+      itemIdMap.set(Number(oldRow.id), Number(data.id));
+    }
+
+    // 6. vehicle_daily_reports
+    for (const oldRow of backup.vehicle_daily_reports || []) {
+      const row = stripMetaForInsert(oldRow);
+      row.vehicle_id = vehicleIdMap.get(Number(oldRow.vehicle_id)) || null;
+      if (!row.created_by) row.created_by = currentUser.id;
+
+      const { error } = await supabaseClient
+        .from("vehicle_daily_reports")
+        .insert(row);
+
+      if (error) throw error;
+    }
+
+    // 7. dispatch_history
+    for (const oldRow of backup.dispatch_history || []) {
+      const row = stripMetaForInsert(oldRow);
+      row.dispatch_id =
+        oldRow.dispatch_id != null
+          ? (dispatchIdMap.get(Number(oldRow.dispatch_id)) || null)
+          : null;
+      row.item_id =
+        oldRow.item_id != null
+          ? (itemIdMap.get(Number(oldRow.item_id)) || null)
+          : null;
+      if (!row.acted_by) row.acted_by = currentUser.id;
+
+      const { error } = await supabaseClient
+        .from("dispatch_history")
+        .insert(row);
+
+      if (error) throw error;
+    }
+
+    els.importAllFileInput.value = "";
+
+    await addHistory(null, null, "import_all", "全体バックアップから復元");
+    alert("全体インポートが完了しました");
+    await loadHomeAndAll();
+  } catch (error) {
+    console.error("importAllDataFromFile error:", error);
+    alert("全体インポートに失敗しました: " + error.message);
+  }
 }
 
 async function resetAllDataDanger() {
@@ -2868,9 +3132,11 @@ function bindPostDispatchEvents() {
 }
 
 function setupEvents() {
+  
   els.logoutBtn?.addEventListener("click", logout);
   els.exportAllBtn?.addEventListener("click", exportAllData);
   els.importAllBtn?.addEventListener("click", triggerImportAll);
+  els.importAllFileInput?.addEventListener("change", importAllDataFromFile);
   els.exportCsvBtnHeader?.addEventListener("click", exportCastsCsv);
   els.dangerResetBtn?.addEventListener("click", resetAllDataDanger);
 
