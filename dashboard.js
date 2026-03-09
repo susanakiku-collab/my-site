@@ -258,6 +258,81 @@ function estimateRoadKmFromStation(lat, lng) {
   return Number((straight * 1.22).toFixed(1));
 }
 
+function estimateRoadKmBetweenPoints(lat1, lng1, lat2, lng2) {
+  if (!isValidLatLng(lat1, lng1) || !isValidLatLng(lat2, lng2)) return 0;
+  const straight = haversineKm(lat1, lng1, lat2, lng2);
+  return Number((straight * 1.22).toFixed(1));
+}
+
+function getItemLatLng(item) {
+  const lat = toNullableNumber(item?.casts?.latitude);
+  const lng = toNullableNumber(item?.casts?.longitude);
+  if (isValidLatLng(lat, lng)) return { lat, lng };
+  return null;
+}
+
+function sortItemsByNearestRoute(items) {
+  const remaining = [...items];
+  const sorted = [];
+
+  let currentLat = ORIGIN_LAT;
+  let currentLng = ORIGIN_LNG;
+
+  while (remaining.length) {
+    let bestIndex = 0;
+    let bestScore = Infinity;
+
+    remaining.forEach((item, index) => {
+      const point = getItemLatLng(item);
+
+      let score;
+      if (point) {
+        score = estimateRoadKmBetweenPoints(currentLat, currentLng, point.lat, point.lng);
+      } else {
+        score = Number(item.distance_km || 999999);
+      }
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+
+    const picked = remaining.splice(bestIndex, 1)[0];
+    sorted.push(picked);
+
+    const pickedPoint = getItemLatLng(picked);
+    if (pickedPoint) {
+      currentLat = pickedPoint.lat;
+      currentLng = pickedPoint.lng;
+    }
+  }
+
+  return sorted;
+}
+
+function calculateRouteDistance(items) {
+  if (!items.length) return 0;
+
+  let total = 0;
+  let currentLat = ORIGIN_LAT;
+  let currentLng = ORIGIN_LNG;
+
+  items.forEach(item => {
+    const point = getItemLatLng(item);
+
+    if (point) {
+      total += estimateRoadKmBetweenPoints(currentLat, currentLng, point.lat, point.lng);
+      currentLat = point.lat;
+      currentLng = point.lng;
+    } else {
+      total += Number(item.distance_km || 0);
+    }
+  });
+
+  return Number(total.toFixed(1));
+}
+
 function normalizeAddressText(address) {
   return String(address || "")
     .trim()
@@ -2418,12 +2493,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
     if (candidateScores.length) {
       const bestVehicle = candidateScores[0].vehicle;
-
-      const sortedItems = [...cluster.items].sort((a, b) => {
-        const aDist = Number(a.distance_km || 0);
-        const bDist = Number(b.distance_km || 0);
-        return aDist - bDist;
-      });
+      const sortedItems = sortItemsByNearestRoute(cluster.items);
 
       sortedItems.forEach(item => {
         assignments.push({
@@ -2435,15 +2505,11 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         });
       });
 
-      addHourLoad(bestVehicle.id, cluster.hour, cluster.count, cluster.totalDistance);
+      addHourLoad(bestVehicle.id, cluster.hour, cluster.count, calculateRouteDistance(sortedItems));
       continue;
     }
 
-    const splitItems = [...cluster.items].sort((a, b) => {
-      const aDist = Number(a.distance_km || 0);
-      const bDist = Number(b.distance_km || 0);
-      return aDist - bDist;
-    });
+    const splitItems = sortItemsByNearestRoute(cluster.items);
 
     for (const item of splitItems) {
       const perItemCandidates = workingVehicles
@@ -2575,10 +2641,11 @@ function renderDailyDispatchResult() {
           return Number(a.stop_order || 0) - Number(b.stop_order || 0);
         });
 
-      const totalDistance = rows.reduce((sum, row) => sum + Number(row.distance_km || 0), 0);
+      const orderedRows = sortItemsByNearestRoute(rows);
+      const totalDistance = calculateRouteDistance(orderedRows);
 
-      const body = rows.length
-        ? rows
+      const body = orderedRows.length
+        ? orderedRows
             .map(
               (row, index) => `
                 <div class="dispatch-row">
@@ -2586,11 +2653,11 @@ function renderDailyDispatchResult() {
                     <span class="badge-time">${escapeHtml(getHourLabel(row.actual_hour))}</span>
                     <span class="badge-order">順番 ${index + 1}</span>
                     <span class="dispatch-name">${buildMapLinkHtml({
-                     name: row.casts?.name,
-                     address: row.destination_address || row.casts?.address,
-                     lat: row.casts?.latitude,
-                     lng: row.casts?.longitude,
-                     className: "dispatch-name-link"
+                      name: row.casts?.name,
+                      address: row.destination_address || row.casts?.address,
+                      lat: row.casts?.latitude,
+                      lng: row.casts?.longitude,
+                      className: "dispatch-name-link"
                     })}</span>
                     <span class="dispatch-area">${escapeHtml(normalizeAreaLabel(row.destination_area || "-"))}</span>
                   </div>
