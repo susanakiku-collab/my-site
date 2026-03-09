@@ -783,12 +783,15 @@ async function saveCast() {
   const manualArea = els.castArea?.value.trim() || "";
   const address = els.castAddress?.value.trim() || "";
 
+  const autoDistance =
+    isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null;
+
   const payload = {
     name,
     phone: els.castPhone?.value.trim() || "",
     address,
     area: manualArea || guessArea(lat, lng, address) || null,
-    distance_km: toNullableNumber(els.castDistanceKm?.value),
+    distance_km: toNullableNumber(els.castDistanceKm?.value) ?? autoDistance,
     latitude: lat,
     longitude: lng,
     memo: els.castMemo?.value.trim() || "",
@@ -986,12 +989,16 @@ function applyCastLatLng() {
     alert("座標形式が正しくありません");
     return;
   }
+
   if (els.castLat) els.castLat.value = parsed.lat;
   if (els.castLng) els.castLng.value = parsed.lng;
+
   if (els.castArea && !els.castArea.value.trim()) {
     els.castArea.value = guessArea(parsed.lat, parsed.lng, els.castAddress?.value || "");
   }
-  if (els.castDistanceKm && !els.castDistanceKm.value.trim()) {
+
+  // 松戸駅起点の想定距離を自動入力
+  if (els.castDistanceKm) {
     els.castDistanceKm.value = String(estimateRoadKmFromStation(parsed.lat, parsed.lng));
   }
 }
