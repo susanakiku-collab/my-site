@@ -1279,20 +1279,19 @@ function renderPlanGroupedTable() {
 
       areaItems.forEach(plan => {
         html += `
-          <div class="grouped-row">
-            <div>${hour}</div>
-            <div><strong>${escapeHtml(plan.casts?.name || "-")}</strong></div>
-            <div>${escapeHtml(plan.destination_address || plan.casts?.address || "")}</div>
-            <div>${escapeHtml(plan.planned_area || "")}</div>
-            <div>${plan.distance_km ?? ""}</div>
-            <div class="op-cell">
-              <span class="badge-status ${normalizeStatus(plan.status)}">${escapeHtml(getStatusText(plan.status))}</span>
-              <button class="btn ghost plan-edit-btn" data-id="${plan.id}">編集</button>
-              <button class="btn ghost plan-route-btn" data-address="${escapeHtml(plan.destination_address || plan.casts?.address || "")}">ルート</button>
-              <button class="btn danger plan-delete-btn" data-id="${plan.id}">削除</button>
-            </div>
-          </div>
-        `;
+       <div class="grouped-row">
+       <div>${hour}</div>
+       <div><strong>${escapeHtml(plan.casts?.name || "-")}</strong></div>
+       <div>${escapeHtml(plan.planned_area || "無し")}</div>
+       <div>${plan.distance_km ?? ""}</div>
+       <div class="op-cell">
+       <span class="badge-status ${normalizeStatus(plan.status)}">${escapeHtml(getStatusText(plan.status))}</span>
+       <button class="btn ghost plan-edit-btn" data-id="${plan.id}">編集</button>
+       <button class="btn ghost plan-route-btn" data-address="${escapeHtml(plan.destination_address || plan.casts?.address || "")}">ルート</button>
+       <button class="btn danger plan-delete-btn" data-id="${plan.id}">削除</button>
+    </div>
+  </div>
+`;
       });
     });
 
@@ -1646,24 +1645,23 @@ function renderActualTable() {
         .filter(item => (item.destination_area || "無し") === area)
         .forEach(item => {
           html += `
-            <div class="grouped-row">
-              <div>${hour}</div>
-              <div><strong>${escapeHtml(item.casts?.name || "-")}</strong></div>
-              <div>${escapeHtml(item.destination_address || item.casts?.address || "")}</div>
-              <div>${escapeHtml(item.destination_area || "")}</div>
-              <div>${item.distance_km ?? ""}</div>
-              <div class="op-cell">
-                <div class="state-stack">
-                  <button class="btn primary actual-done-btn" data-id="${item.id}">完了</button>
-                  <button class="btn danger actual-cancel-btn" data-id="${item.id}">キャンセル</button>
-                  <span class="badge-status ${normalizeStatus(item.status)}">${escapeHtml(getStatusText(item.status))}</span>
-                </div>
-                <button class="btn ghost actual-edit-btn" data-id="${item.id}">編集</button>
-                <button class="btn ghost actual-route-btn" data-address="${escapeHtml(item.destination_address || item.casts?.address || "")}">ルート</button>
-                <button class="btn danger actual-delete-btn" data-id="${item.id}">削除</button>
-              </div>
-            </div>
-          `;
+         <div class="grouped-row">
+         <div>${hour}</div>
+         <div><strong>${escapeHtml(item.casts?.name || "-")}</strong></div>
+         <div>${escapeHtml(item.destination_area || "無し")}</div>
+         <div>${item.distance_km ?? ""}</div>
+         <div class="op-cell">
+         <div class="state-stack">
+         <button class="btn primary actual-done-btn" data-id="${item.id}">完了</button>
+         <button class="btn danger actual-cancel-btn" data-id="${item.id}">キャンセル</button>
+        <span class="badge-status ${normalizeStatus(item.status)}">${escapeHtml(getStatusText(item.status))}</span>
+      </div>
+      <button class="btn ghost actual-edit-btn" data-id="${item.id}">編集</button>
+      <button class="btn ghost actual-route-btn" data-address="${escapeHtml(item.destination_address || item.casts?.address || "")}">ルート</button>
+      <button class="btn danger actual-delete-btn" data-id="${item.id}">削除</button>
+    </div>
+  </div>
+`;
         });
     });
 
