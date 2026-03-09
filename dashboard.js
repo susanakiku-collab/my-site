@@ -33,6 +33,10 @@ const SPECIAL_LATE_NIGHT_DATES = [
 ];
 
 const els = {
+  importVehicleCsvBtn: document.getElementById("importVehicleCsvBtn"),
+  exportVehicleCsvBtn: document.getElementById("exportVehicleCsvBtn"),
+  vehicleCsvFileInput: document.getElementById("vehicleCsvFileInput"),
+
   userEmail: document.getElementById("userEmail"),
   originLabelText: document.getElementById("originLabelText"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -388,6 +392,7 @@ function normalizeCsvHeader(header) {
   const h = raw.toLowerCase();
 
   const map = {
+    // cast
     name: "name",
     名前: "name",
     cast_name: "name",
@@ -413,7 +418,40 @@ function normalizeCsvHeader(header) {
     note: "memo",
     distance_km: "distance_km",
     距離: "distance_km",
-    想定距離: "distance_km"
+    想定距離: "distance_km",
+
+    // vehicle
+    plate_number: "plate_number",
+    vehicle_id: "plate_number",
+    車両id: "plate_number",
+    車両ID: "plate_number",
+    車両: "plate_number",
+
+    vehicle_area: "vehicle_area",
+    担当方面: "vehicle_area",
+
+    home_area: "home_area",
+    帰宅方面: "home_area",
+
+    seat_capacity: "seat_capacity",
+    定員: "seat_capacity",
+    乗車可能人員: "seat_capacity",
+
+    driver_name: "driver_name",
+    driver: "driver_name",
+    ドライバー: "driver_name",
+    ドライバー名: "driver_name",
+
+    line_id: "line_id",
+    line: "line_id",
+    lineid: "line_id",
+    "line id": "line_id",
+    LINEID: "line_id",
+    "LINE ID": "line_id",
+    line_id_: "line_id",
+
+    status: "status",
+    状態: "status"
   };
 
   return map[raw] || map[h] || h;
@@ -912,6 +950,33 @@ function exportCastsCsv() {
   downloadTextFile(`casts_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
 }
 
+function exportVehiclesCsv() {
+  const headers = [
+    "plate_number",
+    "vehicle_area",
+    "home_area",
+    "seat_capacity",
+    "driver_name",
+    "line_id",
+    "status",
+    "memo"
+  ];
+
+  const rows = allVehiclesCache.map(vehicle => [
+    vehicle.plate_number || "",
+    normalizeAreaLabel(vehicle.vehicle_area || ""),
+    normalizeAreaLabel(vehicle.home_area || ""),
+    vehicle.seat_capacity ?? "",
+    vehicle.driver_name || "",
+    vehicle.line_id || "",
+    vehicle.status || "waiting",
+    vehicle.memo || ""
+  ]);
+
+  const csv = [headers.join(","), ...rows.map(r => r.map(csvEscape).join(","))].join("\n");
+  downloadTextFile(`vehicles_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
+}
+
 async function importCastCsvFile() {
   const file = els.csvFileInput?.files?.[0];
   if (!file) {
@@ -991,6 +1056,78 @@ async function importCastCsvFile() {
   }
 }
 
+async function importVehicleCsvFile() {
+  const file = els.vehicleCsvFileInput?.files?.[0];
+  if (!file) {
+    alert("CSVファイルを選択してください");
+    return;
+  }
+
+  try {
+    const text = await readCsvFileAsText(file);
+    let rows = parseCsv(text);
+    rows = normalizeCsvRows(rows);
+
+    if (!rows.length) {
+      alert("CSVデータが空です");
+      return;
+    }
+
+    const inserts = [];
+
+    for (const row of rows) {
+      const plateNumber = String(row.plate_number || "").trim();
+      if (!plateNumber) continue;
+
+      const exists = allVehiclesCache.find(v =>
+        String(v.plate_number || "").trim() === plateNumber
+      );
+
+      if (exists) {
+        console.log("車両重複スキップ:", plateNumber);
+        continue;
+      }
+
+      inserts.push({
+        plate_number: plateNumber,
+        vehicle_area: normalizeAreaLabel(String(row.vehicle_area || "").trim() || ""),
+        home_area: normalizeAreaLabel(String(row.home_area || "").trim() || ""),
+        seat_capacity: Number(row.seat_capacity || 4),
+        driver_name: String(row.driver_name || "").trim(),
+        line_id: String(row.line_id || "").trim(),
+        status: String(row.status || "waiting").trim() || "waiting",
+        memo: String(row.memo || "").trim(),
+        is_active: true,
+        created_by: currentUser.id
+      });
+    }
+
+    if (!inserts.length) {
+      alert("新規車両はありません");
+      els.vehicleCsvFileInput.value = "";
+      return;
+    }
+
+    const { error } = await supabaseClient
+      .from("vehicles")
+      .insert(inserts);
+
+    if (error) {
+      console.error("Vehicle CSV import error:", error);
+      alert("車両CSV取込エラー: " + error.message);
+      return;
+    }
+
+    els.vehicleCsvFileInput.value = "";
+    await addHistory(null, null, "import_vehicle_csv", `${inserts.length}件の車両をCSV取込`);
+    alert(`${inserts.length}件の車両を取り込みました`);
+    await loadVehicles();
+  } catch (error) {
+    console.error("importVehicleCsvFile error:", error);
+    alert("車両CSV取込中にエラーが発生しました");
+  }
+}
+
 function applyCastLatLng() {
   const parsed = parseLatLngText(els.castLatLngText?.value || "");
   if (!parsed) {
@@ -1051,6 +1188,12 @@ async function saveVehicle() {
   const plateNumber = els.vehiclePlateNumber?.value.trim();
   if (!plateNumber) {
     alert("車両IDを入力してください");
+    return;
+  }
+
+  const duplicate = isDuplicateVehicle(plateNumber);
+  if (duplicate) {
+    alert("この車両IDは既に登録されています");
     return;
   }
 
@@ -1122,6 +1265,15 @@ async function loadVehicles() {
   renderVehiclesTable();
   renderDailyVehicleChecklist();
   renderHomeSummary();
+}
+
+function isDuplicateVehicle(plateNumber) {
+  const normalizedPlate = String(plateNumber || "").trim();
+
+  return allVehiclesCache.find(v =>
+    String(v.plate_number || "").trim() === normalizedPlate &&
+    Number(v.id) !== Number(editingVehicleId)
+  );
 }
 
 function renderVehiclesTable() {
@@ -2803,7 +2955,11 @@ function bindPostDispatchEvents() {
 
 function setupEvents() {
   els.logoutBtn?.addEventListener("click", logout);
-
+  
+  els.importVehicleCsvBtn?.addEventListener("click", () => els.vehicleCsvFileInput?.click());
+  els.exportVehicleCsvBtn?.addEventListener("click", exportVehiclesCsv);
+  els.vehicleCsvFileInput?.addEventListener("change", importVehicleCsvFile);
+  
   els.exportAllBtn?.addEventListener("click", exportAllData);
   els.importAllBtn?.addEventListener("click", triggerImportAll);
   els.exportCsvBtnHeader?.addEventListener("click", exportCastsCsv);
