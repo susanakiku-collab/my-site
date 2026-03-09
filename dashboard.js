@@ -1,4 +1,6 @@
 const {
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
   ORIGIN_LABEL,
   ORIGIN_LAT,
   ORIGIN_LNG
@@ -1494,81 +1496,48 @@ async function deletePlan(planId) {
 function renderPlanGroupedTable() {
   if (!els.plansGroupedTable) return;
 
-  const hours = [0, 1, 2, 3, 4, 5];
-  const plans = [...currentPlansCache];
-
-  if (!plans.length) {
+  if (!currentPlansCache.length) {
     els.plansGroupedTable.innerHTML = `<div class="muted" style="padding:14px;">予定がありません</div>`;
     return;
   }
 
-  const areas = [...new Set(
-    plans.map(x => normalizeAreaLabel(x.planned_area || x.casts?.area || "無し"))
-  )].sort((a, b) => a.localeCompare(b, "ja"));
+  const hours = [...new Set(currentPlansCache.map(x => Number(x.plan_hour)))].sort((a, b) => a - b);
 
-  let html = `
-    <table class="matrix-table">
-      <thead>
-        <tr>
-          <th>時間</th>
-          ${areas.map(area => `<th>${escapeHtml(area)}</th>`).join("")}
-        </tr>
-      </thead>
-      <tbody>
-  `;
+  let html = `<div class="grouped-plan-list">`;
 
   hours.forEach(hour => {
-    html += `<tr><td>${getHourLabel(hour)}</td>`;
+    const hourItems = currentPlansCache.filter(x => Number(x.plan_hour) === hour);
+    const areas = [...new Set(hourItems.map(x => normalizeAreaLabel(x.planned_area || "無し")))];
+
+    html += `<div class="grouped-section">`;
+    html += `<div class="grouped-hour-title">${getHourLabel(hour)}</div>`;
 
     areas.forEach(area => {
-      const rows = plans.filter(plan =>
-        Number(plan.plan_hour ?? 0) === hour &&
-        normalizeAreaLabel(plan.planned_area || plan.casts?.area || "無し") === area
-      );
+      const areaItems = hourItems.filter(x => normalizeAreaLabel(x.planned_area || "無し") === area);
+      html += `<div class="grouped-area-title">${escapeHtml(area)}</div>`;
 
-      if (!rows.length) {
-        html += `<td>-</td>`;
-      } else {
-        const totalDistance = rows.reduce((sum, row) => sum + Number(row.distance_km || 0), 0);
-
+      areaItems.forEach(plan => {
         html += `
-          <td>
-            <div class="matrix-card">
-              <div class="matrix-summary">${rows.length}人 / ${totalDistance.toFixed(1)}km</div>
-              ${rows.map(plan => `
-                <div class="matrix-item" style="align-items:flex-start; flex-direction:column;">
-                  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                    <span class="badge-status ${normalizeStatus(plan.status)}">
-                      ${escapeHtml(getStatusText(plan.status))}
-                    </span>
-                    <span>
-                      ${escapeHtml(plan.casts?.name || "-")}
-                      ${Number(plan.distance_km || 0) ? `(${Number(plan.distance_km || 0).toFixed(1)}km)` : ""}
-                    </span>
-                  </div>
-
-                  <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button class="btn ghost plan-edit-btn" data-id="${plan.id}">編集</button>
-                    <button
-                      class="btn ghost plan-route-btn"
-                      data-address="${escapeHtml(plan.destination_address || plan.casts?.address || "")}"
-                    >
-                      ルート
-                    </button>
-                    <button class="btn danger plan-delete-btn" data-id="${plan.id}">削除</button>
-                  </div>
-                </div>
-              `).join("")}
+          <div class="grouped-row">
+            <div>${getHourLabel(hour)}</div>
+            <div><strong>${escapeHtml(plan.casts?.name || "-")}</strong></div>
+            <div>${escapeHtml(normalizeAreaLabel(plan.planned_area || "無し"))}</div>
+            <div>${plan.distance_km ?? ""}</div>
+            <div class="op-cell">
+              <span class="badge-status ${normalizeStatus(plan.status)}">${escapeHtml(getStatusText(plan.status))}</span>
+              <button class="btn ghost plan-edit-btn" data-id="${plan.id}">編集</button>
+              <button class="btn ghost plan-route-btn" data-address="${escapeHtml(plan.destination_address || plan.casts?.address || "")}">ルート</button>
+              <button class="btn danger plan-delete-btn" data-id="${plan.id}">削除</button>
             </div>
-          </td>
+          </div>
         `;
-      }
+      });
     });
 
-    html += `</tr>`;
+    html += `</div>`;
   });
 
-  html += `</tbody></table>`;
+  html += `</div>`;
   els.plansGroupedTable.innerHTML = html;
 
   els.plansGroupedTable.querySelectorAll(".plan-edit-btn").forEach(btn => {
