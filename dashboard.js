@@ -283,7 +283,7 @@ function classifyAreaByAddress(address) {
   if (a.includes("葛飾")) return "葛飾方面";
   if (a.includes("江戸川")) return "都内方面";
   if (a.includes("東京")) return "都内方面";
-  if (a.includes("茨城")) return "柏方面";
+  if (a.includes("茨城")) return "茨城方面";
   return "";
 }
 
@@ -293,6 +293,7 @@ function classifyAreaByLatLng(lat, lng) {
   if (lat >= 35.84 && lng >= 139.94) return "柏方面";
   if (lat >= 35.80 && lat < 35.86 && lng >= 139.90 && lng < 139.96) return "松戸近郊";
   if (lat >= 35.69 && lat < 35.80 && lng >= 139.93 && lng < 140.09) return "船橋方面";
+  if (lng > 140.05) return "茨城方面";
   return "周辺";
 }
 
@@ -314,6 +315,7 @@ function normalizeAreaLabel(area) {
   if (value.includes("守谷")) return "守谷方面";
   if (value.includes("葛飾")) return "葛飾方面";
   if (value.includes("都内") || value.includes("東京") || value.includes("江戸川")) return "都内方面";
+  if (value.includes("茨城")) return "茨城方面";
 
   return value;
 }
@@ -496,14 +498,6 @@ function getVehicleMonthlyStatsMap(reportRows, targetMonth) {
   return map;
 }
 
-function getUsedCastIdsInActuals() {
-  const ids = new Set();
-  currentActualsCache.forEach(item => {
-    if (item.cast_id) ids.add(Number(item.cast_id));
-  });
-  return ids;
-}
-
 function getDoneCastIdsInActuals() {
   const ids = new Set();
   currentActualsCache.forEach(item => {
@@ -615,10 +609,6 @@ function buildDispatchClusters(items) {
   });
 }
 
-/* =========================
-   認証
-========================= */
-
 async function ensureAuth() {
   const { data, error } = await supabaseClient.auth.getUser();
   if (error) {
@@ -660,10 +650,6 @@ async function logout() {
   window.location.href = "index.html";
 }
 
-/* =========================
-   タブ
-========================= */
-
 function activateTab(tabId) {
   document.querySelectorAll(".main-tab").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
@@ -683,10 +669,6 @@ function setupTabs() {
     btn.addEventListener("click", () => activateTab(btn.dataset.goTab));
   });
 }
-
-/* =========================
-   ホーム
-========================= */
 
 function renderHomeSummary() {
   const actualDone = currentActualsCache.filter(x => normalizeStatus(x.status) === "done").length;
@@ -723,8 +705,8 @@ function renderHomeMonthlyVehicleList() {
     row.className = "home-monthly-item";
     row.innerHTML = `
       <span class="chip">${escapeHtml(vehicle.plate_number || "-")}</span>
-      <span class="chip">${escapeHtml(vehicle.vehicle_area || "-")}</span>
-      <span class="chip">帰宅:${escapeHtml(vehicle.home_area || "-")}</span>
+      <span class="chip">${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}</span>
+      <span class="chip">帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}</span>
       <span class="chip">月間:${stats.totalDistance.toFixed(1)}km</span>
       <span class="chip">出勤:${stats.workedDays}日</span>
       <span class="chip">平均:${stats.avgDistance.toFixed(1)}km</span>
@@ -732,10 +714,6 @@ function renderHomeMonthlyVehicleList() {
     els.homeMonthlyVehicleList.appendChild(row);
   });
 }
-
-/* =========================
-   キャスト
-========================= */
 
 function resetCastForm() {
   editingCastId = null;
@@ -756,7 +734,7 @@ function fillCastForm(cast) {
   if (els.castName) els.castName.value = cast.name || "";
   if (els.castDistanceKm) els.castDistanceKm.value = cast.distance_km ?? "";
   if (els.castAddress) els.castAddress.value = cast.address || "";
-  if (els.castArea) els.castArea.value = cast.area || "";
+  if (els.castArea) els.castArea.value = normalizeAreaLabel(cast.area || "");
   if (els.castMemo) els.castMemo.value = cast.memo || "";
   if (els.castPhone) els.castPhone.value = cast.phone || "";
   if (els.castLat) els.castLat.value = cast.latitude ?? "";
@@ -771,18 +749,36 @@ function fillCastForm(cast) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function isDuplicateCast(name, address) {
+  const normalizedName = String(name || "").trim();
+  const normalizedAddress = String(address || "").trim();
+
+  return allCastsCache.find(c =>
+    String(c.name || "").trim() === normalizedName &&
+    String(c.address || "").trim() === normalizedAddress &&
+    Number(c.id) !== Number(editingCastId)
+  );
+}
+
 async function saveCast() {
   const name = els.castName?.value.trim();
+  const address = els.castAddress?.value.trim();
+
   if (!name) {
     alert("氏名を入力してください");
+    return;
+  }
+
+  const duplicate = isDuplicateCast(name, address);
+  if (duplicate) {
+    alert("このキャストは既に登録されています");
     return;
   }
 
   const lat = toNullableNumber(els.castLat?.value);
   const lng = toNullableNumber(els.castLng?.value);
   const manualArea = els.castArea?.value.trim() || "";
-  const address = els.castAddress?.value.trim() || "";
-
+  const autoArea = guessArea(lat, lng, address);
   const autoDistance =
     isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null;
 
@@ -790,7 +786,7 @@ async function saveCast() {
     name,
     phone: els.castPhone?.value.trim() || "",
     address,
-    area: manualArea || guessArea(lat, lng, address) || null,
+    area: normalizeAreaLabel(manualArea || autoArea || ""),
     distance_km: toNullableNumber(els.castDistanceKm?.value) ?? autoDistance,
     latitude: lat,
     longitude: lng,
@@ -872,7 +868,7 @@ function renderCastsTable() {
     tr.innerHTML = `
       <td>${escapeHtml(cast.name || "")}</td>
       <td>${escapeHtml(cast.address || "")}</td>
-      <td>${escapeHtml(cast.area || "")}</td>
+      <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
       <td>${cast.distance_km ?? ""}</td>
       <td>${escapeHtml(cast.memo || "")}</td>
       <td class="actions-cell">
@@ -906,7 +902,7 @@ function exportCastsCsv() {
     cast.name || "",
     cast.phone || "",
     cast.address || "",
-    cast.area || "",
+    normalizeAreaLabel(cast.area || ""),
     cast.distance_km ?? "",
     cast.latitude ?? "",
     cast.longitude ?? "",
@@ -933,39 +929,51 @@ async function importCastCsvFile() {
       return;
     }
 
-    const payload = rows
-      .map(row => {
-        const lat = toNullableNumber(row.latitude);
-        const lng = toNullableNumber(row.longitude);
-        const address = String(row.address || "").trim();
-        const name = String(row.name || "").trim();
+    const inserts = [];
 
-        return {
-          name,
-          phone: String(row.phone || "").trim(),
-          address,
-          area: String(row.area || "").trim() || guessArea(lat, lng, address) || "",
-          distance_km:
-            toNullableNumber(row.distance_km) ??
-            (isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null),
-          latitude: lat,
-          longitude: lng,
-          memo: String(row.memo || "").trim(),
-          is_active: true,
-          created_by: currentUser.id
-        };
-      })
-      .filter(row => row.name);
+    for (const row of rows) {
+      const name = String(row.name || "").trim();
+      const address = String(row.address || "").trim();
 
-    if (!payload.length) {
-      alert(
-        "有効なデータがありません。\n" +
-        "CSVヘッダは name / address または 名前 / 住所 を使ってください。"
+      if (!name) continue;
+
+      const exists = allCastsCache.find(c =>
+        String(c.name || "").trim() === name &&
+        String(c.address || "").trim() === address
       );
+
+      if (exists) {
+        console.log("重複スキップ:", name, address);
+        continue;
+      }
+
+      const lat = toNullableNumber(row.latitude);
+      const lng = toNullableNumber(row.longitude);
+      const autoArea = guessArea(lat, lng, address);
+
+      inserts.push({
+        name,
+        phone: String(row.phone || "").trim(),
+        address,
+        area: normalizeAreaLabel(String(row.area || "").trim() || autoArea || ""),
+        distance_km:
+          toNullableNumber(row.distance_km) ??
+          (isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null),
+        latitude: lat,
+        longitude: lng,
+        memo: String(row.memo || "").trim(),
+        is_active: true,
+        created_by: currentUser.id
+      });
+    }
+
+    if (!inserts.length) {
+      alert("新規キャストはありません");
+      els.csvFileInput.value = "";
       return;
     }
 
-    const { error } = await supabaseClient.from("casts").insert(payload);
+    const { error } = await supabaseClient.from("casts").insert(inserts);
 
     if (error) {
       console.error("CSV import supabase error:", error);
@@ -974,8 +982,8 @@ async function importCastCsvFile() {
     }
 
     els.csvFileInput.value = "";
-    await addHistory(null, null, "import_csv", `${payload.length}件のキャストをCSV取込`);
-    alert(`${payload.length}件のキャストを取り込みました`);
+    await addHistory(null, null, "import_csv", `${inserts.length}件のキャストをCSV取込`);
+    alert(`${inserts.length}件のキャストを取り込みました`);
     await loadCasts();
   } catch (error) {
     console.error("importCastCsvFile error:", error);
@@ -993,11 +1001,12 @@ function applyCastLatLng() {
   if (els.castLat) els.castLat.value = parsed.lat;
   if (els.castLng) els.castLng.value = parsed.lng;
 
-  if (els.castArea && !els.castArea.value.trim()) {
-    els.castArea.value = guessArea(parsed.lat, parsed.lng, els.castAddress?.value || "");
+  if (els.castArea) {
+    els.castArea.value = normalizeAreaLabel(
+      guessArea(parsed.lat, parsed.lng, els.castAddress?.value || "")
+    );
   }
 
-  // 松戸駅起点の想定距離を自動入力
   if (els.castDistanceKm) {
     els.castDistanceKm.value = String(estimateRoadKmFromStation(parsed.lat, parsed.lng));
   }
@@ -1007,13 +1016,9 @@ function guessCastArea() {
   const lat = toNullableNumber(els.castLat?.value);
   const lng = toNullableNumber(els.castLng?.value);
   if (els.castArea) {
-    els.castArea.value = guessArea(lat, lng, els.castAddress?.value || "");
+    els.castArea.value = normalizeAreaLabel(guessArea(lat, lng, els.castAddress?.value || ""));
   }
 }
-
-/* =========================
-   車両
-========================= */
 
 function resetVehicleForm() {
   editingVehicleId = null;
@@ -1031,8 +1036,8 @@ function resetVehicleForm() {
 function fillVehicleForm(vehicle) {
   editingVehicleId = vehicle.id;
   if (els.vehiclePlateNumber) els.vehiclePlateNumber.value = vehicle.plate_number || "";
-  if (els.vehicleArea) els.vehicleArea.value = vehicle.vehicle_area || "";
-  if (els.vehicleHomeArea) els.vehicleHomeArea.value = vehicle.home_area || "";
+  if (els.vehicleArea) els.vehicleArea.value = normalizeAreaLabel(vehicle.vehicle_area || "");
+  if (els.vehicleHomeArea) els.vehicleHomeArea.value = normalizeAreaLabel(vehicle.home_area || "");
   if (els.vehicleSeatCapacity) els.vehicleSeatCapacity.value = vehicle.seat_capacity ?? "";
   if (els.vehicleDriverName) els.vehicleDriverName.value = vehicle.driver_name || "";
   if (els.vehicleLineId) els.vehicleLineId.value = vehicle.line_id || "";
@@ -1051,8 +1056,8 @@ async function saveVehicle() {
 
   const payload = {
     plate_number: plateNumber,
-    vehicle_area: els.vehicleArea?.value.trim() || "",
-    home_area: els.vehicleHomeArea?.value.trim() || "",
+    vehicle_area: normalizeAreaLabel(els.vehicleArea?.value.trim() || ""),
+    home_area: normalizeAreaLabel(els.vehicleHomeArea?.value.trim() || ""),
     seat_capacity: Number(els.vehicleSeatCapacity?.value || 4),
     driver_name: els.vehicleDriverName?.value.trim() || "",
     line_id: els.vehicleLineId?.value.trim() || "",
@@ -1140,8 +1145,8 @@ function renderVehiclesTable() {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${escapeHtml(vehicle.plate_number || "")}</td>
-      <td>${escapeHtml(vehicle.vehicle_area || "")}</td>
-      <td>${escapeHtml(vehicle.home_area || "")}</td>
+      <td>${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || ""))}</td>
+      <td>${escapeHtml(normalizeAreaLabel(vehicle.home_area || ""))}</td>
       <td>${vehicle.seat_capacity ?? ""}</td>
       <td>${escapeHtml(vehicle.driver_name || "")}</td>
       <td>${stats.totalDistance.toFixed(1)}</td>
@@ -1167,10 +1172,6 @@ function renderVehiclesTable() {
   });
 }
 
-/* =========================
-   予定表
-========================= */
-
 function resetPlanForm() {
   editingPlanId = null;
   if (els.planCastSelect) els.planCastSelect.value = "";
@@ -1188,10 +1189,46 @@ function fillPlanForm(plan) {
   if (els.planHour) els.planHour.value = String(plan.plan_hour ?? 0);
   if (els.planDistanceKm) els.planDistanceKm.value = plan.distance_km ?? "";
   if (els.planAddress) els.planAddress.value = plan.destination_address || plan.casts?.address || "";
-  if (els.planArea) els.planArea.value = plan.planned_area || "";
+  if (els.planArea) els.planArea.value = normalizeAreaLabel(plan.planned_area || "");
   if (els.planNote) els.planNote.value = plan.note || "";
   if (els.cancelPlanEditBtn) els.cancelPlanEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function fillPlanFormFromSelectedCast() {
+  const castId = Number(els.planCastSelect?.value || 0);
+  if (!castId) return;
+
+  const cast = allCastsCache.find(c => Number(c.id) === castId);
+  if (!cast) return;
+
+  if (els.planAddress && !els.planAddress.value.trim()) {
+    els.planAddress.value = cast.address || "";
+  }
+
+  if (els.planArea && !els.planArea.value.trim()) {
+    els.planArea.value = normalizeAreaLabel(
+      cast.area || guessArea(
+        toNullableNumber(cast.latitude),
+        toNullableNumber(cast.longitude),
+        cast.address || ""
+      )
+    );
+  }
+
+  if (els.planDistanceKm && !els.planDistanceKm.value.trim()) {
+    let distance = toNullableNumber(cast.distance_km);
+
+    if (distance === null) {
+      const lat = toNullableNumber(cast.latitude);
+      const lng = toNullableNumber(cast.longitude);
+      if (isValidLatLng(lat, lng)) {
+        distance = estimateRoadKmFromStation(lat, lng);
+      }
+    }
+
+    els.planDistanceKm.value = distance ?? "";
+  }
 }
 
 async function loadPlansByDate(dateStr) {
@@ -1240,9 +1277,9 @@ function renderPlanCastSelect() {
     .forEach(cast => {
       const option = document.createElement("option");
       option.value = cast.id;
-      option.textContent = `${cast.name} | ${cast.area || "-"}`;
+      option.textContent = `${cast.name} | ${normalizeAreaLabel(cast.area || "-")}`;
       option.dataset.address = cast.address || "";
-      option.dataset.area = cast.area || "";
+      option.dataset.area = normalizeAreaLabel(cast.area || "");
       option.dataset.distance = cast.distance_km ?? "";
       els.planCastSelect.appendChild(option);
     });
@@ -1250,6 +1287,7 @@ function renderPlanCastSelect() {
 
 function renderPlanSelect() {
   if (!els.planSelect) return;
+
   const targetDate = els.actualDate?.value || todayStr();
   const doneCastIds = getDoneCastIdsInActuals();
 
@@ -1263,7 +1301,8 @@ function renderPlanSelect() {
     .forEach(plan => {
       const option = document.createElement("option");
       option.value = plan.id;
-      option.textContent = `${getHourLabel(plan.plan_hour)} / ${plan.casts?.name || "-"} / ${plan.planned_area || "-"}`;
+      option.textContent =
+        `${getHourLabel(plan.plan_hour)} / ${plan.casts?.name || "-"} / ${normalizeAreaLabel(plan.planned_area || "-")}`;
       els.planSelect.appendChild(option);
     });
 }
@@ -1413,10 +1452,6 @@ async function clearAllPlans() {
   await loadPlansByDate(planDate);
 }
 
-/* =========================
-   実際の送り
-========================= */
-
 function resetActualForm() {
   editingActualId = null;
   if (els.planSelect) els.planSelect.value = "";
@@ -1430,36 +1465,107 @@ function resetActualForm() {
   if (els.cancelActualEditBtn) els.cancelActualEditBtn.classList.add("hidden");
 }
 
-function fillActualForm(actual) {
-  editingActualId = actual.id;
-  if (els.castSelect) els.castSelect.value = String(actual.cast_id || "");
-  if (els.actualHour) els.actualHour.value = String(actual.actual_hour ?? 0);
-  if (els.actualDistanceKm) els.actualDistanceKm.value = actual.distance_km ?? "";
-  if (els.actualStatus) els.actualStatus.value = actual.status || "pending";
-  if (els.actualAddress) els.actualAddress.value = actual.destination_address || actual.casts?.address || "";
-  if (els.actualArea) els.actualArea.value = actual.destination_area || actual.casts?.area || "";
-  if (els.actualNote) els.actualNote.value = actual.note || "";
-  if (els.cancelActualEditBtn) els.cancelActualEditBtn.classList.remove("hidden");
+function fillActualForm(item) {
+  editingActualId = item.id;
+
+  if (els.castSelect) els.castSelect.value = String(item.cast_id || "");
+  if (els.actualHour) els.actualHour.value = String(item.actual_hour ?? 0);
+  if (els.actualDistanceKm) els.actualDistanceKm.value = item.distance_km ?? "";
+  if (els.actualStatus) els.actualStatus.value = item.status || "pending";
+  if (els.actualAddress) els.actualAddress.value = item.destination_address || item.casts?.address || "";
+  if (els.actualArea) els.actualArea.value = normalizeAreaLabel(item.destination_area || item.casts?.area || "");
+  if (els.actualNote) els.actualNote.value = item.note || "";
+
+  if (els.cancelActualEditBtn) {
+    els.cancelActualEditBtn.classList.remove("hidden");
+  }
+
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function fillActualFormFromSelectedCast() {
+  const castId = Number(els.castSelect?.value || 0);
+  if (!castId) return;
+
+  const cast = allCastsCache.find(c => Number(c.id) === castId);
+  if (!cast) return;
+
+  if (els.actualAddress && !els.actualAddress.value.trim()) {
+    els.actualAddress.value = cast.address || "";
+  }
+
+  if (els.actualArea && !els.actualArea.value.trim()) {
+    els.actualArea.value = normalizeAreaLabel(
+      cast.area || guessArea(
+        toNullableNumber(cast.latitude),
+        toNullableNumber(cast.longitude),
+        cast.address || ""
+      )
+    );
+  }
+
+  if (els.actualDistanceKm && !els.actualDistanceKm.value.trim()) {
+    let distance = toNullableNumber(cast.distance_km);
+
+    if (distance === null) {
+      const lat = toNullableNumber(cast.latitude);
+      const lng = toNullableNumber(cast.longitude);
+      if (isValidLatLng(lat, lng)) {
+        distance = estimateRoadKmFromStation(lat, lng);
+      }
+    }
+
+    els.actualDistanceKm.value = distance ?? "";
+  }
+}
+
+function fillActualFormFromSelectedPlan() {
+  const planId = Number(els.planSelect?.value || 0);
+  if (!planId) return;
+
+  const plan = currentPlansCache.find(p => Number(p.id) === planId);
+  if (!plan) return;
+
+  if (els.castSelect) els.castSelect.value = String(plan.cast_id || "");
+  if (els.actualHour) els.actualHour.value = String(plan.plan_hour ?? 0);
+  if (els.actualAddress) els.actualAddress.value = plan.destination_address || plan.casts?.address || "";
+  if (els.actualArea) els.actualArea.value = normalizeAreaLabel(plan.planned_area || plan.casts?.area || "無し");
+  if (els.actualDistanceKm) {
+    els.actualDistanceKm.value = plan.distance_km ?? plan.casts?.distance_km ?? "";
+  }
+  if (els.actualNote) els.actualNote.value = plan.note || "";
+}
+
 function renderCastSelects() {
-  const usedCastIds = getUsedCastIdsInActuals();
+  const usedCastIds = new Set();
+  const doneCastIds = getDoneCastIdsInActuals();
+
+  currentActualsCache.forEach(item => {
+    if (item.cast_id && normalizeStatus(item.status) !== "cancel") {
+      usedCastIds.add(Number(item.cast_id));
+    }
+  });
+
   const editingActual = editingActualId
     ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))
     : null;
+
   const editingCastIdForActual = Number(editingActual?.cast_id || 0);
 
   if (els.castSelect) {
     els.castSelect.innerHTML = `<option value="">選択してください</option>`;
+
     allCastsCache
-      .filter(cast => Number(cast.id) === editingCastIdForActual || !usedCastIds.has(Number(cast.id)))
+      .filter(cast =>
+        Number(cast.id) === editingCastIdForActual ||
+        (!usedCastIds.has(Number(cast.id)) && !doneCastIds.has(Number(cast.id)))
+      )
       .forEach(cast => {
         const option = document.createElement("option");
         option.value = cast.id;
-        option.textContent = `${cast.name} | ${cast.area || "-"}`;
+        option.textContent = `${cast.name} | ${normalizeAreaLabel(cast.area || "-")}`;
         option.dataset.address = cast.address || "";
-        option.dataset.area = cast.area || "";
+        option.dataset.area = normalizeAreaLabel(cast.area || "");
         option.dataset.distance = cast.distance_km ?? "";
         option.dataset.lat = cast.latitude ?? "";
         option.dataset.lng = cast.longitude ?? "";
@@ -1655,13 +1761,19 @@ async function updateActualStatus(itemId, status) {
     }
   }
 
-  await addHistory(currentDispatchId, itemId, "update_actual_status", `Actual状態を ${status} に変更`);
+  await addHistory(
+    currentDispatchId,
+    itemId,
+    "update_actual_status",
+    `Actual状態を ${status} に変更`
+  );
+
   await loadActualsByDate(els.actualDate?.value || todayStr());
   await loadPlansByDate(els.planDate?.value || todayStr());
 }
 
 async function addPlanToActual() {
-  const planId = Number(els.planSelect?.value);
+  const planId = Number(els.planSelect?.value || 0);
   if (!planId) {
     alert("予定を選択してください");
     return;
@@ -1699,7 +1811,10 @@ async function addPlanToActual() {
     plan_date: plan.plan_date
   };
 
-  const { error } = await supabaseClient.from("dispatch_items").insert(payload);
+  const { error } = await supabaseClient
+    .from("dispatch_items")
+    .insert(payload);
+
   if (error) {
     alert(error.message);
     return;
@@ -1856,10 +1971,6 @@ function guessActualArea() {
   }
 }
 
-/* =========================
-   当日運用
-========================= */
-
 function renderDailyVehicleChecklist() {
   if (!els.dailyVehicleChecklist) return;
   els.dailyVehicleChecklist.innerHTML = "";
@@ -1872,21 +1983,36 @@ function renderDailyVehicleChecklist() {
   allVehiclesCache.forEach(vehicle => {
     const row = document.createElement("div");
     row.className = "vehicle-check-item";
+
     row.innerHTML = `
       <div class="vehicle-check-label">
         ${escapeHtml(vehicle.plate_number || "")}
-        （${escapeHtml(vehicle.vehicle_area || "-")} / 帰宅:${escapeHtml(vehicle.home_area || "-")} / 定員${vehicle.seat_capacity ?? "-"} / ${escapeHtml(vehicle.driver_name || "-")}）
+        （${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}
+        / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
+        / 定員${vehicle.seat_capacity ?? "-"}
+        / ${escapeHtml(vehicle.driver_name || "-")}）
       </div>
-      <input class="vehicle-check-input" type="checkbox" data-id="${vehicle.id}" ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""} />
+      <input
+        class="vehicle-check-input"
+        type="checkbox"
+        data-id="${vehicle.id}"
+        ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""}
+      />
     `;
+
     els.dailyVehicleChecklist.appendChild(row);
   });
 
   els.dailyVehicleChecklist.querySelectorAll(".vehicle-check-input").forEach(input => {
     input.addEventListener("change", () => {
       const id = Number(input.dataset.id);
-      if (input.checked) activeVehicleIdsForToday.add(id);
-      else activeVehicleIdsForToday.delete(id);
+
+      if (input.checked) {
+        activeVehicleIdsForToday.add(id);
+      } else {
+        activeVehicleIdsForToday.delete(id);
+      }
+
       renderDailyDispatchResult();
     });
   });
@@ -1894,6 +2020,17 @@ function renderDailyVehicleChecklist() {
 
 function getSelectedVehiclesForToday() {
   return allVehiclesCache.filter(v => activeVehicleIdsForToday.has(Number(v.id)));
+}
+
+function toggleAllVehicles(checked) {
+  if (checked) {
+    activeVehicleIdsForToday = new Set(allVehiclesCache.map(v => Number(v.id)));
+  } else {
+    activeVehicleIdsForToday = new Set();
+  }
+
+  renderDailyVehicleChecklist();
+  renderDailyDispatchResult();
 }
 
 function buildMonthlyDistanceMapForCurrentMonth() {
@@ -1959,6 +2096,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
 
         let score = 1000;
+
         score -= getVehicleAreaMatchScore(vehicle, cluster.area);
         score += sameHourLoad * 35;
         score += getVehicleState(vehicle.id).totalAssigned * 8;
@@ -2033,6 +2171,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
 
           let score = 1000;
+
           score -= getVehicleAreaMatchScore(vehicle, cluster.area);
           score += sameHourLoad * 35;
           score += getVehicleState(vehicle.id).totalAssigned * 8;
@@ -2184,7 +2323,7 @@ function renderDailyDispatchResult() {
           <div class="vehicle-result-title">
             <h4>${escapeHtml(vehicle.plate_number || "-")}</h4>
             <div class="vehicle-result-meta">
-              ${escapeHtml(vehicle.vehicle_area || "-")} / 帰宅:${escapeHtml(vehicle.home_area || "-")} / 定員${vehicle.seat_capacity ?? "-"} / ${escapeHtml(vehicle.driver_name || "-")}
+              ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))} / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))} / 定員${vehicle.seat_capacity ?? "-"} / ${escapeHtml(vehicle.driver_name || "-")}
             </div>
           </div>
           <div class="vehicle-result-badges">
@@ -2204,6 +2343,7 @@ function renderDailyDispatchResult() {
       const itemId = Number(select.dataset.itemId);
       const vehicleId = Number(select.value);
       const vehicle = allVehiclesCache.find(v => Number(v.id) === vehicleId);
+
       const { error } = await supabaseClient
         .from("dispatch_items")
         .update({
@@ -2231,6 +2371,7 @@ function buildCopyResultText() {
   );
 
   const lines = [];
+
   vehicles.forEach(vehicle => {
     const rows = activeItems
       .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
@@ -2247,20 +2388,26 @@ function buildCopyResultText() {
       });
 
     lines.push(`${vehicle.line_id ? vehicle.line_id + " " : ""}${vehicle.driver_name || vehicle.plate_number || ""}`);
+
     if (!rows.length) {
       lines.push("送りなし");
     } else {
       rows.forEach(row => {
-        lines.push(`${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} ${normalizeAreaLabel(row.destination_area || "-")}`);
+        lines.push(
+          `${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} ${normalizeAreaLabel(row.destination_area || "-")}`
+        );
       });
     }
+
     lines.push("");
   });
+
   return lines.join("\n").trim();
 }
 
 async function copyDispatchResult() {
   const text = buildCopyResultText();
+
   try {
     await navigator.clipboard.writeText(text);
     alert("結果をコピーしました");
@@ -2268,16 +2415,6 @@ async function copyDispatchResult() {
     console.error(error);
     alert("コピーに失敗しました");
   }
-}
-
-function toggleAllVehicles(checked) {
-  if (checked) {
-    activeVehicleIdsForToday = new Set(allVehiclesCache.map(v => Number(v.id)));
-  } else {
-    activeVehicleIdsForToday = new Set();
-  }
-  renderDailyVehicleChecklist();
-  renderDailyDispatchResult();
 }
 
 async function clearAllActuals() {
@@ -2305,14 +2442,48 @@ async function clearAllActuals() {
   await loadPlansByDate(els.planDate?.value || todayStr());
 }
 
+async function loadDailyReports(dateStr) {
+  const monthKey = getMonthKey(dateStr);
+  const monthStart = `${monthKey}-01`;
+
+  const start = new Date(monthStart);
+  const next = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+  const nextStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
+
+  const { data, error } = await supabaseClient
+    .from("vehicle_daily_reports")
+    .select(`
+      *,
+      vehicles (
+        id,
+        plate_number,
+        driver_name
+      )
+    `)
+    .gte("report_date", monthStart)
+    .lt("report_date", nextStr)
+    .order("report_date", { ascending: true });
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  currentDailyReportsCache = data || [];
+  renderHomeMonthlyVehicleList();
+  renderVehiclesTable();
+}
+
 async function confirmDailyToMonthly() {
   const doneRows = currentActualsCache.filter(x => normalizeStatus(x.status) === "done");
+
   if (!doneRows.length) {
     alert("完了したActualがありません");
     return;
   }
 
   const grouped = new Map();
+
   doneRows.forEach(row => {
     const vehicleId = Number(row.vehicle_id);
     if (!vehicleId) return;
@@ -2323,6 +2494,7 @@ async function confirmDailyToMonthly() {
     };
 
     prev.distance += Number(row.distance_km || 0);
+
     if (!prev.driver_name && row.driver_name) {
       prev.driver_name = row.driver_name;
     }
@@ -2383,41 +2555,6 @@ async function confirmDailyToMonthly() {
   await loadHomeAndAll();
 }
 
-/* =========================
-   走行管理
-========================= */
-
-async function loadDailyReports(dateStr) {
-  const monthKey = getMonthKey(dateStr);
-  const monthStart = `${monthKey}-01`;
-  const start = new Date(monthStart);
-  const next = new Date(start.getFullYear(), start.getMonth() + 1, 1);
-  const nextStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
-
-  const { data, error } = await supabaseClient
-    .from("vehicle_daily_reports")
-    .select(`
-      *,
-      vehicles (
-        id,
-        plate_number,
-        driver_name
-      )
-    `)
-    .gte("report_date", monthStart)
-    .lt("report_date", nextStr)
-    .order("report_date", { ascending: true });
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  currentDailyReportsCache = data || [];
-  renderHomeMonthlyVehicleList();
-  renderVehiclesTable();
-}
-
 async function resetMonthlySummary() {
   if (!window.confirm("今月の走行記録を削除しますか？")) return;
 
@@ -2442,10 +2579,6 @@ async function resetMonthlySummary() {
   await addHistory(null, null, "reset_monthly_reports", `${monthKey} の月間距離/出勤日数をリセット`);
   await loadDailyReports(dateStr);
 }
-
-/* =========================
-   履歴
-========================= */
 
 async function addHistory(dispatchId, itemId, action, message) {
   const { error } = await supabaseClient
@@ -2493,43 +2626,6 @@ async function loadHistory() {
     `;
     els.historyList.appendChild(div);
   });
-}
-
-/* =========================
-   補助
-========================= */
-
-function populateFormFromCastSelect(target = "actual") {
-  const select = target === "plan" ? els.planCastSelect : els.castSelect;
-  const selected = select?.selectedOptions?.[0];
-  if (!selected) return;
-
-  const address = selected.dataset.address || "";
-  const area = selected.dataset.area || "";
-  const distance = selected.dataset.distance || "";
-
-  if (target === "plan") {
-    if (els.planAddress && !els.planAddress.value.trim()) els.planAddress.value = address;
-    if (els.planArea && !els.planArea.value.trim()) els.planArea.value = area;
-    if (els.planDistanceKm && !els.planDistanceKm.value.trim()) els.planDistanceKm.value = distance;
-  } else {
-    if (els.actualAddress && !els.actualAddress.value.trim()) els.actualAddress.value = address;
-    if (els.actualArea && !els.actualArea.value.trim()) els.actualArea.value = area;
-    if (els.actualDistanceKm && !els.actualDistanceKm.value.trim()) els.actualDistanceKm.value = distance;
-  }
-}
-
-function populateActualFromPlanSelect() {
-  const planId = Number(els.planSelect?.value);
-  const plan = currentPlansCache.find(x => Number(x.id) === planId);
-  if (!plan) return;
-
-  if (els.castSelect) els.castSelect.value = String(plan.cast_id || "");
-  if (els.actualHour) els.actualHour.value = String(plan.plan_hour ?? 0);
-  if (els.actualDistanceKm) els.actualDistanceKm.value = plan.distance_km ?? plan.casts?.distance_km ?? "";
-  if (els.actualAddress) els.actualAddress.value = plan.destination_address || plan.casts?.address || "";
-  if (els.actualArea) els.actualArea.value = normalizeAreaLabel(plan.planned_area || plan.casts?.area || "無し");
-  if (els.actualNote) els.actualNote.value = plan.note || "";
 }
 
 async function exportAllData() {
@@ -2606,6 +2702,7 @@ async function resetAllDataDanger() {
 
 async function loadHomeAndAll() {
   const dateStr = els.dispatchDate?.value || todayStr();
+
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.planDate) els.planDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
@@ -2616,15 +2713,93 @@ async function loadHomeAndAll() {
   await loadActualsByDate(dateStr);
   await loadDailyReports(dateStr);
   await loadHistory();
+
   renderDailyVehicleChecklist();
   renderDailyDispatchResult();
   renderHomeSummary();
   renderHomeMonthlyVehicleList();
 }
 
-/* =========================
-   イベント
-========================= */
+async function syncDateAndReloadFromDispatchDate() {
+  const dateStr = els.dispatchDate?.value || todayStr();
+
+  if (els.planDate) els.planDate.value = dateStr;
+  if (els.actualDate) els.actualDate.value = dateStr;
+
+  await loadPlansByDate(dateStr);
+  await loadActualsByDate(dateStr);
+  await loadDailyReports(dateStr);
+
+  renderDailyDispatchResult();
+}
+
+async function syncDateAndReloadFromPlanDate() {
+  const dateStr = els.planDate?.value || todayStr();
+
+  if (els.dispatchDate) els.dispatchDate.value = dateStr;
+  if (els.actualDate) els.actualDate.value = dateStr;
+
+  await loadPlansByDate(dateStr);
+  await loadActualsByDate(dateStr);
+  await loadDailyReports(dateStr);
+}
+
+async function syncDateAndReloadFromActualDate() {
+  const dateStr = els.actualDate?.value || todayStr();
+
+  if (els.dispatchDate) els.dispatchDate.value = dateStr;
+  if (els.planDate) els.planDate.value = dateStr;
+
+  await loadPlansByDate(dateStr);
+  await loadActualsByDate(dateStr);
+  await loadDailyReports(dateStr);
+}
+
+function bindPlanAndActualFormEvents() {
+  if (els.planCastSelect) {
+    els.planCastSelect.addEventListener("change", fillPlanFormFromSelectedCast);
+  }
+
+  if (els.castSelect) {
+    els.castSelect.addEventListener("change", fillActualFormFromSelectedCast);
+  }
+
+  if (els.planSelect) {
+    els.planSelect.addEventListener("change", fillActualFormFromSelectedPlan);
+  }
+
+  if (els.cancelPlanEditBtn) {
+    els.cancelPlanEditBtn.addEventListener("click", resetPlanForm);
+  }
+
+  if (els.cancelActualEditBtn) {
+    els.cancelActualEditBtn.addEventListener("click", resetActualForm);
+  }
+
+  if (els.addSelectedPlanBtn) {
+    els.addSelectedPlanBtn.addEventListener("click", addPlanToActual);
+  }
+}
+
+function bindDispatchEvents() {
+  if (els.optimizeBtn) {
+    els.optimizeBtn.addEventListener("click", runAutoDispatch);
+  }
+}
+
+function bindPostDispatchEvents() {
+  if (els.copyResultBtn) {
+    els.copyResultBtn.addEventListener("click", copyDispatchResult);
+  }
+
+  if (els.confirmDailyBtn) {
+    els.confirmDailyBtn.addEventListener("click", confirmDailyToMonthly);
+  }
+
+  if (els.clearActualBtn) {
+    els.clearActualBtn.addEventListener("click", clearAllActuals);
+  }
+}
 
 function setupEvents() {
   els.logoutBtn?.addEventListener("click", logout);
@@ -2646,24 +2821,26 @@ function setupEvents() {
   els.saveVehicleBtn?.addEventListener("click", saveVehicle);
   els.cancelVehicleEditBtn?.addEventListener("click", resetVehicleForm);
 
-  els.planCastSelect?.addEventListener("change", () => populateFormFromCastSelect("plan"));
   els.savePlanBtn?.addEventListener("click", savePlan);
   els.guessPlanAreaBtn?.addEventListener("click", guessPlanArea);
-  els.cancelPlanEditBtn?.addEventListener("click", resetPlanForm);
   els.clearPlansBtn?.addEventListener("click", clearAllPlans);
-  els.planDate?.addEventListener("change", async () => {
-    const dateStr = els.planDate.value || todayStr();
-    if (els.dispatchDate) els.dispatchDate.value = dateStr;
-    if (els.actualDate) els.actualDate.value = dateStr;
-    await loadPlansByDate(dateStr);
-  });
 
-  els.planSelect?.addEventListener("change", populateActualFromPlanSelect);
-  els.castSelect?.addEventListener("change", () => populateFormFromCastSelect("actual"));
   els.saveActualBtn?.addEventListener("click", saveActual);
   els.guessActualAreaBtn?.addEventListener("click", guessActualArea);
-  els.cancelActualEditBtn?.addEventListener("click", resetActualForm);
-  els.addSelectedPlanBtn?.addEventListener("click", addPlanToActual);
+
+  bindPlanAndActualFormEvents();
+  bindDispatchEvents();
+  bindPostDispatchEvents();
+
+  els.checkAllVehiclesBtn?.addEventListener("click", () => toggleAllVehicles(true));
+  els.uncheckAllVehiclesBtn?.addEventListener("click", () => toggleAllVehicles(false));
+
+  els.resetMonthlySummaryBtn?.addEventListener("click", resetMonthlySummary);
+
+  els.dispatchDate?.addEventListener("change", syncDateAndReloadFromDispatchDate);
+  els.planDate?.addEventListener("change", syncDateAndReloadFromPlanDate);
+  els.actualDate?.addEventListener("change", syncDateAndReloadFromActualDate);
+
   els.copyActualTableBtn?.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(els.actualTableWrap?.innerText || "");
@@ -2673,37 +2850,7 @@ function setupEvents() {
       alert("コピーに失敗しました");
     }
   });
-  els.actualDate?.addEventListener("change", async () => {
-    const dateStr = els.actualDate.value || todayStr();
-    if (els.dispatchDate) els.dispatchDate.value = dateStr;
-    if (els.planDate) els.planDate.value = dateStr;
-    await loadPlansByDate(dateStr);
-    await loadActualsByDate(dateStr);
-  });
-
-  els.optimizeBtn?.addEventListener("click", runAutoDispatch);
-  els.confirmDailyBtn?.addEventListener("click", confirmDailyToMonthly);
-  els.clearActualBtn?.addEventListener("click", clearAllActuals);
-  els.checkAllVehiclesBtn?.addEventListener("click", () => toggleAllVehicles(true));
-  els.uncheckAllVehiclesBtn?.addEventListener("click", () => toggleAllVehicles(false));
-  els.copyResultBtn?.addEventListener("click", copyDispatchResult);
-
-  els.dispatchDate?.addEventListener("change", async () => {
-    const dateStr = els.dispatchDate.value || todayStr();
-    if (els.planDate) els.planDate.value = dateStr;
-    if (els.actualDate) els.actualDate.value = dateStr;
-    await loadPlansByDate(dateStr);
-    await loadActualsByDate(dateStr);
-    await loadDailyReports(dateStr);
-    renderDailyDispatchResult();
-  });
-
-  els.resetMonthlySummaryBtn?.addEventListener("click", resetMonthlySummary);
 }
-
-/* =========================
-   起動
-========================= */
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
