@@ -613,7 +613,7 @@ textarea{
 
 .grouped-row{
   display:grid;
-  grid-template-columns:120px 1.1fr 1.6fr 1fr 1fr 1fr;
+  grid-template-columns:120px 1.3fr 1fr .8fr 1.6fr;
   gap:12px;
   align-items:start;
   padding:12px 0;
