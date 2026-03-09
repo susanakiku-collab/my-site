@@ -794,3 +794,18 @@ textarea{
   color:#8fb4ff;
   text-decoration:underline;
 }
+.map-name-link,
+.cast-name-link,
+.dispatch-name-link{
+  color:#ffffff;
+  text-decoration:none;
+  font-weight:800;
+  transition:.18s ease;
+}
+
+.map-name-link:hover,
+.cast-name-link:hover,
+.dispatch-name-link:hover{
+  color:#8fb4ff;
+  text-decoration:underline;
+}
