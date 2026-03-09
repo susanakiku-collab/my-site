@@ -32,6 +32,7 @@ const SPECIAL_LATE_NIGHT_DATES = [
 ];
 
 const els = {
+  plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
   userEmail: document.getElementById("userEmail"),
   originLabelText: document.getElementById("originLabelText"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -1577,6 +1578,77 @@ function renderPlanGroupedTable() {
   els.plansGroupedTable.querySelectorAll(".plan-delete-btn").forEach(btn => {
     btn.addEventListener("click", async () => deletePlan(Number(btn.dataset.id)));
   });
+}
+
+function renderPlansTimeAreaMatrix() {
+  if (!els.plansTimeAreaMatrix) return;
+
+  const hours = [0, 1, 2, 3, 4, 5];
+  const areas = [
+    ...new Set(
+      currentPlansCache.map(x => normalizeAreaLabel(x.planned_area || "無し"))
+    )
+  ];
+
+  if (!areas.length) {
+    els.plansTimeAreaMatrix.innerHTML = `<div class="muted" style="padding:14px;">一覧がありません</div>`;
+    return;
+  }
+
+  let html = `
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          <th>時間</th>
+          ${areas.map(area => `<th>${escapeHtml(area)}</th>`).join("")}
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  hours.forEach(hour => {
+    html += `<tr><td>${getHourLabel(hour)}</td>`;
+
+    areas.forEach(area => {
+      const rows = currentPlansCache.filter(
+        plan =>
+          Number(plan.plan_hour ?? 0) === hour &&
+          normalizeAreaLabel(plan.planned_area || "無し") === area
+      );
+
+      if (!rows.length) {
+        html += `<td>-</td>`;
+      } else {
+        const totalDistance = rows.reduce(
+          (sum, row) => sum + Number(row.distance_km || 0),
+          0
+        );
+
+        html += `
+          <td>
+            <div class="matrix-card">
+              <div class="matrix-summary">${rows.length}人 / ${totalDistance.toFixed(1)}km</div>
+              ${rows
+                .map(
+                  row => `
+                    <div class="matrix-item">
+                      <span class="badge-status ${normalizeStatus(row.status)}">${escapeHtml(getStatusText(row.status))}</span>
+                      <span>${escapeHtml(row.casts?.name || "-")} (${Number(row.distance_km || 0).toFixed(1)}km)</span>
+                    </div>
+                  `
+                )
+                .join("")}
+            </div>
+          </td>
+        `;
+      }
+    });
+
+    html += `</tr>`;
+  });
+
+  html += `</tbody></table>`;
+  els.plansTimeAreaMatrix.innerHTML = html;
 }
 
 function guessPlanArea() {
