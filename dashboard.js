@@ -1423,7 +1423,6 @@ function renderPlanSelect() {
   currentPlansCache
     .filter(plan => plan.plan_date === targetDate)
     .filter(plan => plan.status === "planned")
-    .filter(plan => plan.status !== "done")
     .filter(plan => !doneCastIds.has(Number(plan.cast_id)))
     .forEach(plan => {
       const option = document.createElement("option");
@@ -1448,6 +1447,10 @@ async function savePlan() {
   const area = els.planArea?.value.trim() || "";
   const note = els.planNote?.value.trim() || "";
 
+  const existingPlan = editingPlanId
+    ? currentPlansCache.find(x => Number(x.id) === Number(editingPlanId))
+    : null;
+
   const payload = {
     plan_date: planDate,
     plan_hour: hour,
@@ -1456,7 +1459,7 @@ async function savePlan() {
     planned_area: normalizeAreaLabel(area || "無し"),
     distance_km: distanceKm,
     note,
-    status: "planned"
+    status: existingPlan?.status || "planned"
   };
 
   let error;
@@ -1889,7 +1892,13 @@ async function addPlanToActual() {
     return;
   }
 
-  if (currentActualsCache.some(x => Number(x.cast_id) === Number(plan.cast_id))) {
+  if (
+    currentActualsCache.some(x => {
+      const sameCast = Number(x.cast_id) === Number(plan.cast_id);
+      const status = normalizeStatus(x.status);
+      return sameCast && status !== "cancel";
+    })
+  ) {
     alert("そのキャストはすでにActualにあります");
     return;
   }
@@ -1905,7 +1914,11 @@ async function addPlanToActual() {
     cast_id: plan.cast_id,
     actual_hour: Number(plan.plan_hour || 0),
     stop_order:
-      currentActualsCache.filter(x => Number(x.actual_hour) === Number(plan.plan_hour || 0)).length + 1,
+      currentActualsCache.filter(
+        x =>
+          Number(x.actual_hour) === Number(plan.plan_hour || 0) &&
+          normalizeStatus(x.status) !== "cancel"
+      ).length + 1,
     pickup_label: ORIGIN_LABEL,
     destination_address: plan.destination_address || plan.casts?.address || "",
     destination_area: normalizeAreaLabel(plan.planned_area || "無し"),
@@ -2706,6 +2719,7 @@ async function resetAllDataDanger() {
       "dispatch_items",
       "dispatch_plans",
       "vehicle_daily_reports",
+      "dispatches",
       "casts",
       "vehicles"
     ];
