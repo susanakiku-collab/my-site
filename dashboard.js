@@ -1511,10 +1511,11 @@ async function addPlanToActual() {
     alert("そのキャストはすでにActualにあります");
     return;
   }
+
   const doneCastIds = getDoneCastIdsInActuals();
-if (doneCastIds.has(Number(plan.cast_id))) {
-  alert("このキャストはすでに送り完了です");
-  return;
+    if (doneCastIds.has(Number(plan.cast_id))) {
+    alert("このキャストはすでに送り完了です");
+    return;
 }
 
   const payload = {
