@@ -94,6 +94,8 @@ const els = {
   checkAllVehiclesBtn: document.getElementById("checkAllVehiclesBtn"),
   uncheckAllVehiclesBtn: document.getElementById("uncheckAllVehiclesBtn"),
   dailyVehicleChecklist: document.getElementById("dailyVehicleChecklist"),
+  dailyMileageInputs: document.getElementById("dailyMileageInputs"),
+  saveDailyMileageBtn: document.getElementById("saveDailyMileageBtn"),
   copyResultBtn: document.getElementById("copyResultBtn"),
   dailyDispatchResult: document.getElementById("dailyDispatchResult"),
 
@@ -2386,13 +2388,16 @@ function renderDailyVehicleChecklist() {
   });
 
   els.dailyVehicleChecklist.querySelectorAll(".vehicle-check-input").forEach(input => {
-    input.addEventListener("change", () => {
-      const id = Number(input.dataset.id);
-      if (input.checked) activeVehicleIdsForToday.add(id);
-      else activeVehicleIdsForToday.delete(id);
-      renderDailyDispatchResult();
-    });
+  input.addEventListener("change", () => {
+    const id = Number(input.dataset.id);
+
+    if (input.checked) activeVehicleIdsForToday.add(id);
+    else activeVehicleIdsForToday.delete(id);
+
+    renderDailyMileageInputs();   // ←追加①
+    renderDailyDispatchResult();
   });
+});
 }
 
 function getSelectedVehiclesForToday() {
@@ -2406,6 +2411,7 @@ function toggleAllVehicles(checked) {
     activeVehicleIdsForToday = new Set();
   }
   renderDailyVehicleChecklist();
+  renderDailyMileageInputs();
   renderDailyDispatchResult();
 }
 
@@ -2469,21 +2475,42 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         const normalizedClusterArea = normalizeAreaLabel(cluster.area);
         const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
 
-        let score = 1000;
-        score -= getVehicleAreaMatchScore(vehicle, cluster.area);
-        score += sameHourLoad * 35;
-        score += getVehicleState(vehicle.id).totalAssigned * 8;
-        score += getVehicleState(vehicle.id).totalDistance * 0.08;
-        score += monthly.avgDistance * 0.25;
-        score += cluster.totalDistance * 0.15;
+        const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
+        const projectedAvg =
+          (Number(monthly.totalDistance || 0) + Number(cluster.totalDistance || 0)) /
+          projectedWorkedDays;
 
+        let score = 1000;
+
+        // 方面一致を優先
+        score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+
+        // 同時間帯の過積載を避ける
+        score += sameHourLoad * 35;
+
+        // 今日の割当数の偏りを抑える
+        score += getVehicleState(vehicle.id).totalAssigned * 8;
+
+        // 今日の車両負荷が高すぎる車両を少し避ける
+        score += getVehicleState(vehicle.id).totalDistance * 0.18;
+
+        // 月間平均距離が高い車両に積みすぎない
+        score += projectedAvg * 0.55;
+
+        // ラスト便は帰宅方面一致を強く優遇
         if (isLastRun) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 120;
-          else score += 40;
+          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+            score -= 120;
+          } else {
+            score += 40;
+          }
         }
 
+        // 深夜デフォルト最終便も帰宅方面をやや考慮
         if (!isLastRun && isDefaultLastHourCluster) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 25;
+          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+            score -= 25;
+          }
         }
 
         return { vehicle, score };
@@ -2505,7 +2532,12 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         });
       });
 
-      addHourLoad(bestVehicle.id, cluster.hour, cluster.count, calculateRouteDistance(sortedItems));
+      addHourLoad(
+        bestVehicle.id,
+        cluster.hour,
+        cluster.count,
+        calculateRouteDistance(sortedItems)
+      );
       continue;
     }
 
@@ -2528,21 +2560,40 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           const normalizedClusterArea = normalizeAreaLabel(cluster.area);
           const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
 
+          const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
+          const projectedAvg =
+            (Number(monthly.totalDistance || 0) + Number(item.distance_km || 0)) /
+            projectedWorkedDays;
+
           let score = 1000;
+
+          // 方面一致を優先
           score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+
+          // 同時間帯負荷
           score += sameHourLoad * 35;
+
+          // 今日の割当数偏り
           score += getVehicleState(vehicle.id).totalAssigned * 8;
-          score += getVehicleState(vehicle.id).totalDistance * 0.08;
-          score += monthly.avgDistance * 0.25;
-          score += Number(item.distance_km || 0) * 0.15;
+
+          // 今日の累積ルート距離偏り
+          score += getVehicleState(vehicle.id).totalDistance * 0.18;
+
+          // 月間平均の高い車両へ積みすぎない
+          score += projectedAvg * 0.55;
 
           if (isLastRun) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 120;
-            else score += 40;
+            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+              score -= 120;
+            } else {
+              score += 40;
+            }
           }
 
           if (!isLastRun && isDefaultLastHourCluster) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) score -= 25;
+            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+              score -= 25;
+            }
           }
 
           return { vehicle, score };
@@ -2553,6 +2604,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
       if (!perItemCandidates.length) continue;
 
       const bestVehicle = perItemCandidates[0].vehicle;
+
       assignments.push({
         item_id: item.id,
         actual_hour: cluster.hour,
@@ -2561,7 +2613,12 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         distance_km: Number(item.distance_km || 0)
       });
 
-      addHourLoad(bestVehicle.id, cluster.hour, 1, Number(item.distance_km || 0));
+      addHourLoad(
+        bestVehicle.id,
+        cluster.hour,
+        1,
+        Number(item.distance_km || 0)
+      );
     }
   }
 
@@ -3334,9 +3391,156 @@ async function loadHomeAndAll() {
   await loadHistory();
 
   renderDailyVehicleChecklist();
+  renderDailyMileageInputs();
   renderDailyDispatchResult();
   renderHomeSummary();
   renderHomeMonthlyVehicleList();
+}
+
+function renderDailyMileageInputs() {
+  if (!els.dailyMileageInputs) return;
+
+  const reportDate = els.dispatchDate?.value || todayStr();
+  const selectedVehicles = getSelectedVehiclesForToday();
+
+  els.dailyMileageInputs.innerHTML = "";
+
+  if (!selectedVehicles.length) {
+    els.dailyMileageInputs.innerHTML = `<div class="muted">出勤車両を選択すると入力欄が表示されます</div>`;
+    return;
+  }
+
+  selectedVehicles.forEach(vehicle => {
+    const existing = currentDailyReportsCache.find(
+      r =>
+        r.report_date === reportDate &&
+        Number(r.vehicle_id) === Number(vehicle.id)
+    );
+
+    const row = document.createElement("div");
+    row.className = "daily-mileage-row";
+    row.innerHTML = `
+      <div>
+        <div class="daily-mileage-label">${escapeHtml(vehicle.plate_number || "-")}</div>
+        <div class="daily-mileage-sub">
+          ${escapeHtml(vehicle.driver_name || "-")} / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
+        </div>
+      </div>
+
+      <div class="field">
+        <label>日付</label>
+        <input type="date" value="${reportDate}" disabled />
+      </div>
+
+      <div class="field">
+        <label>実績走行距離(km)</label>
+        <input
+          type="number"
+          step="0.1"
+          min="0"
+          class="daily-mileage-input"
+          data-vehicle-id="${vehicle.id}"
+          value="${existing?.distance_km ?? ""}"
+          placeholder="例：72.5"
+        />
+      </div>
+
+      <div class="field">
+        <label>メモ</label>
+        <input
+          type="text"
+          class="daily-mileage-note-input"
+          data-vehicle-id="${vehicle.id}"
+          value="${escapeHtml(existing?.note || "")}"
+          placeholder="任意"
+        />
+      </div>
+    `;
+    els.dailyMileageInputs.appendChild(row);
+  });
+}
+
+async function saveDailyMileageReports() {
+  const reportDate = els.dispatchDate?.value || todayStr();
+  const selectedVehicles = getSelectedVehiclesForToday();
+
+  if (!selectedVehicles.length) {
+    alert("先に出勤車両を選択してください");
+    return;
+  }
+
+  const mileageInputs = [...document.querySelectorAll(".daily-mileage-input")];
+  const noteInputs = [...document.querySelectorAll(".daily-mileage-note-input")];
+
+  for (const vehicle of selectedVehicles) {
+    const mileageInput = mileageInputs.find(
+      input => Number(input.dataset.vehicleId) === Number(vehicle.id)
+    );
+    const noteInput = noteInputs.find(
+      input => Number(input.dataset.vehicleId) === Number(vehicle.id)
+    );
+
+    const distanceKm = toNullableNumber(mileageInput?.value);
+    const note = noteInput?.value.trim() || "日次報告入力";
+
+    if (distanceKm === null) continue;
+
+    const { data: existing, error: selectError } = await supabaseClient
+      .from("vehicle_daily_reports")
+      .select("id")
+      .eq("report_date", reportDate)
+      .eq("vehicle_id", vehicle.id)
+      .maybeSingle();
+
+    if (selectError) {
+      console.error(selectError);
+      alert("日次報告の確認でエラーが発生しました");
+      return;
+    }
+
+    if (existing) {
+      const { error: updateError } = await supabaseClient
+        .from("vehicle_daily_reports")
+        .update({
+          driver_name: vehicle.driver_name || null,
+          distance_km: distanceKm,
+          note,
+          created_by: currentUser.id
+        })
+        .eq("id", existing.id);
+
+      if (updateError) {
+        console.error(updateError);
+        alert("日次報告の更新に失敗しました: " + updateError.message);
+        return;
+      }
+    } else {
+      const { error: insertError } = await supabaseClient
+        .from("vehicle_daily_reports")
+        .insert({
+          report_date: reportDate,
+          vehicle_id: vehicle.id,
+          driver_name: vehicle.driver_name || null,
+          distance_km: distanceKm,
+          note,
+          created_by: currentUser.id
+        });
+
+      if (insertError) {
+        console.error(insertError);
+        alert("日次報告の保存に失敗しました: " + insertError.message);
+        return;
+      }
+    }
+  }
+
+  await addHistory(null, null, "save_daily_mileage", `${reportDate} の日次走行距離を保存`);
+  alert("日次走行距離を保存しました");
+
+  await loadDailyReports(reportDate);
+  renderDailyMileageInputs();
+  renderHomeMonthlyVehicleList();
+  renderVehiclesTable();
 }
 
 async function syncDateAndReloadFromDispatchDate() {
@@ -3433,6 +3637,7 @@ function setupEvents() {
 
   els.copyResultBtn?.addEventListener("click", copyDispatchResult);
   els.sendLineBtn?.addEventListener("click", sendDispatchResultToLine);
+  els.saveDailyMileageBtn?.addEventListener("click", saveDailyMileageReports);
 
   els.copyActualTableBtn?.addEventListener("click", async () => {
     try {
