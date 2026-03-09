@@ -250,6 +250,7 @@
                 <label for="dispatchDate">日付：</label>
                 <input id="dispatchDate" type="date" />
               </div>
+              <button id="sendLineBtn" class="btn primary">LINE送信</button>
               <button id="optimizeBtn" class="btn primary">自動配車</button>
               <button id="confirmDailyBtn" class="btn ghost">確定（月間へ反映）</button>
               <button id="clearActualBtn" class="btn danger">Actual全消去</button>
@@ -266,8 +267,11 @@
           <div class="divider"></div>
 
           <div class="result-head-row">
-            <h3>配車結果</h3>
-            <button id="copyResultBtn" class="btn ghost">結果をコピー</button>
+           <h3>配車結果</h3>
+           <div class="action-row">
+           <button id="copyResultBtn" class="btn ghost">結果をコピー</button>
+           <button id="sendLineBtn" class="btn primary">LINE送信</button>
+           </div>
           </div>
 
           <div id="dailyDispatchResult" class="dispatch-result-cards"></div>
