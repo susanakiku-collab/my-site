@@ -886,7 +886,7 @@ function renderHomeMonthlyVehicleList() {
     const row = document.createElement("div");
     row.className = "home-monthly-item";
     row.innerHTML = `
-      <span class="chip">${escapeHtml(vehicle.plate_number || "-")}</span>
+      ${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</span>
       <span class="chip">${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}</span>
       <span class="chip">帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}</span>
       <span class="chip">月間:${stats.totalDistance.toFixed(1)}km</span>
@@ -3400,7 +3400,7 @@ async function loadHomeAndAll() {
 function renderDailyMileageInputs() {
   if (!els.dailyMileageInputs) return;
 
-  const reportDate = els.dispatchDate?.value || todayStr();
+  const defaultDate = els.dispatchDate?.value || todayStr();
   const selectedVehicles = getSelectedVehiclesForToday();
 
   els.dailyMileageInputs.innerHTML = "";
@@ -3413,7 +3413,6 @@ function renderDailyMileageInputs() {
   selectedVehicles.forEach(vehicle => {
     const existing = currentDailyReportsCache.find(
       r =>
-        r.report_date === reportDate &&
         Number(r.vehicle_id) === Number(vehicle.id)
     );
 
@@ -3428,8 +3427,13 @@ function renderDailyMileageInputs() {
       </div>
 
       <div class="field">
-        <label>日付</label>
-        <input type="date" value="${reportDate}" disabled />
+        <label>入力日</label>
+        <input
+          type="date"
+          class="daily-mileage-date-input"
+          data-vehicle-id="${vehicle.id}"
+          value="${existing?.report_date || defaultDate}"
+        />
       </div>
 
       <div class="field">
@@ -3461,7 +3465,6 @@ function renderDailyMileageInputs() {
 }
 
 async function saveDailyMileageReports() {
-  const reportDate = els.dispatchDate?.value || todayStr();
   const selectedVehicles = getSelectedVehiclesForToday();
 
   if (!selectedVehicles.length) {
@@ -3471,6 +3474,7 @@ async function saveDailyMileageReports() {
 
   const mileageInputs = [...document.querySelectorAll(".daily-mileage-input")];
   const noteInputs = [...document.querySelectorAll(".daily-mileage-note-input")];
+  const dateInputs = [...document.querySelectorAll(".daily-mileage-date-input")];
 
   for (const vehicle of selectedVehicles) {
     const mileageInput = mileageInputs.find(
@@ -3479,10 +3483,15 @@ async function saveDailyMileageReports() {
     const noteInput = noteInputs.find(
       input => Number(input.dataset.vehicleId) === Number(vehicle.id)
     );
+    const dateInput = dateInputs.find(
+      input => Number(input.dataset.vehicleId) === Number(vehicle.id)
+    );
 
+    const reportDate = dateInput?.value || (els.dispatchDate?.value || todayStr());
     const distanceKm = toNullableNumber(mileageInput?.value);
     const note = noteInput?.value.trim() || "日次報告入力";
 
+    if (!reportDate) continue;
     if (distanceKm === null) continue;
 
     const { data: existing, error: selectError } = await supabaseClient
@@ -3534,10 +3543,10 @@ async function saveDailyMileageReports() {
     }
   }
 
-  await addHistory(null, null, "save_daily_mileage", `${reportDate} の日次走行距離を保存`);
+  await addHistory(null, null, "save_daily_mileage", `日次走行距離を保存`);
   alert("日次走行距離を保存しました");
 
-  await loadDailyReports(reportDate);
+  await loadDailyReports(els.dispatchDate?.value || todayStr());
   renderDailyMileageInputs();
   renderHomeMonthlyVehicleList();
   renderVehiclesTable();
