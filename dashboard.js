@@ -2725,7 +2725,7 @@ function renderDailyDispatchResult() {
                         .map(
                           v => `
                             <option value="${v.id}" ${Number(v.id) === Number(vehicle.id) ? "selected" : ""}>
-                              ${escapeHtml(v.plate_number || "")}
+                               ${escapeHtml(v.driver_name || v.plate_number || "-")}
                             </option>
                           `
                         )
@@ -2742,12 +2742,11 @@ function renderDailyDispatchResult() {
         <div class="vehicle-result-card">
           <div class="vehicle-result-head">
             <div class="vehicle-result-title">
-              <h4>${escapeHtml(vehicle.plate_number || "-")}</h4>
+              <h4>${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</h4>
               <div class="vehicle-result-meta">
                 ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}
                 / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
                 / 定員${vehicle.seat_capacity ?? "-"}
-                / ${escapeHtml(vehicle.driver_name || "-")}
               </div>
             </div>
             <div class="vehicle-result-badges">
