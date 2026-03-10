@@ -1362,11 +1362,12 @@ function renderVehiclesTable() {
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${escapeHtml(vehicle.plate_number || "")}</td>
-      <td>${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || ""))}</td>
-      <td>${escapeHtml(normalizeAreaLabel(vehicle.home_area || ""))}</td>
-      <td>${vehicle.seat_capacity ?? ""}</td>
-      <td>${escapeHtml(vehicle.driver_name || "")}</td>
+      <tr>
+      <td>${escapeHtml(vehicle.driver_name || "-")}</td>
+      <td>${escapeHtml(vehicle.plate_number || "-")}</td>
+      <td>${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}</td>
+      <td>${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}</td>
+      <td>${vehicle.seat_capacity ?? "-"}</td>
       <td>${stats.totalDistance.toFixed(1)}</td>
       <td>${stats.workedDays}</td>
       <td>${stats.avgDistance.toFixed(1)}</td>
@@ -2379,9 +2380,9 @@ function renderDailyVehicleChecklist() {
     row.className = "vehicle-check-item";
     row.innerHTML = `
       <div class="vehicle-check-label">
-        ${escapeHtml(vehicle.plate_number || "")}
-        （${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))} / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))} / 定員${vehicle.seat_capacity ?? "-"} / ${escapeHtml(vehicle.driver_name || "-")}）
-      </div>
+       ${escapeHtml(vehicle.driver_name || "-")}
+      （${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))} / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))} / 定員${vehicle.seat_capacity ?? "-"}）
+     </div>
       <input class="vehicle-check-input" type="checkbox" data-id="${vehicle.id}" ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""} />
     `;
     els.dailyVehicleChecklist.appendChild(row);
