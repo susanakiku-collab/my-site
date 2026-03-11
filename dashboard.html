@@ -67,6 +67,7 @@
     <nav class="main-tabs">
       <button class="main-tab active" data-tab="homeTab">ホーム</button>
       <button class="main-tab" data-tab="castsTab">キャスト</button>
+      <button class="main-tab" data-tab="castSearchTab">キャスト検索</button>
       <button class="main-tab" data-tab="vehiclesTab">車両</button>
       <button class="main-tab" data-tab="dailyTab">当日運用</button>
       <button class="main-tab" data-tab="plansTab">予定表</button>
@@ -197,6 +198,47 @@
               <tbody id="castsTableBody"></tbody>
             </table>
           </div>
+        </section>
+      </section>
+
+      
+      
+      <!-- キャスト検索 -->
+      <section id="castSearchTab" class="page-panel">
+        <section class="panel-card">
+          <div class="section-head">
+            <h2>キャスト検索</h2>
+          </div>
+
+          <div class="form-grid three-col">
+            <div class="field">
+              <label for="castSearchName">氏名</label>
+              <input id="castSearchName" type="text" placeholder="部分一致で検索" />
+            </div>
+
+            <div class="field">
+              <label for="castSearchArea">方面</label>
+              <input id="castSearchArea" type="text" placeholder="例：市川 / 柏 / 松戸" />
+            </div>
+
+            <div class="field">
+              <label for="castSearchPhone">電話</label>
+              <input id="castSearchPhone" type="text" placeholder="電話番号で検索" />
+            </div>
+
+            <div class="field full">
+              <label for="castSearchAddress">住所</label>
+              <input id="castSearchAddress" type="text" placeholder="住所の一部で検索" />
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button id="castSearchRunBtn" class="btn primary">検索</button>
+            <button id="castSearchResetBtn" class="btn ghost">入力リセット</button>
+            <span class="chip">検索結果 <span id="castSearchCount">0</span>件</span>
+          </div>
+
+          <div id="castSearchResultWrap" class="table-wrap"></div>
         </section>
       </section>
 
