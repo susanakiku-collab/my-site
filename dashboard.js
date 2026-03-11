@@ -947,6 +947,54 @@ function getVehicleAreaMatchScore(vehicle, area) {
   return score;
 }
 
+function isAreaRelated(areaA, areaB) {
+  const a = normalizeAreaLabel(areaA);
+  const b = normalizeAreaLabel(areaB);
+
+  if (!a || !b || a === "無し" || b === "無し") return false;
+  if (a === b) return true;
+
+  const groups = [
+    ["柏方面", "柏 若柴方面", "柏の葉方面", "柏たなか方面"],
+    ["流山方面", "流山 おおたかの森方面", "おおたかの森方面"],
+    ["松戸方面", "松戸 八ヶ崎方面"],
+    ["三郷方面", "三郷 中央方面"],
+    ["草加方面", "谷塚方面", "八潮方面"],
+    ["我孫子方面", "取手方面", "藤代方面", "守谷方面"],
+    ["船橋方面", "千葉東方面"],
+    ["足立方面", "葛飾方面", "江戸川方面"],
+    ["守谷方面", "つくば方面", "牛久方面"]
+  ];
+
+  return groups.some(group => group.includes(a) && group.includes(b));
+}
+
+function getHomePriorityScore(vehicle, clusterArea, isLastRun, isDefaultLastHourCluster) {
+  const cluster = normalizeAreaLabel(clusterArea);
+  const home = normalizeAreaLabel(vehicle?.home_area || "");
+  const work = normalizeAreaLabel(vehicle?.vehicle_area || "");
+
+  if (!cluster || cluster === "無し") return 0;
+
+  let score = 0;
+
+  if (isLastRun) {
+    if (home && home === cluster) score += 220;
+    else if (isAreaRelated(home, cluster)) score += 120;
+    else if (work && work === cluster) score += 45;
+    else score -= 80;
+
+    return score;
+  }
+
+  if (isDefaultLastHourCluster) {
+    if (home && home === cluster) score += 55;
+    else if (isAreaRelated(home, cluster)) score += 25;
+  }
+
+  return score;
+}
+
 function buildDispatchClusters(items) {
   const activeItems = [...items]
     .filter(item => !["done", "cancel"].includes(normalizeStatus(item.status)))
@@ -2680,9 +2728,6 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           avgDistance: 0
         };
 
-        const normalizedClusterArea = normalizeAreaLabel(cluster.area);
-        const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-
         const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
         const projectedAvg =
           (Number(monthly.totalDistance || 0) + Number(cluster.totalDistance || 0)) /
@@ -2690,35 +2735,32 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
         let score = 1000;
 
-        // 方面一致を優先
+        // 通常の方面一致
         score -= getVehicleAreaMatchScore(vehicle, cluster.area);
 
-        // 同時間帯の過積載を避ける
+        // ラスト便の帰宅方面を強く優先
+        score -= getHomePriorityScore(
+          vehicle,
+          cluster.area,
+          isLastRun,
+          isDefaultLastHourCluster
+        );
+
+        // 同時間帯の詰め込み回避
         score += sameHourLoad * 35;
 
-        // 今日の割当数の偏りを抑える
+        // 今日の偏りを抑える
         score += getVehicleState(vehicle.id).totalAssigned * 8;
-
-        // 今日の車両負荷が高すぎる車両を少し避ける
         score += getVehicleState(vehicle.id).totalDistance * 0.18;
 
-        // 月間平均距離が高い車両に積みすぎない
+        // 月間平均の偏りも抑える
         score += projectedAvg * 0.55;
 
-        // ラスト便は帰宅方面一致を強く優遇
-        if (isLastRun) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-            score -= 120;
-          } else {
-            score += 40;
-          }
-        }
-
-        // 深夜デフォルト最終便も帰宅方面をやや考慮
-        if (!isLastRun && isDefaultLastHourCluster) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-            score -= 25;
-          }
+        // ラスト便で帰宅方面不一致なら追加ペナルティ
+        const clusterArea = normalizeAreaLabel(cluster.area);
+        const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+        if (isLastRun && homeArea && clusterArea && homeArea !== clusterArea && !isAreaRelated(homeArea, clusterArea)) {
+          score += 75;
         }
 
         return { vehicle, score };
@@ -2765,9 +2807,6 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
             avgDistance: 0
           };
 
-          const normalizedClusterArea = normalizeAreaLabel(cluster.area);
-          const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-
           const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
           const projectedAvg =
             (Number(monthly.totalDistance || 0) + Number(item.distance_km || 0)) /
@@ -2775,33 +2814,23 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
           let score = 1000;
 
-          // 方面一致を優先
           score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+          score -= getHomePriorityScore(
+            vehicle,
+            cluster.area,
+            isLastRun,
+            isDefaultLastHourCluster
+          );
 
-          // 同時間帯負荷
           score += sameHourLoad * 35;
-
-          // 今日の割当数偏り
           score += getVehicleState(vehicle.id).totalAssigned * 8;
-
-          // 今日の累積ルート距離偏り
           score += getVehicleState(vehicle.id).totalDistance * 0.18;
-
-          // 月間平均の高い車両へ積みすぎない
           score += projectedAvg * 0.55;
 
-          if (isLastRun) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-              score -= 120;
-            } else {
-              score += 40;
-            }
-          }
-
-          if (!isLastRun && isDefaultLastHourCluster) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-              score -= 25;
-            }
+          const clusterArea = normalizeAreaLabel(cluster.area);
+          const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+          if (isLastRun && homeArea && clusterArea && homeArea !== clusterArea && !isAreaRelated(homeArea, clusterArea)) {
+            score += 75;
           }
 
           return { vehicle, score };
