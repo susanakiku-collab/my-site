@@ -6,6 +6,47 @@
   <title>THEMIS AI Dispatch</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" type="image/png" href="favicon.png" />
+
+  <style>
+    .cast-search-wrap{position:relative;}
+    .cast-search-suggest{
+      position:absolute;
+      top:calc(100% + 6px);
+      left:0;
+      right:0;
+      z-index:30;
+      max-height:240px;
+      overflow:auto;
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:14px;
+      background:#0f1724;
+      box-shadow:0 16px 36px rgba(0,0,0,.35);
+      padding:6px;
+    }
+    .cast-search-suggest.hidden{display:none;}
+    .cast-search-item{
+      width:100%;
+      display:flex;
+      flex-direction:column;
+      gap:3px;
+      text-align:left;
+      background:transparent;
+      border:none;
+      color:#fff;
+      padding:10px 12px;
+      border-radius:10px;
+      cursor:pointer;
+    }
+    .cast-search-item:hover{
+      background:rgba(255,255,255,.06);
+    }
+    .cast-search-item small{
+      color:#b9c7da;
+      font-size:12px;
+      line-height:1.4;
+    }
+  </style>
+
 </head>
 <body>
   <div class="app-shell">
@@ -305,9 +346,11 @@
           <div class="form-grid three-col">
             <div class="field">
               <label for="planCastSelect">キャスト選択</label>
-              <select id="planCastSelect">
-                <option value="">選択してください</option>
-              </select>
+              <div class="cast-search-wrap">
+                <input id="planCastSelect" type="text" placeholder="候補から選択 / 直接入力" autocomplete="off" />
+                <datalist id="planCastList"></datalist>
+                <div id="planCastSuggest" class="cast-search-suggest hidden"></div>
+              </div>
             </div>
 
             <div class="field">
@@ -346,7 +389,7 @@
           <div class="action-row">
             <button id="savePlanBtn" class="btn primary">追加/更新</button>
             <button id="guessPlanAreaBtn" class="btn ghost">住所から方面判定</button>
-            <button id="cancelPlanEditBtn" class="btn ghost hidden">入力リセット</button>
+            <button id="cancelPlanEditBtn" class="btn ghost">入力リセット</button>
           </div>
 
           <div id="plansGroupedTable" class="table-wrap"></div>
@@ -383,9 +426,11 @@
 
             <div class="field">
               <label for="castSelect">キャスト選択</label>
-              <select id="castSelect">
-                <option value="">選択してください</option>
-              </select>
+              <div class="cast-search-wrap">
+                <input id="castSelect" type="text" placeholder="候補から選択 / 直接入力" autocomplete="off" />
+                <datalist id="castList"></datalist>
+                <div id="castSuggest" class="cast-search-suggest hidden"></div>
+              </div>
             </div>
 
             <div class="field">
@@ -433,7 +478,7 @@
           <div class="action-row">
             <button id="saveActualBtn" class="btn primary">追加/更新</button>
             <button id="guessActualAreaBtn" class="btn ghost">住所から方面判定</button>
-            <button id="cancelActualEditBtn" class="btn ghost hidden">入力リセット</button>
+            <button id="cancelActualEditBtn" class="btn ghost">入力リセット</button>
           </div>
 
           <div id="actualTableWrap" class="table-wrap"></div>
