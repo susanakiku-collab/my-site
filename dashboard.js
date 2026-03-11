@@ -42,7 +42,6 @@ const els = {
   importAllBtn: document.getElementById("importAllBtn"),
   importAllFileInput: document.getElementById("importAllFileInput"),
   exportCsvBtnHeader: document.getElementById("exportCsvBtnHeader"),
-  openManualBtn: document.getElementById("openManualBtn"),
   dangerResetBtn: document.getElementById("dangerResetBtn"),
 
   homeCastCount: document.getElementById("homeCastCount"),
@@ -336,251 +335,60 @@ function calculateRouteDistance(items) {
   return Number(total.toFixed(1));
 }
 
-
 function normalizeAddressText(address) {
   return String(address || "")
     .trim()
     .replace(/[　\s]+/g, "")
     .replace(/ヶ/g, "ケ")
-    .replace(/之/g, "の")
-    .replace(/−/g, "-")
-    .replace(/ー/g, "-");
-}
-
-function detectPrefecture(address) {
-  const a = normalizeAddressText(address);
-
-  if (a.includes("東京都")) return "東京";
-  if (a.includes("埼玉県")) return "埼玉";
-  if (a.includes("千葉県")) return "千葉";
-  if (a.includes("茨城県")) return "茨城";
-
-  return "";
-}
-
-function detectCityTownArea(address) {
-  const raw = String(address || "").trim();
-  const a = normalizeAddressText(raw);
-  if (!a) return "";
-
-  // 東京23区は「区名 + 町名」で返す
-  const tokyoMatch = a.match(
-    /(足立区|葛飾区|江戸川区|墨田区|江東区|荒川区|台東区|中央区|千代田区|港区|新宿区|文京区|品川区|目黒区|大田区|世田谷区|渋谷区|中野区|杉並区|豊島区|北区|板橋区|練馬区)(.+)/
-  );
-  if (tokyoMatch) {
-    const wardRaw = tokyoMatch[1];
-    let townRaw = tokyoMatch[2] || "";
-
-    townRaw = townRaw
-      .replace(/丁目.*$/, "")
-      .replace(/番地.*$/, "")
-      .replace(/番.*$/, "")
-      .replace(/号.*$/, "")
-      .replace(/[0-9０-９]+/g, "")
-      .replace(/[-‐-‒–—―ー－]+/g, "")
-      .replace(/日本$/, "")
-      .trim();
-
-    const ward = wardRaw.replace("区", "");
-    return townRaw ? `${ward} ${townRaw}方面` : `${ward}方面`;
-  }
-
-  const cityMatch = a.match(
-    /(松戸市|柏市|流山市|我孫子市|鎌ケ谷市|鎌ヶ谷市|船橋市|三郷市|八潮市|草加市|越谷市|守谷市|取手市|つくば市|牛久市|龍ケ崎市|龍ヶ崎市)(.+)/
-  );
-  if (!cityMatch) return "";
-
-  const cityRaw = cityMatch[1];
-  let townRaw = cityMatch[2] || "";
-
-  townRaw = townRaw
-    .replace(/丁目.*$/, "")
-    .replace(/番地.*$/, "")
-    .replace(/番.*$/, "")
-    .replace(/号.*$/, "")
-    .replace(/[0-9０-９]+/g, "")
-    .replace(/[-‐-‒–—―ー－]+/g, "")
-    .replace(/日本$/, "")
-    .replace(/^千葉県|^埼玉県|^東京都|^茨城県/, "")
-    .trim();
-
-  const city = cityRaw.replace(/市|区/g, "");
-
-  const aliasMap = [
-    { city: "柏", from: ["若柴"], to: "若柴" },
-    { city: "流山", from: ["おおたかの森西", "おおたかの森東", "おおたかの森南", "おおたかの森北"], to: "おおたかの森" },
-    { city: "三郷", from: ["中央"], to: "中央" },
-    { city: "草加", from: ["谷塚仲町", "谷塚上町", "谷塚町"], to: "谷塚" },
-    { city: "守谷", from: ["百合ケ丘", "百合ヶ丘"], to: "百合ヶ丘" },
-    { city: "つくば", from: ["研究学園"], to: "研究学園" },
-    { city: "牛久", from: ["ひたち野西", "ひたち野東"], to: "ひたち野うしく" },
-    { city: "松戸", from: ["八ケ崎", "八ヶ崎"], to: "八ヶ崎" }
-  ];
-
-  for (const row of aliasMap) {
-    if (row.city !== city) continue;
-    for (const key of row.from) {
-      if (townRaw.includes(key)) {
-        return `${city} ${row.to}方面`;
-      }
-    }
-  }
-
-  if (townRaw) {
-    return `${city} ${townRaw}方面`;
-  }
-
-  return `${city}方面`;
+    .replace(/之/g, "の");
 }
 
 function classifyAreaByAddress(address) {
-  const cityTown = detectCityTownArea(address);
-  if (cityTown) return cityTown;
-
   const a = normalizeAddressText(address);
   if (!a) return "";
-
-  const areaMap = [
-    { area: "柏方面", keywords: ["南柏", "柏", "北柏"] },
-    { area: "柏の葉方面", keywords: ["柏の葉", "柏たなか"] },
-    { area: "流山方面", keywords: ["流山", "南流山"] },
-    { area: "おおたかの森方面", keywords: ["流山おおたかの森", "おおたかの森"] },
-    { area: "我孫子方面", keywords: ["我孫子", "天王台", "湖北"] },
-    { area: "鎌ヶ谷方面", keywords: ["新鎌ケ谷", "新鎌ヶ谷", "鎌ケ谷", "鎌ヶ谷"] },
-    { area: "船橋方面", keywords: ["船橋", "西船橋"] },
-
-    { area: "足立方面", keywords: ["足立区"] },
-    { area: "葛飾方面", keywords: ["葛飾区"] },
-    { area: "江戸川方面", keywords: ["江戸川区"] },
-    { area: "墨田方面", keywords: ["墨田区"] },
-    { area: "江東方面", keywords: ["江東区"] },
-    { area: "荒川方面", keywords: ["荒川区"] },
-    { area: "台東方面", keywords: ["台東区"] },
-
-    { area: "三郷方面", keywords: ["三郷中央", "三郷"] },
-    { area: "八潮方面", keywords: ["八潮"] },
-    { area: "谷塚方面", keywords: ["谷塚"] },
-    { area: "草加方面", keywords: ["草加"] },
-    { area: "越谷方面", keywords: ["新越谷", "越谷"] },
-
-    { area: "藤代方面", keywords: ["藤代"] },
-    { area: "取手方面", keywords: ["取手"] },
-    { area: "守谷方面", keywords: ["守谷"] },
-    { area: "つくば方面", keywords: ["研究学園", "つくば"] },
-    { area: "牛久方面", keywords: ["ひたち野うしく", "牛久"] }
-  ];
-
-  for (const row of areaMap) {
-    if (row.keywords.some(keyword => a.includes(keyword))) {
-      return row.area;
-    }
-  }
-
+  if (a.includes("船橋")) return "船橋方面";
+  if (a.includes("柏")) return "柏方面";
+  if (a.includes("松戸")) return "松戸近郊";
+  if (a.includes("市川")) return "市川方面";
+  if (a.includes("流山")) return "流山方面";
+  if (a.includes("八千代")) return "八千代方面";
+  if (a.includes("三郷")) return "三郷方面";
+  if (a.includes("守谷")) return "守谷方面";
+  if (a.includes("葛飾")) return "葛飾方面";
+  if (a.includes("江戸川")) return "都内方面";
+  if (a.includes("東京")) return "都内方面";
+  if (a.includes("茨城")) return "茨城方面";
   return "";
-}
-
-function getDirection8(lat, lng) {
-  if (!isValidLatLng(lat, lng)) return "";
-
-  const dLat = lat - ORIGIN_LAT;
-  const dLng = lng - ORIGIN_LNG;
-  const angle = Math.atan2(dLat, dLng) * 180 / Math.PI;
-
-  if (angle >= -22.5 && angle < 22.5) return "東";
-  if (angle >= 22.5 && angle < 67.5) return "北東";
-  if (angle >= 67.5 && angle < 112.5) return "北";
-  if (angle >= 112.5 && angle < 157.5) return "北西";
-  if (angle >= -67.5 && angle < -22.5) return "南東";
-  if (angle >= -112.5 && angle < -67.5) return "南";
-  if (angle >= -157.5 && angle < -112.5) return "南西";
-  return "西";
 }
 
 function classifyAreaByLatLng(lat, lng) {
-  if (!isValidLatLng(lat, lng)) return "";
-
-  if (lat >= 35.79 && lat <= 35.86 && lng >= 139.90 && lng <= 139.97) {
-    return "松戸方面";
-  }
-
-  if (lat >= 35.79 && lat <= 35.88 && lng >= 139.76 && lng <= 139.85) {
-    if (lat >= 35.84) return "草加方面";
-    if (lat >= 35.81) return "谷塚方面";
-    return "八潮方面";
-  }
-
-  if (lat >= 35.84 && lat <= 35.92 && lng >= 139.84 && lng <= 139.92) {
-    return "三郷方面";
-  }
-
-  if (lat >= 35.84 && lat <= 35.89 && lng >= 139.92 && lng <= 139.98) {
-    return "柏方面";
-  }
-
-  if (lat >= 35.85 && lat <= 35.91 && lng > 139.98 && lng <= 140.05) {
-    return "柏の葉方面";
-  }
-
-  if (lat >= 35.84 && lat <= 35.90 && lng >= 139.88 && lng <= 139.95) {
-    return "流山方面";
-  }
-
-  if (lat >= 35.85 && lat <= 35.89 && lng > 140.00 && lng <= 140.08) {
-    return "我孫子方面";
-  }
-
-  if (lat >= 35.70 && lat <= 35.78 && lng >= 139.78 && lng <= 139.86) {
-    return "墨田方面";
-  }
-  if (lat >= 35.73 && lat <= 35.80 && lng >= 139.80 && lng <= 139.88) {
-    return "足立方面";
-  }
-  if (lat >= 35.75 && lat <= 35.79 && lng >= 139.84 && lng <= 139.89) {
-    return "葛飾方面";
-  }
-  if (lat >= 35.67 && lat <= 35.72 && lng >= 139.80 && lng <= 139.86) {
-    return "江東方面";
-  }
-
-  if (lat >= 35.90 && lat <= 36.02 && lng >= 140.00 && lng <= 140.08) {
-    return "藤代方面";
-  }
-  if (lat >= 35.88 && lat <= 35.95 && lng >= 140.03 && lng <= 140.10) {
-    return "取手方面";
-  }
-  if (lat >= 35.93 && lat <= 36.02 && lng >= 139.97 && lng <= 140.05) {
-    return "守谷方面";
-  }
-  if (lat >= 36.02 && lat <= 36.10 && lng >= 140.05 && lng <= 140.15) {
-    return "つくば方面";
-  }
-  if (lat >= 35.95 && lat <= 36.02 && lng >= 140.12 && lng <= 140.20) {
-    return "牛久方面";
-  }
-
-  return "";
+  if (!isValidLatLng(lat, lng)) return "周辺";
+  if (lng >= 139.99) return "都内方面";
+  if (lat >= 35.84 && lng >= 139.94) return "柏方面";
+  if (lat >= 35.80 && lat < 35.86 && lng >= 139.90 && lng < 139.96) return "松戸近郊";
+  if (lat >= 35.69 && lat < 35.80 && lng >= 139.93 && lng < 140.09) return "船橋方面";
+  if (lng > 140.05) return "茨城方面";
+  return "周辺";
 }
 
 function guessArea(lat, lng, address = "") {
-  const byAddress = classifyAreaByAddress(address);
-  if (byAddress) return byAddress;
-
-  const byLatLng = classifyAreaByLatLng(lat, lng);
-  if (byLatLng) return byLatLng;
-
-  const pref = detectPrefecture(address);
-  const dir = getDirection8(lat, lng);
-
-  if (pref && dir) return `${pref}${dir}方面`;
-  if (pref) return `${pref}方面`;
-  if (dir) return `${dir}方面`;
-
-  return "周辺";
+  return classifyAreaByAddress(address) || classifyAreaByLatLng(lat, lng);
 }
 
 function normalizeAreaLabel(area) {
   const value = String(area || "").trim();
   if (!value) return "無し";
+  if (value.includes("柏")) return "柏方面";
+  if (value.includes("松戸")) return "松戸近郊";
+  if (value.includes("船橋")) return "船橋方面";
+  if (value.includes("市川")) return "市川方面";
+  if (value.includes("流山")) return "流山方面";
+  if (value.includes("八千代")) return "八千代方面";
+  if (value.includes("三郷")) return "三郷方面";
+  if (value.includes("守谷")) return "守谷方面";
+  if (value.includes("葛飾")) return "葛飾方面";
+  if (value.includes("都内") || value.includes("東京") || value.includes("江戸川")) return "都内方面";
+  if (value.includes("茨城")) return "茨城方面";
   return value;
 }
 
@@ -1023,13 +831,6 @@ async function logout() {
   window.location.href = "index.html";
 }
 
-function openManual() {
-  window.open(
-    "https://drive.google.com/file/d/1LRTe2qcaef3dtItKcTAijadgHKpdmPAM/view?usp=drive_link",
-    "_blank"
-  );
-}
-
 function activateTab(tabId) {
   document.querySelectorAll(".main-tab").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
@@ -1330,28 +1131,32 @@ async function importCastCsvFile() {
       return;
     }
 
-    const inserts = [];
+    const uniqueMap = new Map();
 
     for (const row of rows) {
       const name = String(row.name || "").trim();
       const address = String(row.address || "").trim();
-      if (!name) continue;
+      if (!name || !address) continue;
 
-      const exists = allCastsCache.find(
-        c =>
-          String(c.name || "").trim() === name &&
-          String(c.address || "").trim() === address
-      );
-      if (exists) {
-        console.log("重複スキップ:", name, address);
-        continue;
+      const key = `${name}__${address}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, row);
       }
+    }
+
+    const mergedRows = [...uniqueMap.values()];
+    const payloads = [];
+
+    for (const row of mergedRows) {
+      const name = String(row.name || "").trim();
+      const address = String(row.address || "").trim();
+      if (!name || !address) continue;
 
       const lat = toNullableNumber(row.latitude);
       const lng = toNullableNumber(row.longitude);
       const autoArea = guessArea(lat, lng, address);
 
-      inserts.push({
+      payloads.push({
         name,
         phone: String(row.phone || "").trim(),
         address,
@@ -1367,13 +1172,16 @@ async function importCastCsvFile() {
       });
     }
 
-    if (!inserts.length) {
-      alert("新規キャストはありません");
+    if (!payloads.length) {
+      alert("取り込めるデータがありません");
       els.csvFileInput.value = "";
       return;
     }
 
-    const { error } = await supabaseClient.from("casts").insert(inserts);
+    const { error } = await supabaseClient
+      .from("casts")
+      .upsert(payloads, { onConflict: "name,address" });
+
     if (error) {
       console.error("CSV import supabase error:", error);
       alert("CSV取込エラー: " + error.message);
@@ -1381,8 +1189,8 @@ async function importCastCsvFile() {
     }
 
     els.csvFileInput.value = "";
-    await addHistory(null, null, "import_csv", `${inserts.length}件のキャストをCSV取込`);
-    alert(`${inserts.length}件のキャストを取り込みました`);
+    await addHistory(null, null, "import_csv", `${payloads.length}件のキャストをCSV取込/更新`);
+    alert(`${payloads.length}件のキャストをCSV取込/更新しました`);
     await loadCasts();
   } catch (error) {
     console.error("importCastCsvFile error:", error);
@@ -3527,7 +3335,8 @@ async function importAllDataFromFile() {
 }
 
 async function resetAllDataDanger() {
-  if (!window.confirm("本当に全データを消去しますか？この操作は元に戻せません。")) return;
+  if (!window.confirm("全消去しますか？この操作は戻せません。")) return;
+  if (!window.confirm("本当に全消去しますか？")) return;
 
   try {
     const deleteTargets = [
@@ -3806,7 +3615,6 @@ function setupEvents() {
   els.importAllBtn?.addEventListener("click", triggerImportAll);
   els.importAllFileInput?.addEventListener("change", importAllDataFromFile);
   els.exportCsvBtnHeader?.addEventListener("click", exportCastsCsv);
-  els.openManualBtn?.addEventListener("click", openManual);
   els.dangerResetBtn?.addEventListener("click", resetAllDataDanger);
 
   els.saveCastBtn?.addEventListener("click", saveCast);
