@@ -809,3 +809,95 @@ textarea{
   color:#8fb4ff;
   text-decoration:underline;
 }
+
+/* ==============================
+   Searchable cast input fixes
+   ============================== */
+
+.page-body,
+.page-panel,
+.panel-card,
+.form-grid,
+.table-wrap{
+  overflow: visible;
+}
+
+.field{
+  position: relative;
+  z-index: 1;
+}
+
+.field:focus-within{
+  z-index: 300;
+}
+
+.cast-search-wrap{
+  position: relative;
+  z-index: 50;
+}
+
+.cast-search-wrap:focus-within{
+  z-index: 400;
+}
+
+.cast-search-suggest{
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  max-height:420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  background: #0f1724;
+  box-shadow: 0 16px 36px rgba(0,0,0,.45);
+  padding: 6px;
+}
+
+.cast-search-suggest.hidden{
+  display:none !important;
+}
+
+.cast-search-item{
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.cast-search-item:hover{
+  background: rgba(255,255,255,.06);
+}
+
+.cast-search-item small{
+  color: #b9c7da;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Keep header/nav buttons aligned even when browser default styles leak */
+.header-actions .btn,
+.main-tabs .main-tab,
+.action-row .btn,
+.daily-top-actions .btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* File input remains hidden */
+input.hidden,
+.hidden{
+  display:none !important;
+}
