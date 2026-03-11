@@ -42,6 +42,7 @@ const els = {
   importAllBtn: document.getElementById("importAllBtn"),
   importAllFileInput: document.getElementById("importAllFileInput"),
   exportCsvBtnHeader: document.getElementById("exportCsvBtnHeader"),
+  openManualBtn: document.getElementById("openManualBtn"),
   dangerResetBtn: document.getElementById("dangerResetBtn"),
 
   homeCastCount: document.getElementById("homeCastCount"),
@@ -357,22 +358,104 @@ function detectPrefecture(address) {
   return "";
 }
 
+function detectCityTownArea(address) {
+  const raw = String(address || "").trim();
+  const a = normalizeAddressText(raw);
+  if (!a) return "";
+
+  // 東京23区は「区名 + 町名」で返す
+  const tokyoMatch = a.match(
+    /(足立区|葛飾区|江戸川区|墨田区|江東区|荒川区|台東区|中央区|千代田区|港区|新宿区|文京区|品川区|目黒区|大田区|世田谷区|渋谷区|中野区|杉並区|豊島区|北区|板橋区|練馬区)(.+)/
+  );
+  if (tokyoMatch) {
+    const wardRaw = tokyoMatch[1];
+    let townRaw = tokyoMatch[2] || "";
+
+    townRaw = townRaw
+      .replace(/丁目.*$/, "")
+      .replace(/番地.*$/, "")
+      .replace(/番.*$/, "")
+      .replace(/号.*$/, "")
+      .replace(/[0-9０-９]+/g, "")
+      .replace(/[-‐-‒–—―ー－]+/g, "")
+      .replace(/日本$/, "")
+      .trim();
+
+    const ward = wardRaw.replace("区", "");
+    return townRaw ? `${ward} ${townRaw}方面` : `${ward}方面`;
+  }
+
+  const cityMatch = a.match(
+    /(松戸市|柏市|流山市|我孫子市|鎌ケ谷市|鎌ヶ谷市|船橋市|三郷市|八潮市|草加市|越谷市|守谷市|取手市|つくば市|牛久市|龍ケ崎市|龍ヶ崎市)(.+)/
+  );
+  if (!cityMatch) return "";
+
+  const cityRaw = cityMatch[1];
+  let townRaw = cityMatch[2] || "";
+
+  townRaw = townRaw
+    .replace(/丁目.*$/, "")
+    .replace(/番地.*$/, "")
+    .replace(/番.*$/, "")
+    .replace(/号.*$/, "")
+    .replace(/[0-9０-９]+/g, "")
+    .replace(/[-‐-‒–—―ー－]+/g, "")
+    .replace(/日本$/, "")
+    .replace(/^千葉県|^埼玉県|^東京都|^茨城県/, "")
+    .trim();
+
+  const city = cityRaw.replace(/市|区/g, "");
+
+  const aliasMap = [
+    { city: "柏", from: ["若柴"], to: "若柴" },
+    { city: "流山", from: ["おおたかの森西", "おおたかの森東", "おおたかの森南", "おおたかの森北"], to: "おおたかの森" },
+    { city: "三郷", from: ["中央"], to: "中央" },
+    { city: "草加", from: ["谷塚仲町", "谷塚上町", "谷塚町"], to: "谷塚" },
+    { city: "守谷", from: ["百合ケ丘", "百合ヶ丘"], to: "百合ヶ丘" },
+    { city: "つくば", from: ["研究学園"], to: "研究学園" },
+    { city: "牛久", from: ["ひたち野西", "ひたち野東"], to: "ひたち野うしく" },
+    { city: "松戸", from: ["八ケ崎", "八ヶ崎"], to: "八ヶ崎" }
+  ];
+
+  for (const row of aliasMap) {
+    if (row.city !== city) continue;
+    for (const key of row.from) {
+      if (townRaw.includes(key)) {
+        return `${city} ${row.to}方面`;
+      }
+    }
+  }
+
+  if (townRaw) {
+    return `${city} ${townRaw}方面`;
+  }
+
+  return `${city}方面`;
+}
+
 function classifyAreaByAddress(address) {
+  const cityTown = detectCityTownArea(address);
+  if (cityTown) return cityTown;
+
   const a = normalizeAddressText(address);
   if (!a) return "";
 
   const areaMap = [
-    { area: "柏西方面", keywords: ["南柏", "柏", "北柏"] },
-    { area: "柏東方面", keywords: ["柏の葉", "柏たなか", "江戸川台", "初石"] },
-    { area: "流山方面", keywords: ["流山", "流山おおたかの森", "おおたかの森", "南流山"] },
+    { area: "柏方面", keywords: ["南柏", "柏", "北柏"] },
+    { area: "柏の葉方面", keywords: ["柏の葉", "柏たなか"] },
+    { area: "流山方面", keywords: ["流山", "南流山"] },
+    { area: "おおたかの森方面", keywords: ["流山おおたかの森", "おおたかの森"] },
     { area: "我孫子方面", keywords: ["我孫子", "天王台", "湖北"] },
     { area: "鎌ヶ谷方面", keywords: ["新鎌ケ谷", "新鎌ヶ谷", "鎌ケ谷", "鎌ヶ谷"] },
     { area: "船橋方面", keywords: ["船橋", "西船橋"] },
 
-    { area: "北千住方面", keywords: ["北千住", "千住"] },
-    { area: "綾瀬方面", keywords: ["綾瀬", "青井"] },
-    { area: "亀有方面", keywords: ["亀有"] },
-    { area: "金町方面", keywords: ["金町", "京成金町"] },
+    { area: "足立方面", keywords: ["足立区"] },
+    { area: "葛飾方面", keywords: ["葛飾区"] },
+    { area: "江戸川方面", keywords: ["江戸川区"] },
+    { area: "墨田方面", keywords: ["墨田区"] },
+    { area: "江東方面", keywords: ["江東区"] },
+    { area: "荒川方面", keywords: ["荒川区"] },
+    { area: "台東方面", keywords: ["台東区"] },
 
     { area: "三郷方面", keywords: ["三郷中央", "三郷"] },
     { area: "八潮方面", keywords: ["八潮"] },
@@ -384,7 +467,7 @@ function classifyAreaByAddress(address) {
     { area: "取手方面", keywords: ["取手"] },
     { area: "守谷方面", keywords: ["守谷"] },
     { area: "つくば方面", keywords: ["研究学園", "つくば"] },
-    { area: "牛久方面", keywords: ["牛久"] }
+    { area: "牛久方面", keywords: ["ひたち野うしく", "牛久"] }
   ];
 
   for (const row of areaMap) {
@@ -392,22 +475,6 @@ function classifyAreaByAddress(address) {
       return row.area;
     }
   }
-
-  if (a.includes("草加市")) return "草加方面";
-  if (a.includes("八潮市")) return "八潮方面";
-  if (a.includes("三郷市")) return "三郷方面";
-  if (a.includes("越谷市")) return "越谷方面";
-  if (a.includes("柏市")) return "柏西方面";
-  if (a.includes("流山市")) return "流山方面";
-  if (a.includes("我孫子市")) return "我孫子方面";
-  if (a.includes("鎌ケ谷市") || a.includes("鎌ヶ谷市")) return "鎌ヶ谷方面";
-  if (a.includes("船橋市")) return "船橋方面";
-  if (a.includes("取手市")) return "取手方面";
-  if (a.includes("守谷市")) return "守谷方面";
-  if (a.includes("つくば市")) return "つくば方面";
-  if (a.includes("牛久市")) return "牛久方面";
-  if (a.includes("葛飾区")) return "金町方面";
-  if (a.includes("足立区")) return "北千住方面";
 
   return "";
 }
@@ -432,6 +499,10 @@ function getDirection8(lat, lng) {
 function classifyAreaByLatLng(lat, lng) {
   if (!isValidLatLng(lat, lng)) return "";
 
+  if (lat >= 35.79 && lat <= 35.86 && lng >= 139.90 && lng <= 139.97) {
+    return "松戸方面";
+  }
+
   if (lat >= 35.79 && lat <= 35.88 && lng >= 139.76 && lng <= 139.85) {
     if (lat >= 35.84) return "草加方面";
     if (lat >= 35.81) return "谷塚方面";
@@ -443,11 +514,11 @@ function classifyAreaByLatLng(lat, lng) {
   }
 
   if (lat >= 35.84 && lat <= 35.89 && lng >= 139.92 && lng <= 139.98) {
-    return "柏西方面";
+    return "柏方面";
   }
 
   if (lat >= 35.85 && lat <= 35.91 && lng > 139.98 && lng <= 140.05) {
-    return "柏東方面";
+    return "柏の葉方面";
   }
 
   if (lat >= 35.84 && lat <= 35.90 && lng >= 139.88 && lng <= 139.95) {
@@ -458,14 +529,17 @@ function classifyAreaByLatLng(lat, lng) {
     return "我孫子方面";
   }
 
+  if (lat >= 35.70 && lat <= 35.78 && lng >= 139.78 && lng <= 139.86) {
+    return "墨田方面";
+  }
   if (lat >= 35.73 && lat <= 35.80 && lng >= 139.80 && lng <= 139.88) {
-    return "綾瀬方面";
+    return "足立方面";
   }
   if (lat >= 35.75 && lat <= 35.79 && lng >= 139.84 && lng <= 139.89) {
-    return "亀有方面";
+    return "葛飾方面";
   }
-  if (lat >= 35.75 && lat <= 35.78 && lng >= 139.86 && lng <= 139.92) {
-    return "金町方面";
+  if (lat >= 35.67 && lat <= 35.72 && lng >= 139.80 && lng <= 139.86) {
+    return "江東方面";
   }
 
   if (lat >= 35.90 && lat <= 36.02 && lng >= 140.00 && lng <= 140.08) {
@@ -507,25 +581,6 @@ function guessArea(lat, lng, address = "") {
 function normalizeAreaLabel(area) {
   const value = String(area || "").trim();
   if (!value) return "無し";
-
-  const exactAreas = [
-    "柏西方面","柏東方面","流山方面","我孫子方面","鎌ヶ谷方面","船橋方面",
-    "北千住方面","綾瀬方面","亀有方面","金町方面",
-    "三郷方面","八潮方面","谷塚方面","草加方面","越谷方面",
-    "藤代方面","取手方面","守谷方面","つくば方面","牛久方面"
-  ];
-
-  for (const areaName of exactAreas) {
-    if (value.includes(areaName.replace("方面", "")) || value === areaName) {
-      return areaName;
-    }
-  }
-
-  if (value.includes("千葉")) return "千葉方面";
-  if (value.includes("東京")) return "東京方面";
-  if (value.includes("埼玉")) return "埼玉方面";
-  if (value.includes("茨城")) return "茨城方面";
-
   return value;
 }
 
@@ -966,6 +1021,13 @@ async function ensureAuth() {
 async function logout() {
   await supabaseClient.auth.signOut();
   window.location.href = "index.html";
+}
+
+function openManual() {
+  window.open(
+    "https://drive.google.com/file/d/1LRTe2qcaef3dtItKcTAijadgHKpdmPAM/view?usp=drive_link",
+    "_blank"
+  );
 }
 
 function activateTab(tabId) {
@@ -3465,8 +3527,7 @@ async function importAllDataFromFile() {
 }
 
 async function resetAllDataDanger() {
-  if (!window.confirm("全消去しますか？この操作は戻せません。")) return;
-  if (!window.confirm("本当に全消去しますか？")) return;
+  if (!window.confirm("本当に全データを消去しますか？この操作は元に戻せません。")) return;
 
   try {
     const deleteTargets = [
@@ -3745,6 +3806,7 @@ function setupEvents() {
   els.importAllBtn?.addEventListener("click", triggerImportAll);
   els.importAllFileInput?.addEventListener("change", importAllDataFromFile);
   els.exportCsvBtnHeader?.addEventListener("click", exportCastsCsv);
+  els.openManualBtn?.addEventListener("click", openManual);
   els.dangerResetBtn?.addEventListener("click", resetAllDataDanger);
 
   els.saveCastBtn?.addEventListener("click", saveCast);
