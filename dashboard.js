@@ -74,6 +74,14 @@ const els = {
   exportCsvBtn: document.getElementById("exportCsvBtn"),
   csvFileInput: document.getElementById("csvFileInput"),
   castsTableBody: document.getElementById("castsTableBody"),
+  castSearchName: document.getElementById("castSearchName"),
+  castSearchArea: document.getElementById("castSearchArea"),
+  castSearchAddress: document.getElementById("castSearchAddress"),
+  castSearchPhone: document.getElementById("castSearchPhone"),
+  castSearchRunBtn: document.getElementById("castSearchRunBtn"),
+  castSearchResetBtn: document.getElementById("castSearchResetBtn"),
+  castSearchCount: document.getElementById("castSearchCount"),
+  castSearchResultWrap: document.getElementById("castSearchResultWrap"),
 
   vehiclePlateNumber: document.getElementById("vehiclePlateNumber"),
   vehicleArea: document.getElementById("vehicleArea"),
@@ -1346,6 +1354,7 @@ async function loadCasts() {
 
   renderCastsTable();
   renderCastSelects();
+  renderCastSearchResults();
   renderHomeSummary();
 }
 
@@ -1536,6 +1545,113 @@ function guessCastArea() {
   if (els.castArea) {
     els.castArea.value = normalizeAreaLabel(guessArea(lat, lng, els.castAddress?.value || ""));
   }
+}
+
+
+function getFilteredCastsForSearch() {
+  const nameQ = String(els.castSearchName?.value || "").trim().toLowerCase();
+  const areaQ = String(els.castSearchArea?.value || "").trim().toLowerCase();
+  const addressQ = String(els.castSearchAddress?.value || "").trim().toLowerCase();
+  const phoneQ = String(els.castSearchPhone?.value || "").trim().toLowerCase();
+
+  return allCastsCache.filter(cast => {
+    const name = String(cast.name || "").toLowerCase();
+    const area = String(normalizeAreaLabel(cast.area || "")).toLowerCase();
+    const address = String(cast.address || "").toLowerCase();
+    const phone = String(cast.phone || "").toLowerCase();
+
+    if (nameQ && !name.includes(nameQ)) return false;
+    if (areaQ && !area.includes(areaQ)) return false;
+    if (addressQ && !address.includes(addressQ)) return false;
+    if (phoneQ && !phone.includes(phoneQ)) return false;
+
+    return true;
+  });
+}
+
+function renderCastSearchResults() {
+  if (!els.castSearchResultWrap) return;
+
+  const rows = getFilteredCastsForSearch();
+  if (els.castSearchCount) els.castSearchCount.textContent = String(rows.length);
+
+  if (!rows.length) {
+    els.castSearchResultWrap.innerHTML =
+      `<div class="muted" style="padding:14px;">該当するキャストがありません</div>`;
+    return;
+  }
+
+  let html = `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>氏名</th>
+          <th>住所</th>
+          <th>方面</th>
+          <th>想定距離(km)</th>
+          <th>電話</th>
+          <th>メモ</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  rows.forEach(cast => {
+    html += `
+      <tr>
+        <td>
+          ${
+            buildCastMapUrl(cast)
+              ? `<a href="${buildCastMapUrl(cast)}" target="_blank" rel="noopener noreferrer" class="cast-name-link">${escapeHtml(cast.name || "")} 📍</a>`
+              : `${escapeHtml(cast.name || "")}`
+          }
+        </td>
+        <td>${escapeHtml(cast.address || "")}</td>
+        <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
+        <td>${cast.distance_km ?? ""}</td>
+        <td>${escapeHtml(cast.phone || "")}</td>
+        <td>${escapeHtml(cast.memo || "")}</td>
+        <td class="actions-cell">
+          <button class="btn ghost cast-search-map-btn" data-id="${cast.id}">地図</button>
+          <button class="btn ghost cast-search-route-btn" data-address="${escapeHtml(cast.address || "")}">ルート</button>
+          <button class="btn ghost cast-search-edit-btn" data-id="${cast.id}">編集へ</button>
+        </td>
+      </tr>
+    `;
+  });
+
+  html += `</tbody></table>`;
+  els.castSearchResultWrap.innerHTML = html;
+
+  els.castSearchResultWrap.querySelectorAll(".cast-search-map-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const cast = allCastsCache.find(x => Number(x.id) === Number(btn.dataset.id));
+      const url = buildCastMapUrl(cast);
+      if (url) window.open(url, "_blank");
+    });
+  });
+
+  els.castSearchResultWrap.querySelectorAll(".cast-search-route-btn").forEach(btn => {
+    btn.addEventListener("click", () => openGoogleMap(btn.dataset.address || ""));
+  });
+
+  els.castSearchResultWrap.querySelectorAll(".cast-search-edit-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const cast = allCastsCache.find(x => Number(x.id) === Number(btn.dataset.id));
+      if (!cast) return;
+      activateTab("castsTab");
+      fillCastForm(cast);
+    });
+  });
+}
+
+function resetCastSearchFilters() {
+  if (els.castSearchName) els.castSearchName.value = "";
+  if (els.castSearchArea) els.castSearchArea.value = "";
+  if (els.castSearchAddress) els.castSearchAddress.value = "";
+  if (els.castSearchPhone) els.castSearchPhone.value = "";
+  renderCastSearchResults();
 }
 
 function resetVehicleForm() {
@@ -4192,6 +4308,12 @@ function setupEvents() {
   els.importCsvBtn?.addEventListener("click", () => els.csvFileInput?.click());
   els.exportCsvBtn?.addEventListener("click", exportCastsCsv);
   els.csvFileInput?.addEventListener("change", importCastCsvFile);
+  els.castSearchRunBtn?.addEventListener("click", renderCastSearchResults);
+  els.castSearchResetBtn?.addEventListener("click", resetCastSearchFilters);
+  els.castSearchName?.addEventListener("input", renderCastSearchResults);
+  els.castSearchArea?.addEventListener("input", renderCastSearchResults);
+  els.castSearchAddress?.addEventListener("input", renderCastSearchResults);
+  els.castSearchPhone?.addEventListener("input", renderCastSearchResults);
 
   els.saveVehicleBtn?.addEventListener("click", saveVehicle);
   els.cancelVehicleEditBtn?.addEventListener("click", resetVehicleForm);
