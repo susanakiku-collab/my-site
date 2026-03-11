@@ -386,8 +386,61 @@ function detectCityTownArea(address) {
     return townRaw ? `${ward} ${townRaw}方面` : `${ward}方面`;
   }
 
+  const chibaWardMatch = a.match(
+    /(千葉市中央区|千葉市花見川区|千葉市稲毛区|千葉市若葉区|千葉市緑区|千葉市美浜区)(.+)/
+  );
+  if (chibaWardMatch) {
+    const wardRaw = chibaWardMatch[1];
+    let townRaw = chibaWardMatch[2] || "";
+
+    townRaw = townRaw
+      .replace(/丁目.*$/, "")
+      .replace(/番地.*$/, "")
+      .replace(/番.*$/, "")
+      .replace(/号.*$/, "")
+      .replace(/[0-9０-９]+/g, "")
+      .replace(/[-‐-‒–—―ー－]+/g, "")
+      .replace(/日本$/, "")
+      .trim();
+
+    const ward = wardRaw.replace("千葉市", "");
+
+    const chibaWardAliasMap = [
+      { ward: "中央区", from: ["蘇我", "今井"], to: "蘇我" },
+      { ward: "中央区", from: ["千葉寺", "末広", "青葉町"], to: "千葉寺" },
+      { ward: "中央区", from: ["長洲", "港町", "本千葉町"], to: "本千葉" },
+
+      { ward: "花見川区", from: ["幕張本郷", "幕張町"], to: "幕張本郷" },
+      { ward: "花見川区", from: ["検見川町", "新検見川"], to: "検見川" },
+
+      { ward: "稲毛区", from: ["稲毛東", "稲毛台町", "小仲台"], to: "稲毛" },
+      { ward: "稲毛区", from: ["穴川", "天台"], to: "穴川" },
+
+      { ward: "若葉区", from: ["都賀", "西都賀"], to: "都賀" },
+      { ward: "若葉区", from: ["桜木", "加曽利"], to: "桜木" },
+
+      { ward: "緑区", from: ["おゆみ野", "おゆみ野南", "おゆみ野中央"], to: "おゆみ野" },
+      { ward: "緑区", from: ["誉田町", "誉田"], to: "誉田" },
+
+      { ward: "美浜区", from: ["ひび野", "打瀬", "中瀬"], to: "海浜幕張" },
+      { ward: "美浜区", from: ["幕張西"], to: "幕張" },
+      { ward: "美浜区", from: ["稲毛海岸", "高洲", "高浜"], to: "稲毛海岸" }
+    ];
+
+    for (const row of chibaWardAliasMap) {
+      if (row.ward !== ward) continue;
+      for (const key of row.from) {
+        if (townRaw.includes(key)) {
+          return `${ward} ${row.to}方面`;
+        }
+      }
+    }
+
+    return townRaw ? `${ward} ${townRaw}方面` : `${ward}方面`;
+  }
+
   const cityMatch = a.match(
-    /(松戸市|柏市|流山市|我孫子市|鎌ケ谷市|鎌ヶ谷市|船橋市|三郷市|八潮市|草加市|越谷市|守谷市|取手市|つくば市|牛久市|龍ケ崎市|龍ヶ崎市)(.+)/
+    /(松戸市|柏市|流山市|我孫子市|野田市|市川市|鎌ケ谷市|鎌ヶ谷市|船橋市|三郷市|八潮市|草加市|越谷市|吉川市|守谷市|取手市|つくば市|牛久市|龍ケ崎市|龍ヶ崎市)(.+)/
   );
   if (!cityMatch) return "";
 
@@ -405,17 +458,43 @@ function detectCityTownArea(address) {
     .replace(/^千葉県|^埼玉県|^東京都|^茨城県/, "")
     .trim();
 
-  const city = cityRaw.replace(/市|区/g, "");
+  const city = cityRaw.replace(/(市|区)$/, "");
 
   const aliasMap = [
     { city: "柏", from: ["若柴"], to: "若柴" },
     { city: "流山", from: ["おおたかの森西", "おおたかの森東", "おおたかの森南", "おおたかの森北"], to: "おおたかの森" },
+
+    { city: "市川", from: ["八幡", "東菅野"], to: "八幡" },
+    { city: "市川", from: ["南八幡"], to: "本八幡" },
+    { city: "市川", from: ["鬼高", "高石神", "中山"], to: "下総中山" },
+    { city: "市川", from: ["行徳駅前", "末広", "宝", "湊"], to: "行徳" },
+    { city: "市川", from: ["妙典", "塩焼"], to: "妙典" },
+    { city: "市川", from: ["南行徳", "香取", "相之川"], to: "南行徳" },
+    { city: "市川", from: ["堀之内", "中国分", "北国分"], to: "堀之内" },
+    { city: "市川", from: ["国府台", "真間", "菅野"], to: "国府台" },
+
+    { city: "船橋", from: ["西船", "西船橋", "本郷町"], to: "西船橋" },
+    { city: "船橋", from: ["東船橋", "市場"], to: "東船橋" },
+    { city: "船橋", from: ["前原西", "前原東", "津田沼"], to: "津田沼" },
+    { city: "船橋", from: ["習志野台", "高根台"], to: "習志野台" },
+    { city: "船橋", from: ["北習志野"], to: "北習志野" },
+    { city: "船橋", from: ["浜町", "若松", "高瀬町"], to: "南船橋" },
+    { city: "船橋", from: ["二和東", "二和西", "咲が丘"], to: "二和" },
+
     { city: "三郷", from: ["中央"], to: "中央" },
     { city: "草加", from: ["谷塚仲町", "谷塚上町", "谷塚町"], to: "谷塚" },
     { city: "守谷", from: ["百合ケ丘", "百合ヶ丘"], to: "百合ヶ丘" },
     { city: "つくば", from: ["研究学園"], to: "研究学園" },
     { city: "牛久", from: ["ひたち野西", "ひたち野東"], to: "ひたち野うしく" },
-    { city: "松戸", from: ["八ケ崎", "八ヶ崎"], to: "八ヶ崎" }
+
+    { city: "松戸", from: ["八ケ崎", "八ヶ崎"], to: "八ヶ崎" },
+    { city: "松戸", from: ["日暮", "金ケ作", "常盤平西窪町"], to: "八柱" },
+    { city: "松戸", from: ["常盤平", "常盤平双葉町"], to: "常盤平" },
+    { city: "松戸", from: ["新松戸", "幸谷"], to: "新松戸" },
+    { city: "松戸", from: ["馬橋", "西馬橋", "中和倉"], to: "馬橋" },
+    { city: "松戸", from: ["五香", "五香西", "五香南"], to: "五香" },
+    { city: "松戸", from: ["小金原", "栗ケ沢", "根木内"], to: "小金原" },
+    { city: "松戸", from: ["松飛台", "串崎新田"], to: "松飛台" }
   ];
 
   for (const row of aliasMap) {
@@ -445,10 +524,13 @@ function classifyAreaByAddress(address) {
     { area: "柏方面", keywords: ["南柏", "柏", "北柏"] },
     { area: "柏の葉方面", keywords: ["柏の葉", "柏たなか"] },
     { area: "流山方面", keywords: ["流山", "南流山"] },
+    { area: "野田方面", keywords: ["野田", "梅郷", "運河", "川間", "愛宕", "清水公園"] },
     { area: "おおたかの森方面", keywords: ["流山おおたかの森", "おおたかの森"] },
     { area: "我孫子方面", keywords: ["我孫子", "天王台", "湖北"] },
     { area: "鎌ヶ谷方面", keywords: ["新鎌ケ谷", "新鎌ヶ谷", "鎌ケ谷", "鎌ヶ谷"] },
     { area: "船橋方面", keywords: ["船橋", "西船橋"] },
+    { area: "市川方面", keywords: ["市川", "本八幡", "下総中山", "妙典", "行徳"] },
+    { area: "千葉方面", keywords: ["千葉市", "千葉", "蘇我", "稲毛", "幕張", "海浜幕張", "都賀"] },
 
     { area: "足立方面", keywords: ["足立区"] },
     { area: "葛飾方面", keywords: ["葛飾区"] },
@@ -459,6 +541,7 @@ function classifyAreaByAddress(address) {
     { area: "台東方面", keywords: ["台東区"] },
 
     { area: "三郷方面", keywords: ["三郷中央", "三郷"] },
+    { area: "吉川方面", keywords: ["吉川"] },
     { area: "八潮方面", keywords: ["八潮"] },
     { area: "谷塚方面", keywords: ["谷塚"] },
     { area: "草加方面", keywords: ["草加"] },
@@ -514,12 +597,20 @@ function classifyAreaByLatLng(lat, lng) {
     return "三郷方面";
   }
 
+  if (lat >= 35.86 && lat <= 35.91 && lng >= 139.82 && lng <= 139.87) {
+    return "吉川方面";
+  }
+
   if (lat >= 35.84 && lat <= 35.89 && lng >= 139.92 && lng <= 139.98) {
     return "柏方面";
   }
 
   if (lat >= 35.85 && lat <= 35.91 && lng > 139.98 && lng <= 140.05) {
     return "柏の葉方面";
+  }
+
+  if (lat >= 35.92 && lat <= 35.99 && lng >= 139.84 && lng <= 139.91) {
+    return "野田方面";
   }
 
   if (lat >= 35.84 && lat <= 35.90 && lng >= 139.88 && lng <= 139.95) {
@@ -942,54 +1033,6 @@ function getVehicleAreaMatchScore(vehicle, area) {
   }
   if (homeArea && normalizedArea && homeArea === normalizedArea) {
     score += 12;
-  }
-
-  return score;
-}
-
-function isAreaRelated(areaA, areaB) {
-  const a = normalizeAreaLabel(areaA);
-  const b = normalizeAreaLabel(areaB);
-
-  if (!a || !b || a === "無し" || b === "無し") return false;
-  if (a === b) return true;
-
-  const groups = [
-    ["柏方面", "柏 若柴方面", "柏の葉方面", "柏たなか方面"],
-    ["流山方面", "流山 おおたかの森方面", "おおたかの森方面"],
-    ["松戸方面", "松戸 八ヶ崎方面"],
-    ["三郷方面", "三郷 中央方面"],
-    ["草加方面", "谷塚方面", "八潮方面"],
-    ["我孫子方面", "取手方面", "藤代方面", "守谷方面"],
-    ["船橋方面", "千葉東方面"],
-    ["足立方面", "葛飾方面", "江戸川方面"],
-    ["守谷方面", "つくば方面", "牛久方面"]
-  ];
-
-  return groups.some(group => group.includes(a) && group.includes(b));
-}
-
-function getHomePriorityScore(vehicle, clusterArea, isLastRun, isDefaultLastHourCluster) {
-  const cluster = normalizeAreaLabel(clusterArea);
-  const home = normalizeAreaLabel(vehicle?.home_area || "");
-  const work = normalizeAreaLabel(vehicle?.vehicle_area || "");
-
-  if (!cluster || cluster === "無し") return 0;
-
-  let score = 0;
-
-  if (isLastRun) {
-    if (home && home === cluster) score += 220;
-    else if (isAreaRelated(home, cluster)) score += 120;
-    else if (work && work === cluster) score += 45;
-    else score -= 80;
-
-    return score;
-  }
-
-  if (isDefaultLastHourCluster) {
-    if (home && home === cluster) score += 55;
-    else if (isAreaRelated(home, cluster)) score += 25;
   }
 
   return score;
@@ -2728,6 +2771,9 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           avgDistance: 0
         };
 
+        const normalizedClusterArea = normalizeAreaLabel(cluster.area);
+        const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+
         const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
         const projectedAvg =
           (Number(monthly.totalDistance || 0) + Number(cluster.totalDistance || 0)) /
@@ -2735,32 +2781,35 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
         let score = 1000;
 
-        // 通常の方面一致
+        // 方面一致を優先
         score -= getVehicleAreaMatchScore(vehicle, cluster.area);
 
-        // ラスト便の帰宅方面を強く優先
-        score -= getHomePriorityScore(
-          vehicle,
-          cluster.area,
-          isLastRun,
-          isDefaultLastHourCluster
-        );
-
-        // 同時間帯の詰め込み回避
+        // 同時間帯の過積載を避ける
         score += sameHourLoad * 35;
 
-        // 今日の偏りを抑える
+        // 今日の割当数の偏りを抑える
         score += getVehicleState(vehicle.id).totalAssigned * 8;
+
+        // 今日の車両負荷が高すぎる車両を少し避ける
         score += getVehicleState(vehicle.id).totalDistance * 0.18;
 
-        // 月間平均の偏りも抑える
+        // 月間平均距離が高い車両に積みすぎない
         score += projectedAvg * 0.55;
 
-        // ラスト便で帰宅方面不一致なら追加ペナルティ
-        const clusterArea = normalizeAreaLabel(cluster.area);
-        const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-        if (isLastRun && homeArea && clusterArea && homeArea !== clusterArea && !isAreaRelated(homeArea, clusterArea)) {
-          score += 75;
+        // ラスト便は帰宅方面一致を強く優遇
+        if (isLastRun) {
+          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+            score -= 120;
+          } else {
+            score += 40;
+          }
+        }
+
+        // 深夜デフォルト最終便も帰宅方面をやや考慮
+        if (!isLastRun && isDefaultLastHourCluster) {
+          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+            score -= 25;
+          }
         }
 
         return { vehicle, score };
@@ -2807,6 +2856,9 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
             avgDistance: 0
           };
 
+          const normalizedClusterArea = normalizeAreaLabel(cluster.area);
+          const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+
           const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
           const projectedAvg =
             (Number(monthly.totalDistance || 0) + Number(item.distance_km || 0)) /
@@ -2814,23 +2866,33 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
           let score = 1000;
 
+          // 方面一致を優先
           score -= getVehicleAreaMatchScore(vehicle, cluster.area);
-          score -= getHomePriorityScore(
-            vehicle,
-            cluster.area,
-            isLastRun,
-            isDefaultLastHourCluster
-          );
 
+          // 同時間帯負荷
           score += sameHourLoad * 35;
+
+          // 今日の割当数偏り
           score += getVehicleState(vehicle.id).totalAssigned * 8;
+
+          // 今日の累積ルート距離偏り
           score += getVehicleState(vehicle.id).totalDistance * 0.18;
+
+          // 月間平均の高い車両へ積みすぎない
           score += projectedAvg * 0.55;
 
-          const clusterArea = normalizeAreaLabel(cluster.area);
-          const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-          if (isLastRun && homeArea && clusterArea && homeArea !== clusterArea && !isAreaRelated(homeArea, clusterArea)) {
-            score += 75;
+          if (isLastRun) {
+            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+              score -= 120;
+            } else {
+              score += 40;
+            }
+          }
+
+          if (!isLastRun && isDefaultLastHourCluster) {
+            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
+              score -= 25;
+            }
           }
 
           return { vehicle, score };
