@@ -114,12 +114,14 @@ const els = {
   guessPlanAreaBtn: document.getElementById("guessPlanAreaBtn"),
   cancelPlanEditBtn: document.getElementById("cancelPlanEditBtn"),
   plansGroupedTable: document.getElementById("plansGroupedTable"),
+  planCastSuggest: document.getElementById("planCastSuggest"),
 
   actualDate: document.getElementById("actualDate"),
   addSelectedPlanBtn: document.getElementById("addSelectedPlanBtn"),
   copyActualTableBtn: document.getElementById("copyActualTableBtn"),
   planSelect: document.getElementById("planSelect"),
   castSelect: document.getElementById("castSelect"),
+  castSuggest: document.getElementById("castSuggest"),
   actualHour: document.getElementById("actualHour"),
   actualDistanceKm: document.getElementById("actualDistanceKm"),
   actualStatus: document.getElementById("actualStatus"),
@@ -668,6 +670,24 @@ function guessArea(lat, lng, address = "") {
   if (dir) return `${dir}方面`;
 
   return "周辺";
+}
+
+
+function normalizeCastInputValue(value) {
+  return String(value || "").trim();
+}
+
+function findCastByInputValue(value) {
+  const normalized = normalizeCastInputValue(value);
+  if (!normalized) return null;
+
+  return (
+    allCastsCache.find(c => String(c.name || "").trim() === normalized) ||
+    allCastsCache.find(
+      c => `${String(c.name || "").trim()} | ${normalizeAreaLabel(c.area || "-")}` === normalized
+    ) ||
+    null
+  );
 }
 
 function normalizeAreaLabel(area) {
@@ -1783,34 +1803,104 @@ async function importVehicleCsvFile() {
     alert("車両CSV取込中にエラーが発生しました");
   }
 }
+
+function clearPlanCastDerivedFields() {
+  if (els.planAddress) els.planAddress.value = "";
+  if (els.planArea) els.planArea.value = "";
+  if (els.planDistanceKm) els.planDistanceKm.value = "";
+}
+
+function clearActualCastDerivedFields() {
+  if (els.actualAddress) els.actualAddress.value = "";
+  if (els.actualArea) els.actualArea.value = "";
+  if (els.actualDistanceKm) els.actualDistanceKm.value = "";
+}
+
+function syncPlanFieldsFromCastInput(forceFill = false) {
+  const cast = findCastByInputValue(els.planCastSelect?.value || "");
+  if (!cast) {
+    clearPlanCastDerivedFields();
+    return null;
+  }
+
+  let distance = toNullableNumber(cast.distance_km);
+  if (distance === null) {
+    const lat = toNullableNumber(cast.latitude);
+    const lng = toNullableNumber(cast.longitude);
+    if (isValidLatLng(lat, lng)) {
+      distance = estimateRoadKmFromStation(lat, lng);
+    }
+  }
+
+  if (els.planAddress) els.planAddress.value = cast.address || "";
+  if (els.planArea) {
+    els.planArea.value = normalizeAreaLabel(
+      cast.area ||
+        guessArea(
+          toNullableNumber(cast.latitude),
+          toNullableNumber(cast.longitude),
+          cast.address || ""
+        )
+    );
+  }
+  if (els.planDistanceKm) els.planDistanceKm.value = distance ?? "";
+
+  return cast;
+}
+
+function syncActualFieldsFromCastInput(forceFill = false) {
+  const cast = findCastByInputValue(els.castSelect?.value || "");
+  if (!cast) {
+    clearActualCastDerivedFields();
+    return null;
+  }
+
+  let distance = toNullableNumber(cast.distance_km);
+  if (distance === null) {
+    const lat = toNullableNumber(cast.latitude);
+    const lng = toNullableNumber(cast.longitude);
+    if (isValidLatLng(lat, lng)) {
+      distance = estimateRoadKmFromStation(lat, lng);
+    }
+  }
+
+  if (els.actualAddress) els.actualAddress.value = cast.address || "";
+  if (els.actualArea) {
+    els.actualArea.value = normalizeAreaLabel(
+      cast.area ||
+        guessArea(
+          toNullableNumber(cast.latitude),
+          toNullableNumber(cast.longitude),
+          cast.address || ""
+        )
+    );
+  }
+  if (els.actualDistanceKm) els.actualDistanceKm.value = distance ?? "";
+
+  return cast;
+}
+
 function resetPlanForm() {
   editingPlanId = null;
   if (els.planCastSelect) els.planCastSelect.value = "";
   if (els.planHour) els.planHour.value = "0";
-  if (els.planDistanceKm) els.planDistanceKm.value = "";
-  if (els.planAddress) els.planAddress.value = "";
-  if (els.planArea) els.planArea.value = "";
+  clearPlanCastDerivedFields();
   if (els.planNote) els.planNote.value = "";
-  if (els.cancelPlanEditBtn) els.cancelPlanEditBtn.classList.add("hidden");
 }
 
 function fillPlanForm(plan) {
   editingPlanId = plan.id;
-  if (els.planCastSelect) els.planCastSelect.value = String(plan.cast_id || "");
+  if (els.planCastSelect) els.planCastSelect.value = plan.casts?.name || "";
   if (els.planHour) els.planHour.value = String(plan.plan_hour ?? 0);
   if (els.planDistanceKm) els.planDistanceKm.value = plan.distance_km ?? "";
   if (els.planAddress) els.planAddress.value = plan.destination_address || plan.casts?.address || "";
   if (els.planArea) els.planArea.value = normalizeAreaLabel(plan.planned_area || "");
   if (els.planNote) els.planNote.value = plan.note || "";
-  if (els.cancelPlanEditBtn) els.cancelPlanEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function fillPlanFormFromSelectedCast() {
-  const castId = Number(els.planCastSelect?.value || 0);
-  if (!castId) return;
-
-  const cast = allCastsCache.find(c => Number(c.id) === castId);
+  const cast = findCastByInputValue(els.planCastSelect?.value || "");
   if (!cast) return;
 
   if (els.planAddress && !els.planAddress.value.trim()) {
@@ -1874,28 +1964,186 @@ async function loadPlansByDate(dateStr) {
   renderHomeSummary();
 }
 
-function renderPlanCastSelect() {
-  if (!els.planCastSelect) return;
 
+function getPlanSelectableCasts() {
   const plannedIds = getPlannedCastIds();
   const editingPlan = editingPlanId
     ? currentPlansCache.find(x => Number(x.id) === Number(editingPlanId))
     : null;
   const editingCastIdForPlan = Number(editingPlan?.cast_id || 0);
 
-  els.planCastSelect.innerHTML = `<option value="">選択してください</option>`;
+  return allCastsCache.filter(
+    cast => Number(cast.id) === editingCastIdForPlan || !plannedIds.has(Number(cast.id))
+  );
+}
 
-  allCastsCache
-    .filter(cast => Number(cast.id) === editingCastIdForPlan || !plannedIds.has(Number(cast.id)))
-    .forEach(cast => {
-      const option = document.createElement("option");
-      option.value = cast.id;
-      option.textContent = `${cast.name} | ${normalizeAreaLabel(cast.area || "-")}`;
-      option.dataset.address = cast.address || "";
-      option.dataset.area = normalizeAreaLabel(cast.area || "");
-      option.dataset.distance = cast.distance_km ?? "";
-      els.planCastSelect.appendChild(option);
+function getActualSelectableCasts() {
+  const usedCastIds = new Set();
+  const doneCastIds = getDoneCastIdsInActuals();
+
+  currentActualsCache.forEach(item => {
+    if (item.cast_id && normalizeStatus(item.status) !== "cancel") {
+      usedCastIds.add(Number(item.cast_id));
+    }
+  });
+
+  const editingActual = editingActualId
+    ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))
+    : null;
+  const editingCastIdForActual = Number(editingActual?.cast_id || 0);
+
+  return allCastsCache.filter(
+    cast =>
+      Number(cast.id) === editingCastIdForActual ||
+      (!usedCastIds.has(Number(cast.id)) && !doneCastIds.has(Number(cast.id)))
+  );
+}
+
+function getCastSearchText(cast) {
+  return [
+    String(cast.name || "").trim(),
+    normalizeAreaLabel(cast.area || "-"),
+    String(cast.address || "").trim()
+  ].join(" / ");
+}
+
+function filterCastCandidates(casts, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return casts.slice(0, 8);
+
+  return casts
+    .filter(cast => {
+      const hay = [
+        cast.name || "",
+        cast.address || "",
+        cast.area || "",
+        cast.phone || "",
+        cast.memo || ""
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    })
+    .slice(0, 8);
+}
+
+function renderCastSearchSuggest(container, casts, onPick) {
+  if (!container) return;
+
+  if (!casts.length) {
+    container.innerHTML = "";
+    container.classList.add("hidden");
+    return;
+  }
+
+  container.innerHTML = casts
+    .map(
+      cast => `
+        <button type="button" class="cast-search-item" data-id="${cast.id}">
+          <span>${escapeHtml(cast.name || "-")}</span>
+          <small>${escapeHtml(normalizeAreaLabel(cast.area || "-"))} / ${escapeHtml(cast.address || "")}</small>
+        </button>
+      `
+    )
+    .join("");
+
+  container.classList.remove("hidden");
+
+  container.querySelectorAll(".cast-search-item").forEach(btn => {
+    btn.addEventListener("mousedown", event => {
+      event.preventDefault();
+      const cast = allCastsCache.find(x => Number(x.id) === Number(btn.dataset.id));
+      if (cast) onPick(cast);
+      container.classList.add("hidden");
     });
+  });
+}
+
+function setupSearchableCastInput(input, suggest, getCandidates, onPick) {
+  if (!input || !suggest) return;
+  if (input.dataset.searchBound === "1") return;
+  input.dataset.searchBound = "1";
+
+  const openSuggest = () => {
+    const casts = filterCastCandidates(getCandidates(), input.value || "");
+    renderCastSearchSuggest(suggest, casts, onPick);
+  };
+
+  input.addEventListener("focus", openSuggest);
+  input.addEventListener("input", openSuggest);
+
+  input.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      suggest.classList.add("hidden");
+      return;
+    }
+
+    if (event.key === "Enter") {
+      const exact = findCastByInputValue(input.value || "");
+      if (exact) {
+        onPick(exact);
+        suggest.classList.add("hidden");
+        return;
+      }
+
+      const candidates = filterCastCandidates(getCandidates(), input.value || "");
+      if (candidates.length === 1) {
+        onPick(candidates[0]);
+        suggest.classList.add("hidden");
+      }
+    }
+  });
+
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      suggest.classList.add("hidden");
+    }, 150);
+  });
+}
+
+function setupSearchableCastInputs() {
+  setupSearchableCastInput(
+    els.planCastSelect,
+    els.planCastSuggest,
+    getPlanSelectableCasts,
+    cast => {
+      if (els.planCastSelect) els.planCastSelect.value = cast.name || "";
+      fillPlanFormFromSelectedCast();
+    }
+  );
+
+  setupSearchableCastInput(
+    els.castSelect,
+    els.castSuggest,
+    getActualSelectableCasts,
+    cast => {
+      if (els.castSelect) els.castSelect.value = cast.name || "";
+      fillActualFormFromSelectedCast();
+    }
+  );
+}
+
+function renderPlanCastSelect() {
+  const input = els.planCastSelect;
+  const list = document.getElementById("planCastList");
+  if (!input || !list) return;
+
+  const editingPlan = editingPlanId
+    ? currentPlansCache.find(x => Number(x.id) === Number(editingPlanId))
+    : null;
+
+  list.innerHTML = "";
+
+  getPlanSelectableCasts().forEach(cast => {
+    const option = document.createElement("option");
+    option.value = String(cast.name || "").trim();
+    option.label = getCastSearchText(cast);
+    list.appendChild(option);
+  });
+
+  if (editingPlan?.casts?.name) {
+    input.value = editingPlan.casts.name;
+  }
 }
 
 function renderPlanSelect() {
@@ -1919,9 +2167,10 @@ function renderPlanSelect() {
 }
 
 async function savePlan() {
-  const castId = Number(els.planCastSelect?.value);
+  const cast = findCastByInputValue(els.planCastSelect?.value || "");
+  const castId = Number(cast?.id || 0);
   if (!castId) {
-    alert("キャストを選択してください");
+    alert("キャストを選択または入力してください");
     return;
   }
 
@@ -2154,32 +2403,25 @@ function resetActualForm() {
   if (els.planSelect) els.planSelect.value = "";
   if (els.castSelect) els.castSelect.value = "";
   if (els.actualHour) els.actualHour.value = "0";
-  if (els.actualDistanceKm) els.actualDistanceKm.value = "";
   if (els.actualStatus) els.actualStatus.value = "pending";
-  if (els.actualAddress) els.actualAddress.value = "";
-  if (els.actualArea) els.actualArea.value = "";
+  clearActualCastDerivedFields();
   if (els.actualNote) els.actualNote.value = "";
-  if (els.cancelActualEditBtn) els.cancelActualEditBtn.classList.add("hidden");
 }
 
 function fillActualForm(item) {
   editingActualId = item.id;
-  if (els.castSelect) els.castSelect.value = String(item.cast_id || "");
+  if (els.castSelect) els.castSelect.value = item.casts?.name || "";
   if (els.actualHour) els.actualHour.value = String(item.actual_hour ?? 0);
   if (els.actualDistanceKm) els.actualDistanceKm.value = item.distance_km ?? "";
   if (els.actualStatus) els.actualStatus.value = item.status || "pending";
   if (els.actualAddress) els.actualAddress.value = item.destination_address || item.casts?.address || "";
   if (els.actualArea) els.actualArea.value = normalizeAreaLabel(item.destination_area || item.casts?.area || "");
   if (els.actualNote) els.actualNote.value = item.note || "";
-  if (els.cancelActualEditBtn) els.cancelActualEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function fillActualFormFromSelectedCast() {
-  const castId = Number(els.castSelect?.value || 0);
-  if (!castId) return;
-
-  const cast = allCastsCache.find(c => Number(c.id) === castId);
+  const cast = findCastByInputValue(els.castSelect?.value || "");
   if (!cast) return;
 
   if (els.actualAddress && !els.actualAddress.value.trim()) {
@@ -2217,7 +2459,7 @@ function fillActualFormFromSelectedPlan() {
   const plan = currentPlansCache.find(p => Number(p.id) === Number(planId));
   if (!plan) return;
 
-  if (els.castSelect) els.castSelect.value = String(plan.cast_id || "");
+  if (els.castSelect) els.castSelect.value = plan.casts?.name || "";
   if (els.actualHour) els.actualHour.value = String(plan.plan_hour ?? 0);
   if (els.actualAddress) els.actualAddress.value = plan.destination_address || plan.casts?.address || "";
   if (els.actualArea) els.actualArea.value = normalizeAreaLabel(plan.planned_area || plan.casts?.area || "無し");
@@ -2226,43 +2468,30 @@ function fillActualFormFromSelectedPlan() {
 }
 
 function renderCastSelects() {
-  const usedCastIds = new Set();
-  const doneCastIds = getDoneCastIdsInActuals();
-
-  currentActualsCache.forEach(item => {
-    if (item.cast_id && normalizeStatus(item.status) !== "cancel") {
-      usedCastIds.add(Number(item.cast_id));
-    }
-  });
-
   const editingActual = editingActualId
     ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))
     : null;
-  const editingCastIdForActual = Number(editingActual?.cast_id || 0);
 
-  if (els.castSelect) {
-    els.castSelect.innerHTML = `<option value="">選択してください</option>`;
+  const input = els.castSelect;
+  const list = document.getElementById("castList");
 
-    allCastsCache
-      .filter(
-        cast =>
-          Number(cast.id) === editingCastIdForActual ||
-          (!usedCastIds.has(Number(cast.id)) && !doneCastIds.has(Number(cast.id)))
-      )
-      .forEach(cast => {
-        const option = document.createElement("option");
-        option.value = cast.id;
-        option.textContent = `${cast.name} | ${normalizeAreaLabel(cast.area || "-")}`;
-        option.dataset.address = cast.address || "";
-        option.dataset.area = normalizeAreaLabel(cast.area || "");
-        option.dataset.distance = cast.distance_km ?? "";
-        option.dataset.lat = cast.latitude ?? "";
-        option.dataset.lng = cast.longitude ?? "";
-        els.castSelect.appendChild(option);
-      });
+  if (input && list) {
+    list.innerHTML = "";
+
+    getActualSelectableCasts().forEach(cast => {
+      const option = document.createElement("option");
+      option.value = String(cast.name || "").trim();
+      option.label = getCastSearchText(cast);
+      list.appendChild(option);
+    });
+
+    if (editingActual?.casts?.name) {
+      input.value = editingActual.casts.name;
+    }
   }
 
   renderPlanCastSelect();
+  setupSearchableCastInputs();
 }
 
 async function loadActualsByDate(dateStr) {
@@ -2331,9 +2560,10 @@ async function loadActualsByDate(dateStr) {
 }
 
 async function saveActual() {
-  const castId = Number(els.castSelect?.value);
+  const cast = findCastByInputValue(els.castSelect?.value || "");
+  const castId = Number(cast?.id || 0);
   if (!castId) {
-    alert("キャストを選択してください");
+    alert("キャストを選択または入力してください");
     return;
   }
 
@@ -3919,8 +4149,14 @@ async function syncDateAndReloadFromActualDate() {
 }
 
 function bindPlanAndActualFormEvents() {
-  if (els.planCastSelect) els.planCastSelect.addEventListener("change", fillPlanFormFromSelectedCast);
-  if (els.castSelect) els.castSelect.addEventListener("change", fillActualFormFromSelectedCast);
+  if (els.planCastSelect) {
+    els.planCastSelect.addEventListener("change", () => syncPlanFieldsFromCastInput(true));
+    els.planCastSelect.addEventListener("input", () => syncPlanFieldsFromCastInput(false));
+  }
+  if (els.castSelect) {
+    els.castSelect.addEventListener("change", () => syncActualFieldsFromCastInput(true));
+    els.castSelect.addEventListener("input", () => syncActualFieldsFromCastInput(false));
+  }
   if (els.planSelect) els.planSelect.addEventListener("change", fillActualFormFromSelectedPlan);
   if (els.cancelPlanEditBtn) els.cancelPlanEditBtn.addEventListener("click", resetPlanForm);
   if (els.cancelActualEditBtn) els.cancelActualEditBtn.addEventListener("click", resetActualForm);
@@ -3971,6 +4207,7 @@ function setupEvents() {
   els.guessActualAreaBtn?.addEventListener("click", guessActualArea);
 
   bindPlanAndActualFormEvents();
+  setupSearchableCastInputs();
   bindDispatchEvents();
   bindPostDispatchEvents();
 
