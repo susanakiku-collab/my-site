@@ -1329,3 +1329,230 @@ img, table, input, select, textarea, button{
     padding:10px 11px;
   }
 }
+
+/* =========================================
+   Extra mobile/tablet layout fixes
+   for casts / vehicles / search tables
+   ========================================= */
+
+@media (max-width: 900px){
+  .app-shell{
+    width:min(100% - 10px, 1360px);
+  }
+
+  .panel-card{
+    overflow:visible;
+  }
+
+  .header-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .header-actions .btn{
+    min-width:0;
+  }
+
+  .action-row,
+  .button-row,
+  .quick-actions,
+  .panel-actions,
+  .daily-top-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .action-row .btn,
+  .button-row .btn,
+  .quick-actions .btn,
+  .panel-actions .btn,
+  .daily-top-actions .btn{
+    flex:1 1 calc(50% - 8px);
+    min-width:120px;
+  }
+
+  .form-grid.two-col,
+  .form-grid.three-col,
+  .form-grid.five-col{
+    grid-template-columns:1fr;
+  }
+
+  .table-wrap{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+}
+
+@media (max-width: 640px){
+  .app-shell{
+    width:min(100% - 6px, 1360px);
+    padding:8px 0 14px;
+  }
+
+  .app-header{
+    gap:10px;
+  }
+
+  .header-actions{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+  }
+
+  .header-actions .btn{
+    width:100%;
+    min-height:38px;
+    padding:8px 10px;
+    font-size:13px;
+  }
+
+  .main-tabs{
+    gap:8px;
+    padding-bottom:6px;
+  }
+
+  .main-tab{
+    font-size:13px;
+    padding:8px 12px;
+    min-height:38px;
+  }
+
+  .panel-card{
+    padding:12px 10px 10px;
+    border-radius:14px;
+  }
+
+  input,
+  select,
+  textarea{
+    font-size:16px;
+  }
+
+  /* Cast / vehicle / search result tables into cards */
+  #castsTab .table-wrap,
+  #vehiclesTab .table-wrap,
+  #castSearchTab .table-wrap{
+    border:none;
+    background:transparent;
+    overflow:visible;
+  }
+
+  #castsTab .data-table,
+  #vehiclesTab .data-table,
+  #castSearchTab .data-table{
+    min-width:0;
+    width:100%;
+    display:block;
+    border-collapse:separate;
+  }
+
+  #castsTab .data-table thead,
+  #vehiclesTab .data-table thead,
+  #castSearchTab .data-table thead{
+    display:none;
+  }
+
+  #castsTab .data-table tbody,
+  #vehiclesTab .data-table tbody,
+  #castSearchTab .data-table tbody{
+    display:grid;
+    gap:12px;
+  }
+
+  #castsTab .data-table tr,
+  #vehiclesTab .data-table tr,
+  #castSearchTab .data-table tr{
+    display:block;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:16px;
+    background:rgba(255,255,255,.02);
+    padding:10px 12px;
+  }
+
+  #castsTab .data-table td,
+  #vehiclesTab .data-table td,
+  #castSearchTab .data-table td{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:10px;
+    padding:7px 0;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    font-size:13px;
+    line-height:1.5;
+    word-break:break-word;
+  }
+
+  #castsTab .data-table td:last-child,
+  #vehiclesTab .data-table td:last-child,
+  #castSearchTab .data-table td:last-child{
+    border-bottom:none;
+    display:block;
+    padding-top:10px;
+  }
+
+  #castsTab .data-table td::before,
+  #vehiclesTab .data-table td::before,
+  #castSearchTab .data-table td::before{
+    color:#a7b3c7;
+    font-weight:700;
+    min-width:82px;
+    flex:0 0 82px;
+  }
+
+  #castsTab .data-table td:nth-child(1)::before{content:"氏名";}
+  #castsTab .data-table td:nth-child(2)::before{content:"住所";}
+  #castsTab .data-table td:nth-child(3)::before{content:"方面";}
+  #castsTab .data-table td:nth-child(4)::before{content:"想定距離";}
+  #castsTab .data-table td:nth-child(5)::before{content:"メモ";}
+  #castsTab .data-table td:nth-child(6)::before{content:"操作"; display:block; margin-bottom:8px;}
+
+  #vehiclesTab .data-table td:nth-child(1)::before{content:"ドライバー";}
+  #vehiclesTab .data-table td:nth-child(2)::before{content:"車両";}
+  #vehiclesTab .data-table td:nth-child(3)::before{content:"担当方面";}
+  #vehiclesTab .data-table td:nth-child(4)::before{content:"帰宅方面";}
+  #vehiclesTab .data-table td:nth-child(5)::before{content:"定員";}
+  #vehiclesTab .data-table td:nth-child(6)::before{content:"月間距離";}
+  #vehiclesTab .data-table td:nth-child(7)::before{content:"出勤日数";}
+  #vehiclesTab .data-table td:nth-child(8)::before{content:"1日平均";}
+  #vehiclesTab .data-table td:nth-child(9)::before{content:"操作"; display:block; margin-bottom:8px;}
+
+  #castSearchTab .data-table td:nth-child(1)::before{content:"氏名";}
+  #castSearchTab .data-table td:nth-child(2)::before{content:"住所";}
+  #castSearchTab .data-table td:nth-child(3)::before{content:"方面";}
+  #castSearchTab .data-table td:nth-child(4)::before{content:"想定距離";}
+  #castSearchTab .data-table td:nth-child(5)::before{content:"電話";}
+  #castSearchTab .data-table td:nth-child(6)::before{content:"メモ";}
+  #castSearchTab .data-table td:nth-child(7)::before{content:"操作"; display:block; margin-bottom:8px;}
+
+  .data-table .actions-cell{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .data-table .actions-cell .btn{
+    flex:1 1 calc(50% - 8px);
+  }
+}
+
+@media (max-width: 420px){
+  .header-actions{
+    grid-template-columns:1fr 1fr;
+  }
+
+  .main-tab{
+    font-size:12px;
+    padding:8px 11px;
+  }
+
+  .action-row .btn,
+  .button-row .btn,
+  .quick-actions .btn,
+  .panel-actions .btn,
+  .daily-top-actions .btn{
+    flex:1 1 100%;
+  }
+}
