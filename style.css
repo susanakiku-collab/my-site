@@ -901,3 +901,471 @@ input.hidden,
 .hidden{
   display:none !important;
 }
+
+/* =========================================
+   Mobile / Tablet optimization
+   ========================================= */
+
+@media (max-width: 1100px){
+  .app-shell{
+    width:min(100% - 20px, 1360px);
+    padding:14px 0 24px;
+  }
+
+  .app-header,
+  .daily-header-row{
+    flex-direction:column;
+    align-items:stretch;
+    gap:14px;
+  }
+
+  .header-actions,
+  .daily-top-actions{
+    justify-content:flex-start;
+    gap:8px;
+  }
+
+  .panel-grid.two-col{
+    grid-template-columns:1fr;
+  }
+
+  .form-grid.five-col{
+    grid-template-columns:repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 900px){
+  body{
+    font-size:14px;
+  }
+
+  .app-shell{
+    width:min(100% - 14px, 1360px);
+    padding:12px 0 20px;
+  }
+
+  .app-title{
+    font-size:18px;
+  }
+
+  .app-subtitle{
+    font-size:12px;
+    line-height:1.5;
+  }
+
+  .main-tabs{
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    padding-bottom:6px;
+    gap:8px;
+  }
+
+  .main-tabs::-webkit-scrollbar{
+    height:4px;
+  }
+
+  .main-tab{
+    white-space:nowrap;
+    flex:0 0 auto;
+    min-height:40px;
+    padding:9px 14px;
+  }
+
+  .header-actions{
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .header-actions .btn{
+    min-height:40px;
+    padding:9px 14px;
+  }
+
+  .panel-card{
+    padding:14px 14px 12px;
+    border-radius:16px;
+  }
+
+  .panel-card h2{
+    font-size:17px;
+    margin-bottom:14px;
+  }
+
+  .panel-card h3{
+    font-size:15px;
+    margin-bottom:12px;
+  }
+
+  .form-grid.two-col,
+  .form-grid.three-col,
+  .form-grid.five-col{
+    grid-template-columns:1fr;
+    gap:10px;
+  }
+
+  .field label{
+    font-size:12px;
+  }
+
+  input,
+  select,
+  textarea{
+    padding:11px 12px;
+    border-radius:12px;
+    font-size:16px;
+  }
+
+  .action-row,
+  .quick-actions,
+  .panel-actions{
+    gap:8px;
+  }
+
+  .action-row .btn,
+  .quick-actions .btn,
+  .panel-actions .btn{
+    min-height:40px;
+    padding:9px 14px;
+  }
+
+  .daily-top-actions .field.compact{
+    min-width:unset;
+    width:100%;
+  }
+
+  .result-head-row{
+    flex-direction:column;
+    align-items:stretch;
+    gap:10px;
+  }
+
+  .vehicle-check-item{
+    grid-template-columns:1fr auto;
+    gap:10px;
+  }
+
+  .dispatch-row{
+    grid-template-columns:1fr;
+    gap:10px;
+    padding:12px 0;
+  }
+
+  .dispatch-right{
+    width:100%;
+    justify-content:space-between;
+  }
+
+  .dispatch-vehicle-select{
+    min-width:120px;
+    max-width:none;
+    width:100%;
+  }
+
+  .vehicle-result-head{
+    flex-direction:column;
+    gap:10px;
+  }
+
+  .vehicle-result-badges{
+    width:100%;
+    justify-content:flex-start;
+  }
+
+  .grouped-row{
+    grid-template-columns:1fr;
+    gap:8px;
+    padding:10px 0;
+  }
+
+  .table-wrap{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    border-radius:14px;
+  }
+
+  .data-table{
+    min-width:760px;
+  }
+
+  .matrix-table{
+    min-width:720px;
+  }
+}
+
+@media (max-width: 640px){
+  .app-shell{
+    width:min(100% - 10px, 1360px);
+    padding:10px 0 16px;
+  }
+
+  .app-header{
+    margin-bottom:12px;
+  }
+
+  .brand-wrap{
+    gap:4px;
+  }
+
+  .app-title{
+    font-size:16px;
+  }
+
+  .app-subtitle{
+    font-size:11px;
+  }
+
+  .header-actions{
+    display:grid;
+    grid-template-columns:repeat(2, 1fr);
+    gap:8px;
+  }
+
+  .header-actions .btn{
+    width:100%;
+    font-size:13px;
+    padding:8px 10px;
+  }
+
+  .main-tab{
+    font-size:12px;
+    padding:8px 12px;
+    min-height:38px;
+  }
+
+  .panel-card{
+    padding:12px 12px 10px;
+    border-radius:14px;
+  }
+
+  .panel-card h2{
+    font-size:16px;
+  }
+
+  .panel-card h3{
+    font-size:14px;
+  }
+
+  .status-chips{
+    gap:6px;
+  }
+
+  .chip{
+    padding:6px 10px;
+  }
+
+  .action-row{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .action-row .btn,
+  .daily-top-actions .btn{
+    flex:1 1 calc(50% - 8px);
+    min-width:120px;
+  }
+
+  .daily-top-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .daily-top-actions .field{
+    flex:1 1 100%;
+  }
+
+  .cast-search-suggest{
+    max-height:260px;
+    border-radius:12px;
+  }
+
+  .cast-search-item{
+    padding:9px 10px;
+  }
+
+  .cast-search-item small{
+    font-size:11px;
+  }
+
+  /* Cast table -> card */
+  #castsTab .table-wrap{
+    border:none;
+    background:transparent;
+    overflow:visible;
+  }
+
+  #castsTab .data-table{
+    min-width:0;
+    display:block;
+  }
+
+  #castsTab .data-table thead{
+    display:none;
+  }
+
+  #castsTab .data-table tbody{
+    display:grid;
+    gap:12px;
+  }
+
+  #castsTab .data-table tr{
+    display:block;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:16px;
+    background:rgba(255,255,255,.02);
+    padding:10px 12px;
+  }
+
+  #castsTab .data-table td{
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    padding:8px 0;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    font-size:13px;
+  }
+
+  #castsTab .data-table td:last-child{
+    border-bottom:none;
+    display:block;
+    padding-top:10px;
+  }
+
+  #castsTab .data-table td:nth-child(1)::before{content:"氏名"; color:#a7b3c7; font-weight:700;}
+  #castsTab .data-table td:nth-child(2)::before{content:"住所"; color:#a7b3c7; font-weight:700;}
+  #castsTab .data-table td:nth-child(3)::before{content:"方面"; color:#a7b3c7; font-weight:700;}
+  #castsTab .data-table td:nth-child(4)::before{content:"想定距離"; color:#a7b3c7; font-weight:700;}
+  #castsTab .data-table td:nth-child(5)::before{content:"メモ"; color:#a7b3c7; font-weight:700;}
+  #castsTab .data-table td:nth-child(6)::before{content:"操作"; color:#a7b3c7; font-weight:700; display:block; margin-bottom:8px;}
+
+  /* Vehicles table -> card */
+  #vehiclesTab .table-wrap{
+    border:none;
+    background:transparent;
+    overflow:visible;
+  }
+
+  #vehiclesTab .data-table{
+    min-width:0;
+    display:block;
+  }
+
+  #vehiclesTab .data-table thead{
+    display:none;
+  }
+
+  #vehiclesTab .data-table tbody{
+    display:grid;
+    gap:12px;
+  }
+
+  #vehiclesTab .data-table tr{
+    display:block;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:16px;
+    background:rgba(255,255,255,.02);
+    padding:10px 12px;
+  }
+
+  #vehiclesTab .data-table td{
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    padding:8px 0;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    font-size:13px;
+  }
+
+  #vehiclesTab .data-table td:last-child{
+    border-bottom:none;
+    display:block;
+    padding-top:10px;
+  }
+
+  #vehiclesTab .data-table td:nth-child(1)::before{content:"ドライバー"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(2)::before{content:"車両"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(3)::before{content:"担当方面"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(4)::before{content:"帰宅方面"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(5)::before{content:"定員"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(6)::before{content:"月間距離"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(7)::before{content:"出勤日数"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(8)::before{content:"1日平均"; color:#a7b3c7; font-weight:700;}
+  #vehiclesTab .data-table td:nth-child(9)::before{content:"操作"; color:#a7b3c7; font-weight:700; display:block; margin-bottom:8px;}
+
+  /* Search result table -> card */
+  #castSearchTab .table-wrap{
+    border:none;
+    background:transparent;
+    overflow:visible;
+  }
+
+  #castSearchTab .data-table{
+    min-width:0;
+    display:block;
+  }
+
+  #castSearchTab .data-table thead{
+    display:none;
+  }
+
+  #castSearchTab .data-table tbody{
+    display:grid;
+    gap:12px;
+  }
+
+  #castSearchTab .data-table tr{
+    display:block;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:16px;
+    background:rgba(255,255,255,.02);
+    padding:10px 12px;
+  }
+
+  #castSearchTab .data-table td{
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    padding:8px 0;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    font-size:13px;
+  }
+
+  #castSearchTab .data-table td:last-child{
+    border-bottom:none;
+    display:block;
+    padding-top:10px;
+  }
+
+  #castSearchTab .data-table td:nth-child(1)::before{content:"氏名"; color:#a7b3c7; font-weight:700;}
+  #castSearchTab .data-table td:nth-child(2)::before{content:"住所"; color:#a7b3c7; font-weight:700;}
+  #castSearchTab .data-table td:nth-child(3)::before{content:"方面"; color:#a7b3c7; font-weight:700;}
+  #castSearchTab .data-table td:nth-child(4)::before{content:"想定距離"; color:#a7b3c7; font-weight:700;}
+  #castSearchTab .data-table td:nth-child(5)::before{content:"電話"; color:#a7b3c7; font-weight:700;}
+  #castSearchTab .data-table td:nth-child(6)::before{content:"メモ"; color:#a7b3c7; font-weight:700;}
+  #castSearchTab .data-table td:nth-child(7)::before{content:"操作"; color:#a7b3c7; font-weight:700; display:block; margin-bottom:8px;}
+}
+
+@media (max-width: 420px){
+  .action-row .btn,
+  .daily-top-actions .btn{
+    flex:1 1 100%;
+  }
+
+  .main-tab{
+    font-size:12px;
+    padding:8px 11px;
+  }
+
+  .panel-card{
+    padding:10px;
+  }
+
+  input,
+  select,
+  textarea{
+    padding:10px 11px;
+  }
+}
