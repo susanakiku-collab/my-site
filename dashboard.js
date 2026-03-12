@@ -2431,22 +2431,26 @@ function getCastSearchText(cast) {
 
 function filterCastCandidates(casts, query) {
   const q = String(query || "").trim().toLowerCase();
-  if (!q) return casts.slice(0, 8);
 
-  return casts
-    .filter(cast => {
-      const hay = [
-        cast.name || "",
-        cast.address || "",
-        cast.area || "",
-        cast.phone || "",
-        cast.memo || ""
-      ]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
-    })
-    .slice(0, 8);
+  const sorted = [...casts].sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""), "ja")
+  );
+
+  if (!q) return sorted;
+
+  return sorted.filter(cast => {
+    const hay = [
+      cast.name || "",
+      cast.address || "",
+      cast.area || "",
+      cast.phone || "",
+      cast.memo || ""
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return hay.includes(q);
+  });
 }
 
 function renderCastSearchSuggest(container, casts, onPick) {
