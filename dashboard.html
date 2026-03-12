@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>THEMIS AI Dispatch</title>
-  <link rel="stylesheet" href="style.css?v=vehicle-check-fix-v1" />
+  <link rel="stylesheet" href="style.css?v=ui-tidy-v1" />
   <link rel="icon" type="image/png" href="favicon.png" />
 </head>
 <body>
@@ -14,24 +14,17 @@
         <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
         <p class="app-subtitle">緯度経度対応 / 方面自動判定 / 自動配車 / ルート確認</p>
       </div>
-      <div class="header-actions">
-        <button id="exportAllBtn" class="btn ghost">エクスポート</button>
-        <button id="importAllBtn" class="btn ghost">インポート</button>
-        <input id="importAllFileInput" type="file" accept=".json,application/json" class="hidden" />
-        <button id="exportCsvBtnHeader" class="btn ghost">キャストCSV</button>
-        <button id="openManualBtn" class="btn ghost">📘 マニュアル</button>
-      </div>
     </header>
 
     <nav class="main-tabs">
       <button class="main-tab active" data-tab="homeTab">ホーム</button>
-      <button class="main-tab" data-tab="castsTab">キャスト</button>
-      <button class="main-tab" data-tab="castSearchTab">キャスト検索</button>
+      <button class="main-tab" data-tab="castsTab">キャスト管理</button>
       <button class="main-tab" data-tab="vehiclesTab">車両</button>
       <button class="main-tab" data-tab="dailyTab">当日運用</button>
       <button class="main-tab" data-tab="plansTab">予定表</button>
       <button class="main-tab" data-tab="actualTab">実際の送り</button>
       <button class="main-tab" data-tab="settingsTab">設定</button>
+      <button id="openManualBtn" class="btn ghost">📘 マニュアル</button>
     </nav>
 
     <main class="page-body">
@@ -87,6 +80,15 @@
       <!-- キャスト -->
       <section id="castsTab" class="page-panel">
         <section class="panel-card">
+          <div class="section-head">
+            <h2>キャスト管理</h2>
+          </div>
+
+          <div class="action-row" style="margin-bottom:16px;">
+            <button class="btn primary go-tab-btn" data-go-tab="castsTab">キャスト</button>
+            <button class="btn ghost go-tab-btn" data-go-tab="castSearchTab">キャスト検索</button>
+          </div>
+
           <div class="section-head">
             <h2>キャスト（事前登録）</h2>
           </div>
@@ -165,6 +167,15 @@
       <!-- キャスト検索 -->
       <section id="castSearchTab" class="page-panel">
         <section class="panel-card">
+          <div class="section-head">
+            <h2>キャスト管理</h2>
+          </div>
+
+          <div class="action-row" style="margin-bottom:16px;">
+            <button class="btn ghost go-tab-btn" data-go-tab="castsTab">キャスト</button>
+            <button class="btn primary go-tab-btn" data-go-tab="castSearchTab">キャスト検索</button>
+          </div>
+
           <div class="section-head">
             <h2>キャスト検索</h2>
           </div>
@@ -365,6 +376,9 @@
                 <label for="planDate">日付：</label>
                 <input id="planDate" type="date" />
               </div>
+              <button id="exportPlansCsvBtn" class="btn ghost">予定をエクスポート</button>
+              <button id="importPlansCsvBtn" class="btn ghost">予定をインポート</button>
+              <input id="plansCsvFileInput" type="file" accept=".csv,text/csv" class="hidden" />
               <button id="clearPlansBtn" class="btn danger">予定を全消去</button>
             </div>
           </div>
@@ -533,6 +547,19 @@
             </div>
           </div>
 
+          <div class="divider"></div>
+
+          <h3>データ管理</h3>
+          <div class="action-row">
+            <button id="exportAllBtn" class="btn ghost">エクスポート</button>
+            <button id="importAllBtn" class="btn ghost">インポート</button>
+            <input id="importAllFileInput" type="file" accept=".json,application/json" class="hidden" />
+          </div>
+          <p class="soft-text">エクスポートとインポートは使用頻度が低いため、設定タブ内にまとめています。</p>
+
+          <div class="divider"></div>
+
+          <h3>システム管理</h3>
           <div class="action-row">
             <button id="logoutBtn" class="btn danger">ログアウト</button>
             <button id="resetCastsBtn" class="btn danger">キャスト全データ消去</button>
@@ -552,8 +579,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="config.js"></script>
-  <script src="dashboard.js?v=vehicle-check-fix-v1"></script>
+  <script src="dashboard.js?v=v3-2-ui-tidy-v1"></script>
 </body>
 </html>
-
-
