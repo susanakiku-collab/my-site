@@ -1556,3 +1556,120 @@ img, table, input, select, textarea, button{
     flex:1 1 100%;
   }
 }
+
+/* =========================================================
+   UI tidy v2: nav / cast-management / settings polish
+   ========================================================= */
+
+.main-tabs{
+  align-items:center;
+}
+
+.main-tabs #openManualBtn{
+  margin-left:auto;
+  border-radius:999px;
+  padding-inline:18px;
+  white-space:nowrap;
+}
+
+#castsTab .section-head:first-child,
+#castSearchTab .section-head:first-child{
+  margin-bottom:12px;
+}
+
+#castsTab .action-row:first-of-type,
+#castSearchTab .action-row:first-of-type{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:6px;
+  margin-bottom:18px !important;
+  border:1px solid rgba(255,255,255,.10);
+  border-radius:18px;
+  background:rgba(255,255,255,.025);
+}
+
+#castsTab .action-row:first-of-type .btn,
+#castSearchTab .action-row:first-of-type .btn{
+  min-width:132px;
+  min-height:40px;
+  border-radius:14px;
+  padding:9px 14px;
+}
+
+#castsTab .action-row:first-of-type .btn.ghost,
+#castSearchTab .action-row:first-of-type .btn.ghost{
+  background:transparent;
+}
+
+#settingsTab .panel-card:first-child .action-row{
+  padding:8px;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(255,255,255,.02);
+}
+
+#settingsTab .panel-card:first-child .action-row .btn{
+  min-width:140px;
+}
+
+#settingsTab h3{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+#settingsTab h3::before{
+  content:"";
+  width:8px;
+  height:8px;
+  border-radius:999px;
+  background:rgba(47,109,246,.95);
+  box-shadow:0 0 0 6px rgba(47,109,246,.10);
+}
+
+@media (max-width: 900px){
+  .main-tabs #openManualBtn{
+    margin-left:0;
+  }
+
+  #castsTab .action-row:first-of-type,
+  #castSearchTab .action-row:first-of-type{
+    width:100%;
+  }
+
+  #castsTab .action-row:first-of-type .btn,
+  #castSearchTab .action-row:first-of-type .btn,
+  #settingsTab .panel-card:first-child .action-row .btn{
+    flex:1 1 180px;
+  }
+}
+
+@media (max-width: 640px){
+  .main-tabs{
+    gap:8px;
+  }
+
+  .main-tabs .main-tab,
+  .main-tabs #openManualBtn{
+    min-height:40px;
+    padding:9px 14px;
+  }
+
+  #castsTab .action-row:first-of-type,
+  #castSearchTab .action-row:first-of-type,
+  #settingsTab .panel-card:first-child .action-row{
+    display:flex;
+    width:100%;
+    gap:8px;
+    padding:6px;
+  }
+
+  #castsTab .action-row:first-of-type .btn,
+  #castSearchTab .action-row:first-of-type .btn,
+  #settingsTab .panel-card:first-child .action-row .btn{
+    width:100%;
+    min-width:0;
+    flex:1 1 100%;
+  }
+}
