@@ -1896,7 +1896,7 @@ function renderMileageReportTable(rows) {
     html += `
       <div class="grouped-section">
         <div class="grouped-hour-title">
-          ${escapeHtml(driver)} / ${driverRows.length}日 / 合計 ${totalDistance.toFixed(1)}km
+          ${escapeHtml(driver)} / ${driverRows.length}日 / 合計 ${totalDistance.toFixed(1)}km / 1日平均 ${(driverRows.length ? totalDistance / driverRows.length : 0).toFixed(1)}km
         </div>
     `;
 
@@ -1906,8 +1906,6 @@ function renderMileageReportTable(rows) {
           <div>${escapeHtml(row.report_date || "")}</div>
           <div><strong>${escapeHtml(row.driver_name || "-")}</strong></div>
           <div>${Number(row.distance_km || 0).toFixed(1)}km</div>
-          <div>${Number(row.worked_flag || 0) ? "出勤" : "-"}</div>
-          <div>${escapeHtml(row.note || "")}</div>
         </div>
       `;
     });
@@ -2000,7 +1998,6 @@ function buildMileageMatrixRows(rows, startDate, endDate) {
 
     const item = grouped.get(driver);
     const key = row.report_date || "";
-
     item.byDate.set(key, Number(row.distance_km || 0));
     item.total_distance_km += Number(row.distance_km || 0);
     if (Number(row.worked_flag || 0)) item.days += 1;
@@ -2016,6 +2013,9 @@ function buildMileageMatrixRows(rows, startDate, endDate) {
   const header = ["No", "名前", ...dates.map(formatMileageSheetDate), "月間走行距離", "出勤日数", "1日平均走行距離"];
   aoa.push(header);
 
+  let grandTotalDistance = 0;
+  let grandWorkedDays = 0;
+
   sortedDrivers.forEach((row, index) => {
     const daily = dates.map(date => {
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -2024,6 +2024,9 @@ function buildMileageMatrixRows(rows, startDate, endDate) {
     });
 
     const avg = row.days ? row.total_distance_km / row.days : 0;
+
+    grandTotalDistance += row.total_distance_km;
+    grandWorkedDays += row.days;
 
     aoa.push([
       index + 1,
@@ -2034,6 +2037,17 @@ function buildMileageMatrixRows(rows, startDate, endDate) {
       Number(avg.toFixed(1))
     ]);
   });
+
+  const grandAvg = grandWorkedDays ? grandTotalDistance / grandWorkedDays : 0;
+  aoa.push([]);
+  aoa.push([
+    "",
+    "全体",
+    ...dates.map(() => ""),
+    Number(grandTotalDistance.toFixed(1)),
+    grandWorkedDays,
+    Number(grandAvg.toFixed(1))
+  ]);
 
   return aoa;
 }
