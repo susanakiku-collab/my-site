@@ -119,6 +119,9 @@ const els = {
   dailyDispatchResult: document.getElementById("dailyDispatchResult"),
 
   planDate: document.getElementById("planDate"),
+  exportPlansCsvBtn: document.getElementById("exportPlansCsvBtn"),
+  importPlansCsvBtn: document.getElementById("importPlansCsvBtn"),
+  plansCsvFileInput: document.getElementById("plansCsvFileInput"),
   clearPlansBtn: document.getElementById("clearPlansBtn"),
   planCastSelect: document.getElementById("planCastSelect"),
   planHour: document.getElementById("planHour"),
@@ -2684,6 +2687,196 @@ function exportVehiclesCsv() {
   downloadTextFile(`vehicles_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
 }
 
+
+function normalizePlanImportMode(input) {
+  const value = String(input || "").trim();
+  if (["1", "add", "append", "追加"].includes(value)) return "append";
+  if (["2", "replace", "置換", "上書き"].includes(value)) return "replace";
+  if (["3", "skip", "重複スキップ", "skip-duplicates"].includes(value)) return "skip";
+  return "";
+}
+
+function getPlanDuplicateKey(row) {
+  return [
+    row.plan_date || "",
+    Number(row.plan_hour || 0),
+    Number(row.cast_id || 0),
+    String(row.destination_address || "").trim(),
+    normalizeAreaLabel(row.planned_area || ""),
+    String(row.note || "").trim()
+  ].join("|");
+}
+
+function exportPlansCsv() {
+  const planDate = els.planDate?.value || todayStr();
+  const rows = [...currentPlansCache]
+    .sort((a, b) => Number(a.plan_hour || 0) - Number(b.plan_hour || 0) || Number(a.id || 0) - Number(b.id || 0))
+    .map(plan => ({
+      plan_date: planDate,
+      plan_hour: Number(plan.plan_hour || 0),
+      cast_id: Number(plan.cast_id || plan.casts?.id || 0),
+      cast_name: plan.casts?.name || "",
+      destination_address: plan.destination_address || plan.casts?.address || "",
+      planned_area: normalizeAreaLabel(plan.planned_area || plan.casts?.area || ""),
+      distance_km: plan.distance_km ?? "",
+      note: plan.note || "",
+      status: plan.status || "planned",
+      vehicle_group: plan.vehicle_group || ""
+    }));
+
+  const headers = [
+    "plan_date",
+    "plan_hour",
+    "cast_id",
+    "cast_name",
+    "destination_address",
+    "planned_area",
+    "distance_km",
+    "note",
+    "status",
+    "vehicle_group"
+  ];
+
+  const csv = [headers.join(","), ...rows.map(row => headers.map(key => csvEscape(row[key] ?? "")).join(","))].join("\n");
+  downloadTextFile(`plans_${planDate}.csv`, csv, "text/csv;charset=utf-8");
+}
+
+async function triggerImportPlansCsv() {
+  els.plansCsvFileInput?.click();
+}
+
+async function importPlansCsvFile() {
+  const file = els.plansCsvFileInput?.files?.[0];
+  if (!file) return;
+
+  const selectedDate = els.planDate?.value || todayStr();
+  const modeInput = window.prompt(
+    "予定CSVの取込方法を選んでください\n1: 追加\n2: 同日データを置換\n3: 重複をスキップ",
+    "3"
+  );
+  const mode = normalizePlanImportMode(modeInput);
+  if (!mode) {
+    alert("取込を中止しました");
+    els.plansCsvFileInput.value = "";
+    return;
+  }
+
+  try {
+    const text = await readCsvFileAsText(file);
+    let rows = parseCsv(text);
+    rows = normalizeCsvRows(rows);
+
+    if (!rows.length) {
+      alert("CSVにデータがありません");
+      els.plansCsvFileInput.value = "";
+      return;
+    }
+
+    const { data: existingRows, error: existingError } = await supabaseClient
+      .from("dispatch_plans")
+      .select("id, plan_date, plan_hour, cast_id, destination_address, planned_area, note")
+      .eq("plan_date", selectedDate)
+      .order("plan_hour", { ascending: true });
+
+    if (existingError) {
+      alert(existingError.message);
+      els.plansCsvFileInput.value = "";
+      return;
+    }
+
+    const existingList = existingRows || [];
+    const existingKeys = new Set(existingList.map(getPlanDuplicateKey));
+
+    if (mode === "replace" && existingList.length) {
+      const { error: deleteError } = await supabaseClient
+        .from("dispatch_plans")
+        .delete()
+        .eq("plan_date", selectedDate);
+      if (deleteError) {
+        alert(deleteError.message);
+        els.plansCsvFileInput.value = "";
+        return;
+      }
+      existingKeys.clear();
+    }
+
+    const inserts = [];
+    const skipped = [];
+    const missingCasts = [];
+
+    for (const row of rows) {
+      const castIdValue = Number(row.cast_id || 0);
+      let cast = null;
+      if (castIdValue) {
+        cast = allCastsCache.find(x => Number(x.id) === castIdValue) || null;
+      }
+      if (!cast && row.cast_name) {
+        const name = String(row.cast_name).trim();
+        cast = allCastsCache.find(x => String(x.name || "").trim() === name) || null;
+      }
+      if (!cast) {
+        missingCasts.push(String(row.cast_name || row.cast_id || "不明"));
+        continue;
+      }
+
+      const payload = {
+        plan_date: selectedDate,
+        plan_hour: Number(row.plan_hour || 0),
+        cast_id: Number(cast.id),
+        destination_address: String(row.destination_address || cast.address || "").trim(),
+        planned_area: normalizeAreaLabel(String(row.planned_area || cast.area || "無し")),
+        distance_km: toNullableNumber(row.distance_km),
+        note: String(row.note || "").trim(),
+        status: String(row.status || "planned").trim() || "planned",
+        vehicle_group: String(row.vehicle_group || "").trim(),
+        created_by: currentUser?.id || null
+      };
+
+      const key = getPlanDuplicateKey(payload);
+      if (mode === "skip" && existingKeys.has(key)) {
+        skipped.push(`${getHourLabel(payload.plan_hour)} / ${cast.name}`);
+        continue;
+      }
+      existingKeys.add(key);
+      inserts.push(payload);
+    }
+
+    if (!inserts.length) {
+      let msg = "取り込める予定がありませんでした。";
+      if (missingCasts.length) msg += `\n未登録キャスト: ${[...new Set(missingCasts)].join(", ")}`;
+      if (skipped.length) msg += `\n重複スキップ: ${skipped.length}件`;
+      alert(msg);
+      els.plansCsvFileInput.value = "";
+      await loadPlansByDate(selectedDate);
+      return;
+    }
+
+    const { error: insertError } = await supabaseClient
+      .from("dispatch_plans")
+      .insert(inserts);
+
+    if (insertError) {
+      alert(insertError.message);
+      els.plansCsvFileInput.value = "";
+      return;
+    }
+
+    let summary = `${inserts.length}件の予定をCSV取込しました`;
+    if (mode === "replace") summary += "（同日置換）";
+    if (skipped.length) summary += ` / 重複スキップ ${skipped.length}件`;
+    if (missingCasts.length) summary += ` / 未登録キャスト ${[...new Set(missingCasts)].length}件`;
+
+    await addHistory(null, null, "import_plans_csv", summary);
+    alert(summary + `\n取込日付: ${selectedDate}`);
+    els.plansCsvFileInput.value = "";
+    await loadPlansByDate(selectedDate);
+  } catch (error) {
+    console.error("importPlansCsvFile error:", error);
+    alert("予定CSV取込に失敗しました");
+    els.plansCsvFileInput.value = "";
+  }
+}
+
 async function importVehicleCsvFile() {
   const file = els.vehicleCsvFileInput?.files?.[0];
   if (!file) {
@@ -3098,24 +3291,101 @@ function renderPlanCastSelect() {
   }
 }
 
+function isPlanAlreadyAddedToActual(plan, excludeActualId = null) {
+  if (!plan) return false;
+
+  const targetDate = String(plan.plan_date || els.actualDate?.value || todayStr()).trim();
+  const targetCastId = Number(plan.cast_id || 0);
+  const targetHour = Number(plan.plan_hour || 0);
+  const targetAddress = String(plan.destination_address || plan.casts?.address || "").trim();
+
+  return currentActualsCache.some(item => {
+    if (excludeActualId !== null && Number(item.id) === Number(excludeActualId)) return false;
+
+    const itemDate = String(item.plan_date || els.actualDate?.value || todayStr()).trim();
+    const itemCastId = Number(item.cast_id || 0);
+    const itemHour = Number(item.actual_hour || 0);
+    const itemAddress = String(item.destination_address || item.casts?.address || "").trim();
+
+    if (itemDate !== targetDate) return false;
+
+    const sameCastHour = itemCastId === targetCastId && itemHour === targetHour;
+    const sameAddressHour = !!targetAddress && itemAddress === targetAddress && itemHour === targetHour;
+    const sameCastAddress = itemCastId === targetCastId && !!targetAddress && itemAddress === targetAddress;
+
+    return sameCastHour || sameAddressHour || sameCastAddress;
+  });
+}
+
+function getLinkedPlanForActual(actualItem) {
+  if (!actualItem) return null;
+
+  const actualDate = String(actualItem.plan_date || els.actualDate?.value || todayStr()).trim();
+  const actualCastId = Number(actualItem.cast_id || 0);
+  const actualHour = Number(actualItem.actual_hour || 0);
+  const actualAddress = String(actualItem.destination_address || actualItem.casts?.address || "").trim();
+
+  return currentPlansCache.find(plan => {
+    const planDate = String(plan.plan_date || "").trim();
+    const planCastId = Number(plan.cast_id || 0);
+    const planHour = Number(plan.plan_hour || 0);
+    const planAddress = String(plan.destination_address || plan.casts?.address || "").trim();
+
+    if (planDate !== actualDate) return false;
+
+    const sameCastHour = planCastId === actualCastId && planHour === actualHour;
+    const sameAddressHour = !!actualAddress && planAddress === actualAddress && planHour === actualHour;
+    const sameCastAddress = planCastId === actualCastId && !!actualAddress && planAddress === actualAddress;
+
+    return sameCastHour || sameAddressHour || sameCastAddress;
+  }) || null;
+}
+
 function renderPlanSelect() {
   if (!els.planSelect) return;
 
   const targetDate = els.actualDate?.value || todayStr();
   const doneCastIds = getDoneCastIdsInActuals();
+  const editingActual = editingActualId
+    ? currentActualsCache.find(x => Number(x.id) === Number(editingActualId))
+    : null;
+  const editingPlan = getLinkedPlanForActual(editingActual);
+  const selectedValueBefore = String(els.planSelect.value || "");
+  const appendedPlanIds = new Set();
 
   els.planSelect.innerHTML = `<option value="">予定から選択</option>`;
 
+  const appendOption = plan => {
+    if (!plan || appendedPlanIds.has(Number(plan.id))) return;
+    appendedPlanIds.add(Number(plan.id));
+
+    const option = document.createElement("option");
+    option.value = plan.id;
+    option.textContent = `${getHourLabel(plan.plan_hour)} / ${plan.casts?.name || "-"} / ${normalizeAreaLabel(plan.planned_area || "-")}`;
+    if (editingPlan && Number(plan.id) === Number(editingPlan.id) && editingActualId) {
+      option.textContent += " [編集中]";
+    }
+    els.planSelect.appendChild(option);
+  };
+
   currentPlansCache
     .filter(plan => plan.plan_date === targetDate)
-    .filter(plan => plan.status === "planned")
-    .filter(plan => !doneCastIds.has(Number(plan.cast_id)))
-    .forEach(plan => {
-      const option = document.createElement("option");
-      option.value = plan.id;
-      option.textContent = `${getHourLabel(plan.plan_hour)} / ${plan.casts?.name || "-"} / ${normalizeAreaLabel(plan.planned_area || "-")}`;
-      els.planSelect.appendChild(option);
-    });
+    .filter(plan => plan.status === "planned" || (editingPlan && Number(plan.id) === Number(editingPlan.id)))
+    .filter(plan => !doneCastIds.has(Number(plan.cast_id)) || (editingPlan && Number(plan.id) === Number(editingPlan.id)))
+    .filter(plan => !isPlanAlreadyAddedToActual(plan, editingActualId || null) || (editingPlan && Number(plan.id) === Number(editingPlan.id)))
+    .forEach(appendOption);
+
+  if (editingPlan) {
+    appendOption(editingPlan);
+  }
+
+  if (editingPlan) {
+    els.planSelect.value = String(editingPlan.id);
+  } else if (selectedValueBefore && appendedPlanIds.has(Number(selectedValueBefore))) {
+    els.planSelect.value = selectedValueBefore;
+  } else {
+    els.planSelect.value = "";
+  }
 }
 
 async function savePlan() {
@@ -3362,6 +3632,7 @@ function resetActualForm() {
 
 function fillActualForm(item) {
   editingActualId = item.id;
+  renderPlanSelect();
   if (els.castSelect) els.castSelect.value = item.casts?.name || "";
   if (els.actualHour) els.actualHour.value = String(item.actual_hour ?? 0);
   if (els.actualDistanceKm) els.actualDistanceKm.value = item.distance_km ?? "";
@@ -3369,6 +3640,8 @@ function fillActualForm(item) {
   if (els.actualAddress) els.actualAddress.value = item.destination_address || item.casts?.address || "";
   if (els.actualArea) els.actualArea.value = normalizeAreaLabel(item.destination_area || item.casts?.area || "");
   if (els.actualNote) els.actualNote.value = item.note || "";
+  const linkedPlan = getLinkedPlanForActual(item);
+  if (els.planSelect) els.planSelect.value = linkedPlan ? String(linkedPlan.id) : "";
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -3648,14 +3921,22 @@ async function addPlanToActual() {
     return;
   }
 
-  if (currentActualsCache.some(x => Number(x.cast_id) === Number(plan.cast_id))) {
+  if (isPlanAlreadyAddedToActual(plan)) {
+    alert("その予定はすでにActualへ追加されています");
+    renderPlanSelect();
+    return;
+  }
+
+  if (currentActualsCache.some(x => Number(x.cast_id) === Number(plan.cast_id) && normalizeStatus(x.status) !== "cancel")) {
     alert("そのキャストはすでにActualにあります");
+    renderPlanSelect();
     return;
   }
 
   const doneCastIds = getDoneCastIdsInActuals();
   if (doneCastIds.has(Number(plan.cast_id))) {
     alert("このキャストはすでに送り完了です");
+    renderPlanSelect();
     return;
   }
 
@@ -3688,6 +3969,8 @@ async function addPlanToActual() {
   await addHistory(currentDispatchId, null, "add_plan_to_actual", `予定ID ${plan.id} をActualへ追加`);
   await loadActualsByDate(els.actualDate?.value || todayStr());
   await loadPlansByDate(els.planDate?.value || todayStr());
+  if (els.planSelect) els.planSelect.value = "";
+  renderPlanSelect();
 }
 function renderActualTable() {
   if (!els.actualTableWrap) return;
@@ -5435,6 +5718,9 @@ function setupEvents() {
   els.importVehicleCsvBtn?.addEventListener("click", () => els.vehicleCsvFileInput?.click());
   els.exportVehicleCsvBtn?.addEventListener("click", exportVehiclesCsv);
   els.vehicleCsvFileInput?.addEventListener("change", importVehicleCsvFile);
+  els.exportPlansCsvBtn?.addEventListener("click", exportPlansCsv);
+  els.importPlansCsvBtn?.addEventListener("click", triggerImportPlansCsv);
+  els.plansCsvFileInput?.addEventListener("change", importPlansCsvFile);
   els.previewMileageReportBtn?.addEventListener("click", previewDriverMileageReport);
   els.exportMileageReportBtn?.addEventListener("click", exportDriverMileageReportXlsx);
 
