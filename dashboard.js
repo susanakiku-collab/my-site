@@ -110,7 +110,9 @@ const els = {
   clearActualBtn: document.getElementById("clearActualBtn"),
   checkAllVehiclesBtn: document.getElementById("checkAllVehiclesBtn"),
   uncheckAllVehiclesBtn: document.getElementById("uncheckAllVehiclesBtn"),
+  clearManualLastVehicleBtn: document.getElementById("clearManualLastVehicleBtn"),
   dailyVehicleChecklist: document.getElementById("dailyVehicleChecklist"),
+  manualLastVehicleInfo: document.getElementById("manualLastVehicleInfo"),
   dailyMileageInputs: document.getElementById("dailyMileageInputs"),
   saveDailyMileageBtn: document.getElementById("saveDailyMileageBtn"),
   copyResultBtn: document.getElementById("copyResultBtn"),
@@ -158,6 +160,86 @@ function todayStr() {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
+
+
+function getCurrentDispatchDateStr() {
+  return els.dispatchDate?.value || els.actualDate?.value || els.planDate?.value || todayStr();
+}
+
+function getManualLastVehicleStorageKey(dateStr = getCurrentDispatchDateStr()) {
+  return `THEMIS_MANUAL_LAST_VEHICLE_${dateStr}`;
+}
+
+function getManualLastVehicleState(dateStr = getCurrentDispatchDateStr()) {
+  try {
+    const raw = window.localStorage.getItem(getManualLastVehicleStorageKey(dateStr));
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
+function getManualLastVehicleId(dateStr = getCurrentDispatchDateStr()) {
+  return Number(getManualLastVehicleState(dateStr)?.vehicle_id || 0);
+}
+
+function saveManualLastVehicleState(vehicle, dateStr = getCurrentDispatchDateStr()) {
+  const payload = {
+    vehicle_id: Number(vehicle?.id || 0),
+    driver_name: vehicle?.driver_name || vehicle?.plate_number || "",
+    home_area: normalizeAreaLabel(vehicle?.home_area || ""),
+    vehicle_area: normalizeAreaLabel(vehicle?.vehicle_area || "")
+  };
+  window.localStorage.setItem(getManualLastVehicleStorageKey(dateStr), JSON.stringify(payload));
+  renderManualLastVehicleInfo();
+}
+
+function clearManualLastVehicleState(dateStr = getCurrentDispatchDateStr()) {
+  window.localStorage.removeItem(getManualLastVehicleStorageKey(dateStr));
+  renderManualLastVehicleInfo();
+}
+
+function renderManualLastVehicleInfo() {
+  const state = getManualLastVehicleState();
+  const text = state?.vehicle_id
+    ? `ラスト便車両: ${state.driver_name || "-"} / 帰宅:${normalizeAreaLabel(state.home_area || "無し")}`
+    : "ラスト便車両: なし";
+  if (els.manualLastVehicleInfo) els.manualLastVehicleInfo.textContent = text;
+}
+
+function setManualLastVehicle(vehicleId) {
+  const vehicle = allVehiclesCache.find(v => Number(v.id) === Number(vehicleId));
+  if (!vehicle) {
+    alert("車両が見つかりません");
+    return;
+  }
+  saveManualLastVehicleState(vehicle);
+  renderDailyDispatchResult();
+  alert(`ラスト便車両に設定しました: ${vehicle.driver_name || vehicle.plate_number || "-"}`);
+}
+
+function clearManualLastVehicle() {
+  clearManualLastVehicleState();
+  renderManualLastVehicleInfo();
+  renderDailyDispatchResult();
+  alert("ラスト便車両を解除しました");
+}
+
+function isManualLastVehicle(vehicleId, dateStr = getCurrentDispatchDateStr()) {
+  return Number(vehicleId) === Number(getManualLastVehicleId(dateStr));
+}
+
+
+
+function isManualLastTripItem() {
+  return false;
+}
+
+function moveManualLastItemsToEnd(rows) {
+  return Array.isArray(rows) ? rows : [];
+}
+
 
 function formatDateTimeJa(value) {
   const d = new Date(value);
@@ -225,9 +307,10 @@ function isSpecialLateNightEve(dateStr) {
 }
 
 function getDefaultLastHour(dateStr) {
-  if (isFridayOrSaturday(dateStr)) return 5;
-  if (isSpecialLateNightEve(dateStr)) return 5;
-  return 4;
+  const day = getDayOfWeek(dateStr);
+  // 火曜-金曜は4時、土曜-月曜は5時
+  if (day >= 2 && day <= 5) return 4;
+  return 5;
 }
 
 function isValidLatLng(lat, lng) {
@@ -715,6 +798,448 @@ function normalizeAreaLabel(area) {
   return value;
 }
 
+const AREA_CANONICAL_PATTERNS = [
+  ["松戸近郊", ["松戸近郊", "松戸方面", "松戸"]],
+  ["葛飾方面", ["葛飾方面", "葛飾区", "葛飾"]],
+  ["足立方面", ["足立方面", "足立区", "足立"]],
+  ["江戸川方面", ["江戸川方面", "江戸川区", "江戸川"]],
+  ["市川方面", ["市川方面", "市川", "本八幡", "妙典", "行徳", "下総中山"]],
+  ["船橋方面", ["船橋方面", "船橋", "習志野", "西船橋"]],
+  ["鎌ヶ谷方面", ["鎌ヶ谷方面", "鎌ケ谷方面", "鎌ヶ谷", "鎌ケ谷", "新鎌ヶ谷", "新鎌ケ谷"]],
+  ["我孫子方面", ["我孫子方面", "我孫子", "天王台", "湖北"]],
+  ["取手方面", ["取手方面", "取手", "藤代方面", "藤代", "桐木"]],
+  ["藤代方面", ["藤代方面", "藤代", "取手", "桐木"]],
+  ["守谷方面", ["守谷方面", "守谷"]],
+  ["柏方面", ["柏方面", "柏", "南柏", "北柏"]],
+  ["柏の葉方面", ["柏の葉方面", "柏の葉", "柏たなか"]],
+  ["流山方面", ["流山方面", "流山", "南流山", "おおたかの森"]],
+  ["野田方面", ["野田方面", "野田", "運河", "梅郷", "川間"]],
+  ["三郷方面", ["三郷方面", "三郷"]],
+  ["八潮方面", ["八潮方面", "八潮"]],
+  ["草加方面", ["草加方面", "草加", "谷塚方面", "谷塚"]],
+  ["吉川方面", ["吉川方面", "吉川"]],
+  ["越谷方面", ["越谷方面", "越谷", "新越谷"]],
+  ["千葉方面", ["千葉方面", "千葉", "幕張", "蘇我", "稲毛", "都賀"]]
+];
+
+const AREA_AFFINITY_MAP = {
+  "松戸近郊": { "葛飾方面": 80, "市川方面": 72, "柏方面": 60, "三郷方面": 62, "足立方面": 58 },
+  "葛飾方面": { "松戸近郊": 80, "足立方面": 62, "江戸川方面": 58, "市川方面": 55 },
+  "足立方面": { "葛飾方面": 62, "松戸近郊": 58, "八潮方面": 55, "草加方面": 52 },
+  "江戸川方面": { "葛飾方面": 58, "市川方面": 54, "船橋方面": 46 },
+  "市川方面": { "葛飾方面": 55, "松戸近郊": 72, "船橋方面": 68, "鎌ヶ谷方面": 66, "江戸川方面": 54 },
+  "船橋方面": { "市川方面": 68, "鎌ヶ谷方面": 76, "千葉方面": 58, "江戸川方面": 46 },
+  "鎌ヶ谷方面": { "船橋方面": 76, "市川方面": 66, "柏方面": 56, "我孫子方面": 42 },
+  "我孫子方面": { "取手方面": 88, "藤代方面": 84, "柏方面": 70, "守谷方面": 60, "鎌ヶ谷方面": 42 },
+  "取手方面": { "我孫子方面": 88, "藤代方面": 92, "守谷方面": 72, "柏方面": 44 },
+  "藤代方面": { "我孫子方面": 84, "取手方面": 92, "守谷方面": 70 },
+  "守谷方面": { "取手方面": 72, "藤代方面": 70, "我孫子方面": 60, "つくば方面": 62 },
+  "柏方面": { "我孫子方面": 70, "流山方面": 66, "柏の葉方面": 64, "野田方面": 56, "鎌ヶ谷方面": 56, "松戸近郊": 60, "取手方面": 44 },
+  "柏の葉方面": { "柏方面": 64, "流山方面": 62, "野田方面": 58 },
+  "流山方面": { "柏方面": 66, "柏の葉方面": 62, "野田方面": 58, "三郷方面": 56, "吉川方面": 54 },
+  "野田方面": { "柏方面": 56, "柏の葉方面": 58, "流山方面": 58, "吉川方面": 52 },
+  "三郷方面": { "松戸近郊": 62, "流山方面": 56, "八潮方面": 62, "吉川方面": 54 },
+  "八潮方面": { "三郷方面": 62, "草加方面": 56, "足立方面": 55 },
+  "草加方面": { "八潮方面": 56, "足立方面": 52, "越谷方面": 52 },
+  "吉川方面": { "流山方面": 54, "野田方面": 52, "三郷方面": 54, "越谷方面": 52 },
+  "越谷方面": { "草加方面": 52, "吉川方面": 52 },
+  "千葉方面": { "船橋方面": 58 }
+};
+
+const AREA_DIRECTION_MAP = {
+  "松戸近郊": "CENTER",
+  "葛飾方面": "W",
+  "足立方面": "W",
+  "江戸川方面": "SW",
+  "市川方面": "S",
+  "船橋方面": "SE",
+  "鎌ヶ谷方面": "SE",
+  "我孫子方面": "NE",
+  "取手方面": "NE",
+  "藤代方面": "E",
+  "守谷方面": "E",
+  "柏方面": "E",
+  "柏の葉方面": "NE",
+  "流山方面": "N",
+  "野田方面": "N",
+  "三郷方面": "NW",
+  "八潮方面": "W",
+  "草加方面": "NW",
+  "吉川方面": "N",
+  "越谷方面": "NW",
+  "千葉方面": "SE"
+};
+
+const DIRECTION_RING = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"];
+
+const HOME_ALLOWED_AREA_MAP = {
+  "葛飾方面": ["葛飾方面", "松戸近郊", "足立方面", "江戸川方面", "市川方面", "八潮方面", "三郷方面"],
+  "足立方面": ["足立方面", "葛飾方面", "八潮方面", "草加方面", "松戸近郊"],
+  "江戸川方面": ["江戸川方面", "葛飾方面", "市川方面", "船橋方面"],
+  "市川方面": ["市川方面", "江戸川方面", "船橋方面", "鎌ヶ谷方面", "松戸近郊"],
+  "船橋方面": ["船橋方面", "鎌ヶ谷方面", "市川方面", "千葉方面"],
+  "鎌ヶ谷方面": ["鎌ヶ谷方面", "船橋方面", "市川方面", "柏方面", "松戸近郊"],
+  "我孫子方面": ["我孫子方面", "取手方面", "藤代方面", "守谷方面", "柏方面"],
+  "取手方面": ["取手方面", "藤代方面", "我孫子方面", "守谷方面", "柏方面"],
+  "藤代方面": ["藤代方面", "取手方面", "守谷方面", "我孫子方面"],
+  "守谷方面": ["守谷方面", "取手方面", "藤代方面", "我孫子方面", "柏方面"],
+  "柏方面": ["柏方面", "柏の葉方面", "流山方面", "我孫子方面", "鎌ヶ谷方面", "松戸近郊"],
+  "柏の葉方面": ["柏の葉方面", "柏方面", "流山方面", "野田方面"],
+  "流山方面": ["流山方面", "柏方面", "野田方面", "三郷方面", "吉川方面", "松戸近郊"],
+  "野田方面": ["野田方面", "流山方面", "柏方面", "吉川方面", "柏の葉方面"],
+  "三郷方面": ["三郷方面", "八潮方面", "松戸近郊", "吉川方面", "流山方面"],
+  "八潮方面": ["八潮方面", "三郷方面", "足立方面", "葛飾方面", "草加方面"],
+  "草加方面": ["草加方面", "足立方面", "八潮方面", "越谷方面"],
+  "吉川方面": ["吉川方面", "流山方面", "野田方面", "三郷方面", "越谷方面"],
+  "越谷方面": ["越谷方面", "草加方面", "吉川方面"],
+  "松戸近郊": ["松戸近郊", "葛飾方面", "市川方面", "柏方面", "三郷方面", "足立方面", "流山方面"],
+  "千葉方面": ["千葉方面", "船橋方面"]
+};
+
+const ROUTE_FLOW_MAP = {
+  "松戸近郊": ["流山方面", "吉川方面", "三郷方面", "柏方面", "我孫子方面", "市川方面", "葛飾方面"],
+  "流山方面": ["松戸近郊", "吉川方面", "野田方面", "柏方面", "柏の葉方面"],
+  "吉川方面": ["松戸近郊", "流山方面", "三郷方面", "野田方面"],
+  "三郷方面": ["松戸近郊", "吉川方面", "八潮方面", "流山方面"],
+  "柏方面": ["松戸近郊", "我孫子方面", "流山方面", "柏の葉方面", "取手方面"],
+  "柏の葉方面": ["柏方面", "流山方面", "野田方面"],
+  "我孫子方面": ["松戸近郊", "柏方面", "取手方面", "藤代方面", "守谷方面"],
+  "取手方面": ["我孫子方面", "藤代方面", "守谷方面", "柏方面"],
+  "藤代方面": ["我孫子方面", "取手方面", "守谷方面"],
+  "守谷方面": ["我孫子方面", "取手方面", "藤代方面", "柏方面"],
+  "市川方面": ["松戸近郊", "鎌ヶ谷方面", "船橋方面", "葛飾方面", "江戸川方面"],
+  "鎌ヶ谷方面": ["市川方面", "船橋方面", "柏方面", "松戸近郊"],
+  "船橋方面": ["市川方面", "鎌ヶ谷方面", "千葉方面"],
+  "葛飾方面": ["松戸近郊", "足立方面", "江戸川方面", "市川方面", "三郷方面"],
+  "足立方面": ["葛飾方面", "松戸近郊", "八潮方面"],
+  "江戸川方面": ["葛飾方面", "市川方面", "船橋方面"],
+  "野田方面": ["流山方面", "吉川方面", "柏方面", "柏の葉方面"],
+  "八潮方面": ["葛飾方面", "足立方面", "三郷方面", "草加方面"],
+  "草加方面": ["八潮方面", "足立方面", "越谷方面"],
+  "越谷方面": ["草加方面", "吉川方面"],
+  "千葉方面": ["船橋方面", "市川方面"]
+};
+
+function getRouteFlowCompatibilityBetweenAreas(areaA, areaB) {
+  const a = getCanonicalArea(areaA);
+  const b = getCanonicalArea(areaB);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+
+  const linkedA = ROUTE_FLOW_MAP[a] || [];
+  const linkedB = ROUTE_FLOW_MAP[b] || [];
+  const affinity = getAreaAffinityScore(a, b);
+  const direction = getDirectionAffinityScore(a, b);
+
+  let score = 0;
+  if (linkedA.includes(b) || linkedB.includes(a)) score = 82;
+  else if (affinity >= 72) score = 62;
+  else if (affinity >= 54 && direction >= 28) score = 44;
+  else if (direction >= 72) score = 36;
+  else if (direction <= -38) score = -60;
+
+  if ((a === "松戸近郊" && ["流山方面", "吉川方面", "三郷方面", "柏方面", "我孫子方面"].includes(b)) ||
+      (b === "松戸近郊" && ["流山方面", "吉川方面", "三郷方面", "柏方面", "我孫子方面"].includes(a))) {
+    score = Math.max(score, 88);
+  }
+
+  return score;
+}
+
+function getRouteFlowVehicleScore(targetArea, existingAreas = [], homeArea = "") {
+  const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
+  let best = 0;
+
+  for (const area of areas) {
+    best = Math.max(best, getRouteFlowCompatibilityBetweenAreas(targetArea, area));
+  }
+
+  if (!areas.length && homeArea) {
+    best = Math.max(best, getRouteFlowCompatibilityBetweenAreas(targetArea, homeArea) * 0.35);
+  }
+
+  return best;
+}
+
+const ROUTE_CONTINUITY_HINTS = [
+  { dir: "N", patterns: ["新松戸", "馬橋", "北松戸", "北小金", "小金", "幸谷", "新八柱", "八柱", "常盤平", "みのり台"] },
+  { dir: "NE", patterns: ["南流山", "流山", "柏", "柏の葉", "我孫子", "取手", "藤代", "守谷"] },
+  { dir: "W", patterns: ["葛飾", "足立", "綾瀬", "亀有", "金町", "八潮"] },
+  { dir: "SW", patterns: ["江戸川"] },
+  { dir: "S", patterns: ["市川", "本八幡", "妙典", "行徳"] },
+  { dir: "SE", patterns: ["船橋", "習志野", "鎌ヶ谷", "鎌ケ谷"] },
+  { dir: "NW", patterns: ["三郷", "吉川", "越谷", "草加"] }
+];
+
+function getAreaTravelDirection(area) {
+  const raw = normalizeAreaLabel(area);
+  if (!raw || raw === "無し") return "";
+
+  for (const hint of ROUTE_CONTINUITY_HINTS) {
+    if (hint.patterns.some(pattern => raw.includes(pattern))) return hint.dir;
+  }
+
+  return getAreaDirectionCluster(raw);
+}
+
+function getDirectionDistanceByKey(dirA, dirB) {
+  if (!dirA || !dirB) return 99;
+  if (dirA === dirB) return 0;
+  if (dirA === "CENTER" || dirB === "CENTER") return 1;
+  const indexA = DIRECTION_RING.indexOf(dirA);
+  const indexB = DIRECTION_RING.indexOf(dirB);
+  if (indexA < 0 || indexB < 0) return 99;
+  const raw = Math.abs(indexA - indexB);
+  return Math.min(raw, DIRECTION_RING.length - raw);
+}
+
+function isGatewayNearArea(area) {
+  const raw = normalizeAreaLabel(area);
+  if (!raw || raw === "無し") return false;
+  return ["松戸", "新松戸", "馬橋", "北松戸", "北小金", "小金", "八柱", "常盤平", "みのり台"].some(keyword => raw.includes(keyword));
+}
+
+function getPairRouteContinuityPenalty(areaA, areaB) {
+  const dirA = getAreaTravelDirection(areaA);
+  const dirB = getAreaTravelDirection(areaB);
+  const distance = getDirectionDistanceByKey(dirA, dirB);
+  const routeFlow = getRouteFlowCompatibilityBetweenAreas(areaA, areaB);
+  const affinity = getAreaAffinityScore(areaA, areaB);
+
+  let penalty = 0;
+
+  if (distance === 0) penalty += 0;
+  else if (distance === 1) penalty += 10;
+  else if (distance === 2) penalty += 48;
+  else if (distance === 3) penalty += 130;
+  else if (distance >= 4 && distance < 99) penalty += 240;
+
+  if (routeFlow <= 0) penalty += 26;
+  else if (routeFlow < 40) penalty += 14;
+
+  if (affinity >= 72) penalty -= 26;
+  else if (affinity >= 54) penalty -= 10;
+
+  const gatewayA = isGatewayNearArea(areaA);
+  const gatewayB = isGatewayNearArea(areaB);
+  if (gatewayA || gatewayB) {
+    if (distance >= 2) penalty += 82;
+  }
+
+  const pair = [getCanonicalArea(areaA), getCanonicalArea(areaB)].filter(Boolean).sort().join("__");
+  const strongPairs = new Set([
+    "吉川方面__松戸近郊",
+    "三郷方面__松戸近郊",
+    "我孫子方面__松戸近郊",
+    "柏方面__松戸近郊",
+    "流山方面__松戸近郊"
+  ]);
+  if (strongPairs.has(pair)) penalty -= 48;
+
+  if ((gatewayA || gatewayB) && ((dirA === "N" && ["W", "SW", "S"].includes(dirB)) || (dirB === "N" && ["W", "SW", "S"].includes(dirA)))) {
+    penalty += 120;
+  }
+
+  return Math.max(0, penalty);
+}
+
+function getRouteContinuityPenalty(targetArea, existingAreas = [], homeArea = "") {
+  const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
+  if (!areas.length) return 0;
+
+  let penalty = 0;
+  let bestPairPenalty = Infinity;
+
+  for (const area of areas) {
+    const pairPenalty = getPairRouteContinuityPenalty(targetArea, area);
+    bestPairPenalty = Math.min(bestPairPenalty, pairPenalty);
+    penalty += pairPenalty;
+  }
+
+  penalty = bestPairPenalty === Infinity ? penalty : penalty * 0.45 + bestPairPenalty * 0.9;
+
+  if (homeArea) {
+    const homeDir = getAreaTravelDirection(homeArea);
+    const targetDir = getAreaTravelDirection(targetArea);
+    const homeDistance = getDirectionDistanceByKey(targetDir, homeDir);
+    if (homeDistance >= 3) penalty += 42;
+  }
+
+  return Math.max(0, penalty);
+}
+
+function getRouteFlowSortWeight(area) {
+  const canonical = getCanonicalArea(area);
+  if (["守谷方面", "藤代方面", "取手方面", "我孫子方面", "千葉方面"].includes(canonical)) return 100;
+  if (["吉川方面", "船橋方面", "野田方面", "柏の葉方面"].includes(canonical)) return 85;
+  if (["流山方面", "柏方面", "市川方面", "鎌ヶ谷方面", "三郷方面", "足立方面", "葛飾方面"].includes(canonical)) return 70;
+  if (canonical === "松戸近郊") return 40;
+  return 55;
+}
+
+function sortClustersForRouteFlow(clusters) {
+  return [...clusters].sort((a, b) => {
+    if (a.hour !== b.hour) return a.hour - b.hour;
+    const aw = getRouteFlowSortWeight(a.area);
+    const bw = getRouteFlowSortWeight(b.area);
+    if (bw !== aw) return bw - aw;
+    if (b.count !== a.count) return b.count - a.count;
+    return b.totalDistance - a.totalDistance;
+  });
+}
+
+function getAssignmentAreasByVehicleHour(assignments, itemsById, vehicleId, hour, excludeItemId = null) {
+  return assignments
+    .filter(a => Number(a.vehicle_id) === Number(vehicleId) && Number(a.actual_hour) === Number(hour) && Number(a.item_id) !== Number(excludeItemId || -1))
+    .map(a => normalizeAreaLabel(itemsById.get(Number(a.item_id))?.destination_area || ""))
+    .filter(Boolean);
+}
+
+function optimizeAssignmentsByRouteFlow(assignments, items, vehicles) {
+  const itemById = new Map(items.map(item => [Number(item.id), item]));
+  const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
+  const working = assignments.map(a => ({ ...a }));
+
+  for (const assignment of working) {
+    const item = itemById.get(Number(assignment.item_id));
+    if (!item) continue;
+
+    const area = normalizeAreaLabel(item.destination_area || item.cluster_area || "無し");
+    const currentVehicle = vehicleMap.get(Number(assignment.vehicle_id));
+    const currentHome = normalizeAreaLabel(currentVehicle?.home_area || "");
+    const currentAreas = getAssignmentAreasByVehicleHour(working, itemById, assignment.vehicle_id, assignment.actual_hour, assignment.item_id);
+    const currentRouteScore = getRouteFlowVehicleScore(area, currentAreas, currentHome);
+    const currentHomeScore = getLastTripHomePriorityWeight(area, currentHome, true, true);
+
+    let best = null;
+
+    for (const vehicle of vehicles) {
+      if (Number(vehicle.id) === Number(assignment.vehicle_id)) continue;
+
+      const hourAssignments = working.filter(a => Number(a.vehicle_id) === Number(vehicle.id) && Number(a.actual_hour) === Number(assignment.actual_hour));
+      const seatCapacity = Number(vehicle.seat_capacity || 4);
+      if (hourAssignments.length >= seatCapacity) continue;
+
+      const homeArea = normalizeAreaLabel(vehicle.home_area || "");
+      if (isHardReverseForHome(area, homeArea)) continue;
+
+      const existingAreas = hourAssignments.map(a => normalizeAreaLabel(itemById.get(Number(a.item_id))?.destination_area || ""));
+      const routeScore = getRouteFlowVehicleScore(area, existingAreas, homeArea);
+      const continuityPenalty = getRouteContinuityPenalty(area, existingAreas, homeArea);
+      const currentContinuityPenalty = getRouteContinuityPenalty(area, currentAreas, currentHome);
+      const homeScore = getLastTripHomePriorityWeight(area, homeArea, true, true);
+      const direction = Math.max(0, getDirectionAffinityScore(area, homeArea));
+      const strict = getStrictHomeCompatibilityScore(area, homeArea);
+
+      const totalScore = routeScore * 2.4 + homeScore * 0.9 + direction * 0.5 + strict * 0.6 - continuityPenalty * 1.7 - hourAssignments.length * 12;
+      const currentTotal = currentRouteScore * 2.4 + currentHomeScore * 0.9 + Math.max(0, getDirectionAffinityScore(area, currentHome)) * 0.5 + getStrictHomeCompatibilityScore(area, currentHome) * 0.6 - currentContinuityPenalty * 1.7 - currentAreas.length * 12;
+
+      if (totalScore >= currentTotal + 90) {
+        if (!best || totalScore > best.totalScore) best = { vehicle, totalScore };
+      }
+    }
+
+    if (best) {
+      assignment.vehicle_id = best.vehicle.id;
+      assignment.driver_name = best.vehicle.driver_name || "";
+    }
+  }
+
+  return working;
+}
+
+function getCanonicalArea(area) {
+  const normalized = normalizeAreaLabel(area);
+  if (!normalized || normalized === "無し") return "";
+
+  for (const [canonical, patterns] of AREA_CANONICAL_PATTERNS) {
+    if (patterns.some(pattern => normalized.includes(pattern))) {
+      return canonical;
+    }
+  }
+
+  if (normalized.endsWith("方面")) return normalized;
+  return normalized;
+}
+
+function getAreaAffinityScore(areaA, areaB) {
+  const a = getCanonicalArea(areaA);
+  const b = getCanonicalArea(areaB);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  return Number(AREA_AFFINITY_MAP[a]?.[b] || AREA_AFFINITY_MAP[b]?.[a] || 0);
+}
+
+function getAreaDirectionCluster(area) {
+  const canonical = getCanonicalArea(area);
+  return AREA_DIRECTION_MAP[canonical] || "";
+}
+
+function getDirectionDistance(areaA, areaB) {
+  const dirA = getAreaDirectionCluster(areaA);
+  const dirB = getAreaDirectionCluster(areaB);
+  if (!dirA || !dirB) return 99;
+  if (dirA === "CENTER" || dirB === "CENTER") return 1;
+  const indexA = DIRECTION_RING.indexOf(dirA);
+  const indexB = DIRECTION_RING.indexOf(dirB);
+  if (indexA < 0 || indexB < 0) return 99;
+  const raw = Math.abs(indexA - indexB);
+  return Math.min(raw, DIRECTION_RING.length - raw);
+}
+
+function getDirectionAffinityScore(areaA, areaB) {
+  const distance = getDirectionDistance(areaA, areaB);
+  if (distance === 99) return 0;
+  if (distance === 0) return 100;
+  if (distance === 1) return 72;
+  if (distance === 2) return 28;
+  if (distance === 3) return -38;
+  return -95;
+}
+
+function getStrictHomeCompatibilityScore(clusterArea, homeArea) {
+  const cluster = getCanonicalArea(clusterArea);
+  const home = getCanonicalArea(homeArea);
+  if (!cluster || !home) return 0;
+  if (cluster === home) return 100;
+  const allowed = HOME_ALLOWED_AREA_MAP[home] || [];
+  if (allowed.includes(cluster)) return 78;
+  const directionScore = getDirectionAffinityScore(cluster, home);
+  if (directionScore >= 72) return 52;
+  if (directionScore >= 28) return 18;
+  return 0;
+}
+
+function isHardReverseForHome(clusterArea, homeArea) {
+  const affinity = getAreaAffinityScore(clusterArea, homeArea);
+  const directionScore = getDirectionAffinityScore(clusterArea, homeArea);
+  const strictScore = getStrictHomeCompatibilityScore(clusterArea, homeArea);
+  if (directionScore <= -95) return true;
+  if (directionScore <= -38 && strictScore === 0) return true;
+  if (affinity <= 25 && strictScore === 0) return true;
+  return false;
+}
+
+function getLastTripHomePriorityWeight(clusterArea, homeArea, isLastRun, isDefaultLastHourCluster) {
+  const affinity = getAreaAffinityScore(clusterArea, homeArea);
+  const directionScore = getDirectionAffinityScore(clusterArea, homeArea);
+  const strictScore = getStrictHomeCompatibilityScore(clusterArea, homeArea);
+
+  let weight = affinity * 1.1 + Math.max(directionScore, 0) * 1.15 + strictScore * 1.35;
+
+  if (directionScore < 0) {
+    weight += directionScore * 2.4;
+  }
+
+  if (isHardReverseForHome(clusterArea, homeArea)) {
+    weight -= isLastRun ? 520 : (isDefaultLastHourCluster ? 320 : 90);
+  }
+
+  if (isLastRun) return weight * 2.8;
+  if (isDefaultLastHourCluster) return weight * 2.2;
+  return weight * 0.45;
+}
+
 function openGoogleMap(address) {
   if (!address) return;
   const origin = encodeURIComponent(ORIGIN_LABEL);
@@ -1067,12 +1592,17 @@ function getVehicleAreaMatchScore(vehicle, area) {
   const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
   let score = 0;
 
-  if (vehicleArea && normalizedArea && vehicleArea === normalizedArea) {
-    score += 30;
-  }
-  if (homeArea && normalizedArea && homeArea === normalizedArea) {
-    score += 12;
-  }
+  const vehicleAffinity = getAreaAffinityScore(vehicleArea, normalizedArea);
+  const homeAffinity = getAreaAffinityScore(homeArea, normalizedArea);
+  const vehicleDirection = Math.max(0, getDirectionAffinityScore(vehicleArea, normalizedArea));
+  const homeDirection = Math.max(0, getDirectionAffinityScore(homeArea, normalizedArea));
+  const strictHome = getStrictHomeCompatibilityScore(normalizedArea, homeArea);
+
+  score += vehicleAffinity * 0.40;
+  score += homeAffinity * 0.24;
+  score += vehicleDirection * 0.20;
+  score += homeDirection * 0.28;
+  score += strictHome * 0.34;
 
   return score;
 }
@@ -1107,11 +1637,7 @@ function buildDispatchClusters(items) {
     cluster.count += 1;
   });
 
-  return [...clusterMap.values()].sort((a, b) => {
-    if (a.hour !== b.hour) return a.hour - b.hour;
-    if (b.count !== a.count) return b.count - a.count;
-    return b.totalDistance - a.totalDistance;
-  });
+  return sortClustersForRouteFlow([...clusterMap.values()]);
 }
 
 async function ensureAuth() {
@@ -2983,6 +3509,7 @@ async function loadActualsByDate(dateStr) {
   renderActualTimeAreaMatrix();
   renderHomeSummary();
   renderCastSelects();
+  renderManualLastVehicleInfo();
 }
 
 async function saveActual() {
@@ -3370,6 +3897,192 @@ function toggleAllVehicles(checked) {
   renderDailyDispatchResult();
 }
 
+
+function getActiveDispatchItemsForAutoAssign() {
+  return currentActualsCache.filter(
+    item => !["done", "cancel"].includes(normalizeStatus(item.status))
+  );
+}
+
+function sortItemsForFallbackDispatch(items) {
+  return [...items].sort((a, b) => {
+    const ah = Number(a.actual_hour ?? 0);
+    const bh = Number(b.actual_hour ?? 0);
+    if (ah !== bh) return ah - bh;
+
+    const aa = normalizeAreaLabel(a.destination_area || "");
+    const ba = normalizeAreaLabel(b.destination_area || "");
+    if (aa !== ba) return aa.localeCompare(ba, "ja");
+
+    return Number(a.stop_order || 0) - Number(b.stop_order || 0);
+  });
+}
+
+function buildFallbackAssignments(items, vehicles) {
+  const orderedItems = sortItemsForFallbackDispatch(items);
+  if (!orderedItems.length || !vehicles.length) return [];
+
+  const assignments = [];
+  const seatLoads = new Map();
+
+  function getLoad(vehicleId, hour) {
+    return Number(seatLoads.get(`${vehicleId}_${hour}`) || 0);
+  }
+
+  function addLoad(vehicleId, hour) {
+    const key = `${vehicleId}_${hour}`;
+    seatLoads.set(key, getLoad(vehicleId, hour) + 1);
+  }
+
+  orderedItems.forEach((item, index) => {
+    const hour = Number(item.actual_hour ?? 0);
+    let selectedVehicle =
+      vehicles.find(v => getLoad(v.id, hour) < Number(v.seat_capacity || 4)) ||
+      vehicles[index % vehicles.length];
+
+    if (!selectedVehicle) selectedVehicle = vehicles[0];
+
+    assignments.push({
+      item_id: item.id,
+      actual_hour: hour,
+      vehicle_id: selectedVehicle.id,
+      driver_name: selectedVehicle.driver_name || "",
+      distance_km: Number(item.distance_km || 0)
+    });
+
+    addLoad(selectedVehicle.id, hour);
+  });
+
+  return assignments;
+}
+
+function applyManualLastVehicleToAssignments(assignments, vehicles) {
+  if (!assignments.length || !vehicles.length) return assignments;
+
+  const dateStr = els.actualDate?.value || todayStr();
+  const defaultLastHour = getDefaultLastHour(dateStr);
+  const manualLastVehicleId = getManualLastVehicleId();
+  const manualVehicle = vehicles.find(v => Number(v.id) === Number(manualLastVehicleId)) || null;
+  const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
+  const itemMap = new Map(currentActualsCache.map(item => [Number(item.id), item]));
+
+  const hourCounts = new Map();
+  assignments.forEach(a => {
+    const key = `${Number(a.vehicle_id)}__${Number(a.actual_hour ?? 0)}`;
+    hourCounts.set(key, Number(hourCounts.get(key) || 0) + 1);
+  });
+
+  const lastHourAssignments = assignments.filter(a => Number(a.actual_hour ?? 0) === Number(defaultLastHour));
+  if (lastHourAssignments.length) {
+    const optimizedLastHour = assignments.map(a => ({ ...a }));
+
+    for (const target of optimizedLastHour) {
+      if (Number(target.actual_hour ?? 0) !== Number(defaultLastHour)) continue;
+
+      const item = itemMap.get(Number(target.item_id));
+      if (!item) continue;
+      const area = normalizeAreaLabel(item.destination_area || item.cluster_area || '無し');
+
+      let bestCandidate = null;
+      for (const vehicle of vehicles) {
+        const seatCapacity = Number(vehicle.seat_capacity || 4);
+        const currentKey = `${Number(vehicle.id)}__${Number(defaultLastHour)}`;
+        const currentLoad = Number(hourCounts.get(currentKey) || 0);
+        const isSameVehicle = Number(vehicle.id) === Number(target.vehicle_id);
+        if (!isSameVehicle && currentLoad >= seatCapacity) continue;
+
+        const currentVehicle = vehicleMap.get(Number(target.vehicle_id));
+        const currentHome = normalizeAreaLabel(currentVehicle?.home_area || '');
+        const candidateHome = normalizeAreaLabel(vehicle.home_area || '');
+        const candidateAffinity = getAreaAffinityScore(area, candidateHome);
+        const currentAffinity = getAreaAffinityScore(area, currentHome);
+        const candidateDirection = getDirectionAffinityScore(area, candidateHome);
+        const currentDirection = getDirectionAffinityScore(area, currentHome);
+        const candidateStrict = getStrictHomeCompatibilityScore(area, candidateHome);
+        const currentStrict = getStrictHomeCompatibilityScore(area, currentHome);
+        const candidateReverse = isHardReverseForHome(area, candidateHome);
+        const vehicleAreaScore = getVehicleAreaMatchScore(vehicle, area);
+        const manualBonus = manualVehicle && Number(vehicle.id) === Number(manualVehicle.id) ? 6 : 0;
+        const reversePenalty = candidateReverse ? 240 : 0;
+        const score = candidateAffinity * 8 + Math.max(candidateDirection, 0) * 4 + candidateStrict * 5 + vehicleAreaScore + manualBonus - currentLoad * 8 - reversePenalty;
+
+        if (!bestCandidate || score > bestCandidate.score) {
+          bestCandidate = { vehicle, score, candidateAffinity, currentAffinity };
+        }
+      }
+
+      if (!bestCandidate) continue;
+      const currentVehicle = vehicleMap.get(Number(target.vehicle_id));
+      const currentHome = normalizeAreaLabel(currentVehicle?.home_area || '');
+      const currentAffinity = getAreaAffinityScore(area, currentHome);
+      const currentDirection = getDirectionAffinityScore(area, currentHome);
+      const currentStrict = getStrictHomeCompatibilityScore(area, currentHome);
+      const bestDirection = getDirectionAffinityScore(area, bestCandidate.vehicle.home_area || '');
+      const bestStrict = getStrictHomeCompatibilityScore(area, bestCandidate.vehicle.home_area || '');
+      const shouldMove =
+        Number(bestCandidate.vehicle.id) !== Number(target.vehicle_id) &&
+        (
+          bestStrict > currentStrict ||
+          (bestStrict === currentStrict && bestDirection > currentDirection) ||
+          (bestStrict === currentStrict && bestDirection === currentDirection && bestCandidate.candidateAffinity > currentAffinity) ||
+          (bestStrict === currentStrict && bestDirection === currentDirection && bestCandidate.candidateAffinity === currentAffinity && manualVehicle && Number(bestCandidate.vehicle.id) === Number(manualVehicle.id))
+        );
+
+      if (!shouldMove) continue;
+
+      const fromKey = `${Number(target.vehicle_id)}__${Number(defaultLastHour)}`;
+      const toKey = `${Number(bestCandidate.vehicle.id)}__${Number(defaultLastHour)}`;
+      hourCounts.set(fromKey, Math.max(0, Number(hourCounts.get(fromKey) || 0) - 1));
+      hourCounts.set(toKey, Number(hourCounts.get(toKey) || 0) + 1);
+
+      target.vehicle_id = bestCandidate.vehicle.id;
+      target.driver_name = bestCandidate.vehicle.driver_name || '';
+      target.manual_last_vehicle = manualVehicle && Number(bestCandidate.vehicle.id) === Number(manualVehicle.id);
+    }
+
+    return optimizedLastHour;
+  }
+
+  if (!manualVehicle) return assignments;
+
+  const sorted = [...assignments].sort((a, b) => {
+    const ah = Number(a.actual_hour ?? 0);
+    const bh = Number(b.actual_hour ?? 0);
+    if (ah !== bh) return ah - bh;
+    return Number(a.item_id || 0) - Number(b.item_id || 0);
+  });
+
+  const last = sorted[sorted.length - 1];
+  if (!last) return assignments;
+
+  const lastItem = itemMap.get(Number(last.item_id));
+  const lastArea = normalizeAreaLabel(lastItem?.destination_area || '');
+  const manualAffinity = getAreaAffinityScore(lastArea, manualVehicle.home_area || '');
+  const currentVehicle = vehicleMap.get(Number(last.vehicle_id));
+  const currentAffinity = getAreaAffinityScore(lastArea, currentVehicle?.home_area || '');
+  const manualDirection = getDirectionAffinityScore(lastArea, manualVehicle.home_area || '');
+  const currentDirection = getDirectionAffinityScore(lastArea, currentVehicle?.home_area || '');
+  const manualStrict = getStrictHomeCompatibilityScore(lastArea, manualVehicle.home_area || '');
+  const currentStrict = getStrictHomeCompatibilityScore(lastArea, currentVehicle?.home_area || '');
+
+  if (isHardReverseForHome(lastArea, manualVehicle.home_area || '')) return assignments;
+  if (manualStrict < currentStrict) return assignments;
+  if (manualStrict === currentStrict && manualDirection < currentDirection) return assignments;
+  if (manualStrict === currentStrict && manualDirection === currentDirection && manualAffinity < currentAffinity) return assignments;
+
+  return assignments.map(a =>
+    Number(a.item_id) === Number(last.item_id)
+      ? {
+          ...a,
+          vehicle_id: manualVehicle.id,
+          driver_name: manualVehicle.driver_name || '',
+          manual_last_vehicle: true
+        }
+      : a
+  );
+}
+
+
 function buildMonthlyDistanceMapForCurrentMonth() {
   const monthKey = getMonthKey(els.dispatchDate?.value || todayStr());
   return getVehicleMonthlyStatsMap(currentDailyReportsCache, monthKey);
@@ -3377,6 +4090,7 @@ function buildMonthlyDistanceMapForCurrentMonth() {
 
 function optimizeAssignments(items, vehicles, monthlyMap) {
   const workingVehicles = vehicles.filter(v => v.status !== "maintenance");
+  const manualLastVehicleId = getManualLastVehicleId();
   const clusters = buildDispatchClusters(items);
   const assignments = [];
 
@@ -3389,7 +4103,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
       vehicleUsage.set(vehicleId, {
         totalAssigned: 0,
         totalDistance: 0,
-        hourLoads: new Map()
+        hourLoads: new Map(),
+        hourAreas: new Map()
       });
     }
     return vehicleUsage.get(vehicleId);
@@ -3400,11 +4115,20 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     return Number(state.hourLoads.get(hour) || 0);
   }
 
-  function addHourLoad(vehicleId, hour, count, distance) {
+  function getHourAreas(vehicleId, hour) {
+    const state = getVehicleState(vehicleId);
+    return [...(state.hourAreas.get(hour) || [])];
+  }
+
+  function addHourLoad(vehicleId, hour, count, distance, area) {
     const state = getVehicleState(vehicleId);
     state.totalAssigned += count;
     state.totalDistance += distance;
     state.hourLoads.set(hour, getHourLoad(vehicleId, hour) + count);
+    if (area) {
+      const existing = state.hourAreas.get(hour) || [];
+      state.hourAreas.set(hour, [...existing, normalizeAreaLabel(area)]);
+    }
   }
 
   for (const cluster of clusters) {
@@ -3437,8 +4161,20 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
         let score = 1000;
 
-        // 方面一致を優先
-        score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+        const vehicleAreaMatch = getVehicleAreaMatchScore(vehicle, cluster.area);
+        const directionAffinity = getDirectionAffinityScore(normalizedClusterArea, homeArea);
+        const strictHomeScore = getStrictHomeCompatibilityScore(normalizedClusterArea, homeArea);
+        const hardReverse = isHardReverseForHome(normalizedClusterArea, homeArea);
+        const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
+        const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
+        const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
+
+        // 方面一致 + 方向クラスタ + 帰宅適合 + 経由ルート相性を優先
+        score -= vehicleAreaMatch;
+        score -= routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 2.05 : 1.35);
+        score += routeContinuityPenalty * (isLastRun || isDefaultLastHourCluster ? 1.75 : 1.1);
+        score -= Math.max(directionAffinity, 0) * (isLastRun || isDefaultLastHourCluster ? 2.2 : 0.45);
+        score -= strictHomeScore * (isLastRun || isDefaultLastHourCluster ? 2.8 : 0.55);
 
         // 同時間帯の過積載を避ける
         score += sameHourLoad * 35;
@@ -3452,20 +4188,41 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         // 月間平均距離が高い車両に積みすぎない
         score += projectedAvg * 0.55;
 
-        // ラスト便は帰宅方面一致を強く優遇
-        if (isLastRun) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-            score -= 120;
-          } else {
-            score += 40;
-          }
+        // ラスト便で逆方向は強く除外
+        if ((isLastRun || isDefaultLastHourCluster) && hardReverse) {
+          score += isLastRun ? 560 : 320;
         }
 
-        // 深夜デフォルト最終便も帰宅方面をやや考慮
-        if (!isLastRun && isDefaultLastHourCluster) {
-          if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-            score -= 25;
-          }
+        // ラスト便時間帯では適合の弱い車両を避ける
+        if ((isLastRun || isDefaultLastHourCluster) && strictHomeScore < 50) {
+          score += 110;
+        }
+
+        // 同一ルートの折れ返しが大きい組み合わせを避ける
+        if (routeContinuityPenalty >= 170) {
+          score += isLastRun || isDefaultLastHourCluster ? 180 : 95;
+        } else if (routeContinuityPenalty >= 95) {
+          score += isLastRun || isDefaultLastHourCluster ? 90 : 42;
+        }
+
+        // 手動ラスト便車両は適合している時だけ優遇
+        if (manualLastVehicleId && (isLastRun || isDefaultLastHourCluster)) {
+          if (Number(vehicle.id) === Number(manualLastVehicleId) && !hardReverse && strictHomeScore >= 50) score -= 180;
+          else if (Number(vehicle.id) === Number(manualLastVehicleId) && hardReverse) score += 220;
+          else score += 35;
+        }
+
+        // ラスト便は帰宅方面の近接スコアを強く優遇
+        const homePriorityWeight = getLastTripHomePriorityWeight(
+          normalizedClusterArea,
+          homeArea,
+          isLastRun,
+          isDefaultLastHourCluster
+        );
+        score -= homePriorityWeight;
+
+        if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
+          score += isLastRun ? 80 : 28;
         }
 
         return { vehicle, score };
@@ -3491,7 +4248,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         bestVehicle.id,
         cluster.hour,
         cluster.count,
-        calculateRouteDistance(sortedItems)
+        calculateRouteDistance(sortedItems),
+        cluster.area
       );
       continue;
     }
@@ -3514,6 +4272,9 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
           const normalizedClusterArea = normalizeAreaLabel(cluster.area);
           const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+          const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
+          const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
+          const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
 
           const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
           const projectedAvg =
@@ -3522,8 +4283,10 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
           let score = 1000;
 
-          // 方面一致を優先
+          // 方面一致 + 経由ルート相性を優先
           score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+          score -= routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 1.85 : 1.25);
+          score += routeContinuityPenalty * (isLastRun || isDefaultLastHourCluster ? 1.55 : 1.0);
 
           // 同時間帯負荷
           score += sameHourLoad * 35;
@@ -3537,18 +4300,22 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           // 月間平均の高い車両へ積みすぎない
           score += projectedAvg * 0.55;
 
-          if (isLastRun) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-              score -= 120;
-            } else {
-              score += 40;
-            }
+          const homePriorityWeight = getLastTripHomePriorityWeight(
+            normalizedClusterArea,
+            homeArea,
+            isLastRun,
+            isDefaultLastHourCluster
+          );
+          score -= homePriorityWeight;
+
+          if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
+            score += isLastRun ? 36 : 10;
           }
 
-          if (!isLastRun && isDefaultLastHourCluster) {
-            if (homeArea && normalizedClusterArea && homeArea === normalizedClusterArea) {
-              score -= 25;
-            }
+          if (routeContinuityPenalty >= 170) {
+            score += isLastRun || isDefaultLastHourCluster ? 160 : 80;
+          } else if (routeContinuityPenalty >= 95) {
+            score += isLastRun || isDefaultLastHourCluster ? 72 : 30;
           }
 
           return { vehicle, score };
@@ -3572,7 +4339,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         bestVehicle.id,
         cluster.hour,
         1,
-        Number(item.distance_km || 0)
+        Number(item.distance_km || 0),
+        cluster.area
       );
     }
   }
@@ -3587,13 +4355,27 @@ async function runAutoDispatch() {
     return;
   }
 
-  if (!currentActualsCache.length) {
-    alert("Actualがありません");
+  const activeItems = getActiveDispatchItemsForAutoAssign();
+  if (!activeItems.length) {
+    alert("自動配車対象のActualがありません");
     return;
   }
 
   const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
-  const assignments = optimizeAssignments(currentActualsCache, selectedVehicles, monthlyMap);
+  let assignments = optimizeAssignments(activeItems, selectedVehicles, monthlyMap);
+  assignments = optimizeAssignmentsByRouteFlow(assignments, activeItems, selectedVehicles);
+
+  if (!assignments.length) {
+    assignments = buildFallbackAssignments(activeItems, selectedVehicles);
+  }
+
+  assignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
+
+  if (!assignments.length) {
+    alert("自動配車に失敗しました");
+    return;
+  }
+
   const groupedOrderMap = new Map();
 
   for (const a of assignments) {
@@ -3637,110 +4419,116 @@ function renderDailyDispatchResult() {
     x => normalizeStatus(x.status) !== "done" && normalizeStatus(x.status) !== "cancel"
   );
 
-  const cardsHtml = vehicles
-    .map(vehicle => {
-      const rows = activeItems
-        .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-        .sort((a, b) => {
-          const ah = Number(a.actual_hour ?? 0);
-          const bh = Number(b.actual_hour ?? 0);
-          if (ah !== bh) return ah - bh;
+  try {
+    const cardsHtml = vehicles
+      .map(vehicle => {
+        const rows = activeItems
+          .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+          .sort((a, b) => {
+            const ah = Number(a.actual_hour ?? 0);
+            const bh = Number(b.actual_hour ?? 0);
+            if (ah !== bh) return ah - bh;
 
-          const aa = normalizeAreaLabel(a.destination_area || "");
-          const ba = normalizeAreaLabel(b.destination_area || "");
-          if (aa !== ba) return aa.localeCompare(ba, "ja");
+            const aa = normalizeAreaLabel(a.destination_area || "");
+            const ba = normalizeAreaLabel(b.destination_area || "");
+            if (aa !== ba) return aa.localeCompare(ba, "ja");
 
-          return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-        });
+            return Number(a.stop_order || 0) - Number(b.stop_order || 0);
+          });
 
-      const orderedRows = sortItemsByNearestRoute(rows);
-      const totalDistance = calculateRouteDistance(orderedRows);
+        const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
+        const totalDistance = calculateRouteDistance(orderedRows);
 
-      const body = orderedRows.length
-        ? orderedRows
-            .map(
-              (row, index) => `
-                <div class="dispatch-row">
-                  <div class="dispatch-left">
-                    <span class="badge-time">${escapeHtml(getHourLabel(row.actual_hour))}</span>
-                    <span class="badge-order">順番 ${index + 1}</span>
-                    <span class="dispatch-name">${buildMapLinkHtml({
-                      name: row.casts?.name,
-                      address: row.destination_address || row.casts?.address,
-                      lat: row.casts?.latitude,
-                      lng: row.casts?.longitude,
-                      className: "dispatch-name-link"
-                    })}</span>
-                    <span class="dispatch-area">${escapeHtml(normalizeAreaLabel(row.destination_area || "-"))}</span>
+        const body = orderedRows.length
+          ? orderedRows
+              .map(
+                (row, index) => `
+                  <div class="dispatch-row">
+                    <div class="dispatch-left">
+                      <span class="badge-time">${escapeHtml(getHourLabel(row.actual_hour))}</span>
+                      <span class="badge-order">順番 ${index + 1}</span>
+                      <span class="dispatch-name">${buildMapLinkHtml({
+                        name: row.casts?.name,
+                        address: row.destination_address || row.casts?.address,
+                        lat: row.casts?.latitude,
+                        lng: row.casts?.longitude,
+                        className: "dispatch-name-link"
+                      })}</span>
+                      <span class="dispatch-area">${escapeHtml(normalizeAreaLabel(row.destination_area || "-"))}</span>
+                      ${isManualLastTripItem(row) ? `<span class="badge-status assigned">ラスト便</span>` : ""}
+                    </div>
+                    <div class="dispatch-right">
+                      <div class="dispatch-distance">${Number(row.distance_km || 0).toFixed(1)}km</div>
+                      <select class="dispatch-vehicle-select" data-item-id="${row.id}">
+                        ${vehicles
+                          .map(
+                            v => `
+                              <option value="${v.id}" ${Number(v.id) === Number(vehicle.id) ? "selected" : ""}>
+                                 ${escapeHtml(v.driver_name || v.plate_number || "-")}
+                              </option>
+                            `
+                          )
+                          .join("")}
+                      </select>
+                    </div>
                   </div>
-                  <div class="dispatch-right">
-                    <div class="dispatch-distance">${Number(row.distance_km || 0).toFixed(1)}km</div>
-                    <select class="dispatch-vehicle-select" data-item-id="${row.id}">
-                      ${vehicles
-                        .map(
-                          v => `
-                            <option value="${v.id}" ${Number(v.id) === Number(vehicle.id) ? "selected" : ""}>
-                               ${escapeHtml(v.driver_name || v.plate_number || "-")}
-                            </option>
-                          `
-                        )
-                        .join("")}
-                    </select>
-                  </div>
+                `
+              )
+              .join("")
+          : `<div class="empty-vehicle-text">送りなし</div>`;
+
+        return `
+          <div class="vehicle-result-card">
+            <div class="vehicle-result-head">
+              <div class="vehicle-result-title">
+                <h4>${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</h4>
+                <div class="vehicle-result-meta">
+                  ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}
+                  / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
+                  / 定員${vehicle.seat_capacity ?? "-"}
                 </div>
-              `
-            )
-            .join("")
-        : `<div class="empty-vehicle-text">送りなし</div>`;
-
-      return `
-        <div class="vehicle-result-card">
-          <div class="vehicle-result-head">
-            <div class="vehicle-result-title">
-              <h4>${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</h4>
-              <div class="vehicle-result-meta">
-                ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}
-                / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
-                / 定員${vehicle.seat_capacity ?? "-"}
+              </div>
+              <div class="vehicle-result-badges">
+                <span class="metric-badge">人数 ${rows.length}</span>
+                <span class="metric-badge">距離 ${totalDistance.toFixed(1)}km</span>
               </div>
             </div>
-            <div class="vehicle-result-badges">
-              <span class="metric-badge">人数 ${rows.length}</span>
-              <span class="metric-badge">距離 ${totalDistance.toFixed(1)}km</span>
-            </div>
+            <div class="vehicle-result-body">${body}</div>
           </div>
-          <div class="vehicle-result-body">${body}</div>
-        </div>
-      `;
-    })
-    .join("");
+        `;
+      })
+      .join("");
 
-  els.dailyDispatchResult.innerHTML = cardsHtml;
+    els.dailyDispatchResult.innerHTML = cardsHtml;
 
-  els.dailyDispatchResult.querySelectorAll(".dispatch-vehicle-select").forEach(select => {
-    select.addEventListener("change", async () => {
-      const itemId = Number(select.dataset.itemId);
-      const vehicleId = Number(select.value);
-      const vehicle = allVehiclesCache.find(v => Number(v.id) === vehicleId);
+    els.dailyDispatchResult.querySelectorAll(".dispatch-vehicle-select").forEach(select => {
+      select.addEventListener("change", async () => {
+        const itemId = Number(select.dataset.itemId);
+        const vehicleId = Number(select.value);
+        const vehicle = allVehiclesCache.find(v => Number(v.id) === vehicleId);
 
-      const { error } = await supabaseClient
-        .from("dispatch_items")
-        .update({
-          vehicle_id: vehicleId,
-          driver_name: vehicle?.driver_name || null
-        })
-        .eq("id", itemId);
+        const { error } = await supabaseClient
+          .from("dispatch_items")
+          .update({
+            vehicle_id: vehicleId,
+            driver_name: vehicle?.driver_name || null
+          })
+          .eq("id", itemId);
 
-      if (error) {
-        alert(error.message);
-        return;
-      }
+        if (error) {
+          alert(error.message);
+          return;
+        }
 
-      await addHistory(currentDispatchId, itemId, "change_vehicle", "車両を変更");
-      await loadActualsByDate(els.actualDate?.value || todayStr());
-      renderDailyDispatchResult();
+        await addHistory(currentDispatchId, itemId, "change_vehicle", "車両を変更");
+        await loadActualsByDate(els.actualDate?.value || todayStr());
+        renderDailyDispatchResult();
+      });
     });
-  });
+  } catch (error) {
+    console.error("renderDailyDispatchResult error:", error);
+    els.dailyDispatchResult.innerHTML = `<div class="muted">配車結果の表示でエラーが発生しました</div>`;
+  }
 }
 
 function buildCopyResultText() {
@@ -3752,29 +4540,39 @@ function buildCopyResultText() {
   const lines = [];
 
   vehicles.forEach(vehicle => {
-    const rows = activeItems
-      .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-      .sort((a, b) => {
-        const ah = Number(a.actual_hour || 0);
-        const bh = Number(b.actual_hour || 0);
-        if (ah !== bh) return ah - bh;
+    const rows = moveManualLastItemsToEnd(
+      activeItems
+        .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+        .sort((a, b) => {
+          const ah = Number(a.actual_hour || 0);
+          const bh = Number(b.actual_hour || 0);
+          if (ah !== bh) return ah - bh;
 
-        const aa = normalizeAreaLabel(a.destination_area || "");
-        const ba = normalizeAreaLabel(b.destination_area || "");
-        if (aa !== ba) return aa.localeCompare(ba, "ja");
+          const aa = normalizeAreaLabel(a.destination_area || "");
+          const ba = normalizeAreaLabel(b.destination_area || "");
+          if (aa !== ba) return aa.localeCompare(ba, "ja");
 
-        return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-      });
+          return Number(a.stop_order || 0) - Number(b.stop_order || 0);
+        })
+    );
 
-    lines.push(`${vehicle.line_id ? vehicle.line_id + " " : ""}${vehicle.driver_name || vehicle.plate_number || ""}`);
+    const vehicleLabel = `${vehicle.line_id ? vehicle.line_id + " " : ""}${vehicle.driver_name || vehicle.plate_number || ""}`;
+    const header = isManualLastVehicle(vehicle.id)
+      ? `${vehicleLabel}【ラスト便車両】`
+      : vehicleLabel;
+
+    lines.push(header);
 
     if (!rows.length) {
       lines.push("送りなし");
     } else {
       rows.forEach(row => {
         const mapUrl = buildDispatchItemMapUrl(row);
+        const lastTag = isManualLastTripItem(row) || (isManualLastVehicle(vehicle.id) && rows[rows.length - 1]?.id === row.id)
+          ? " / ラスト便"
+          : "";
         lines.push(
-          `・${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} / ${normalizeAreaLabel(row.destination_area || "-")} / ${Number(row.distance_km || 0).toFixed(1)}km`
+          `・${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} / ${normalizeAreaLabel(row.destination_area || "-")} / ${Number(row.distance_km || 0).toFixed(1)}km${lastTag}`
         );
         if (mapUrl) {
           lines.push(`  MAP: ${mapUrl}`);
@@ -3949,6 +4747,7 @@ async function resetMonthlySummary() {
 
   await addHistory(null, null, "reset_monthly_reports", `${monthKey} の月間距離/出勤日数をリセット`);
   await loadDailyReports(dateStr);
+  renderManualLastVehicleInfo();
 }
 
 async function addHistory(dispatchId, itemId, action, message) {
@@ -4275,6 +5074,7 @@ async function importAllDataFromFile() {
     await addHistory(null, null, "import_all", "全体バックアップから復元");
     alert("全体インポートが完了しました");
     await loadHomeAndAll();
+    renderManualLastVehicleInfo();
   } catch (error) {
     console.error("importAllDataFromFile error:", error);
     alert("全体インポートに失敗しました: " + error.message);
@@ -4361,6 +5161,7 @@ async function resetAllDataDanger() {
 
     alert("全データを削除しました");
     await loadHomeAndAll();
+    renderManualLastVehicleInfo();
   } catch (err) {
     console.error("resetAllDataDanger error:", err);
     alert("全消去中にエラーが発生しました");
@@ -4553,6 +5354,7 @@ async function syncDateAndReloadFromDispatchDate() {
   await loadPlansByDate(dateStr);
   await loadActualsByDate(dateStr);
   await loadDailyReports(dateStr);
+  renderManualLastVehicleInfo();
   renderDailyDispatchResult();
 }
 
@@ -4564,6 +5366,7 @@ async function syncDateAndReloadFromPlanDate() {
   await loadPlansByDate(dateStr);
   await loadActualsByDate(dateStr);
   await loadDailyReports(dateStr);
+  renderManualLastVehicleInfo();
 }
 
 async function syncDateAndReloadFromActualDate() {
@@ -4649,6 +5452,7 @@ function setupEvents() {
 
   els.checkAllVehiclesBtn?.addEventListener("click", () => toggleAllVehicles(true));
   els.uncheckAllVehiclesBtn?.addEventListener("click", () => toggleAllVehicles(false));
+  els.clearManualLastVehicleBtn?.addEventListener("click", clearManualLastVehicle);
   els.resetMonthlySummaryBtn?.addEventListener("click", resetMonthlySummary);
 
   els.dispatchDate?.addEventListener("change", syncDateAndReloadFromDispatchDate);
@@ -4701,6 +5505,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.actualDate) els.actualDate.value = today;
 
     await loadHomeAndAll();
+    renderManualLastVehicleInfo();
   } catch (err) {
     console.error("dashboard init error:", err);
     alert("初期化中にエラーが発生しました。Console を確認してください。");
