@@ -24,6 +24,7 @@ let allVehiclesCache = [];
 let currentPlansCache = [];
 let currentActualsCache = [];
 let currentDailyReportsCache = [];
+let currentMileageExportRows = [];
 let activeVehicleIdsForToday = new Set();
 
 const SPECIAL_LATE_NIGHT_DATES = [
@@ -97,6 +98,11 @@ const els = {
   exportVehicleCsvBtn: document.getElementById("exportVehicleCsvBtn"),
   vehicleCsvFileInput: document.getElementById("vehicleCsvFileInput"),
   vehiclesTableBody: document.getElementById("vehiclesTableBody"),
+  mileageReportStartDate: document.getElementById("mileageReportStartDate"),
+  mileageReportEndDate: document.getElementById("mileageReportEndDate"),
+  previewMileageReportBtn: document.getElementById("previewMileageReportBtn"),
+  exportMileageReportBtn: document.getElementById("exportMileageReportBtn"),
+  mileageReportTableWrap: document.getElementById("mileageReportTableWrap"),
 
   dispatchDate: document.getElementById("dispatchDate"),
   optimizeBtn: document.getElementById("optimizeBtn"),
@@ -197,6 +203,11 @@ function getHourLabel(hour) {
 function getMonthKey(dateStr) {
   const d = new Date(dateStr);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getMonthStartStr(dateStr) {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function getDayOfWeek(dateStr) {
@@ -1825,6 +1836,254 @@ function renderVehiclesTable() {
   });
 }
 
+async function fetchDriverMileageRows(startDate, endDate) {
+  const { data, error } = await supabaseClient
+    .from("vehicle_daily_reports")
+    .select(`
+      *,
+      vehicles (
+        id,
+        plate_number,
+        driver_name
+      )
+    `)
+    .gte("report_date", startDate)
+    .lte("report_date", endDate)
+    .order("report_date", { ascending: true })
+    .order("vehicle_id", { ascending: true });
+
+  if (error) {
+    console.error(error);
+    alert("走行実績の取得に失敗しました: " + error.message);
+    return [];
+  }
+
+  return data || [];
+}
+
+function normalizeMileageExportRows(rows) {
+  return rows.map(row => ({
+    report_date: row.report_date || "",
+    driver_name: row.driver_name || row.vehicles?.driver_name || "-",
+    plate_number: row.vehicles?.plate_number || "-",
+    distance_km: Number(row.distance_km || 0),
+    worked_flag: Number(row.distance_km || 0) > 0 ? 1 : 0,
+    note: row.note || ""
+  }));
+}
+
+function renderMileageReportTable(rows) {
+  if (!els.mileageReportTableWrap) return;
+
+  if (!rows.length) {
+    els.mileageReportTableWrap.innerHTML =
+      `<div class="muted" style="padding:14px;">対象期間の走行実績はありません</div>`;
+    return;
+  }
+
+  const grouped = new Map();
+
+  rows.forEach(row => {
+    const driver = row.driver_name || "-";
+    if (!grouped.has(driver)) grouped.set(driver, []);
+    grouped.get(driver).push(row);
+  });
+
+  let html = `<div class="grouped-plan-list">`;
+
+  [...grouped.entries()].forEach(([driver, driverRows]) => {
+    const totalDistance = driverRows.reduce((sum, row) => sum + Number(row.distance_km || 0), 0);
+    html += `
+      <div class="grouped-section">
+        <div class="grouped-hour-title">
+          ${escapeHtml(driver)} / ${driverRows.length}日 / 合計 ${totalDistance.toFixed(1)}km
+        </div>
+    `;
+
+    driverRows.forEach(row => {
+      html += `
+        <div class="grouped-row">
+          <div>${escapeHtml(row.report_date || "")}</div>
+          <div><strong>${escapeHtml(row.driver_name || "-")}</strong></div>
+          <div>${Number(row.distance_km || 0).toFixed(1)}km</div>
+          <div>${Number(row.worked_flag || 0) ? "出勤" : "-"}</div>
+          <div>${escapeHtml(row.note || "")}</div>
+        </div>
+      `;
+    });
+
+    html += `</div>`;
+  });
+
+  html += `</div>`;
+  els.mileageReportTableWrap.innerHTML = html;
+}
+
+async function previewDriverMileageReport() {
+  const startDate = els.mileageReportStartDate?.value;
+  const endDate = els.mileageReportEndDate?.value;
+
+  if (!startDate || !endDate) {
+    alert("開始日と終了日を選択してください");
+    return;
+  }
+
+  if (startDate > endDate) {
+    alert("開始日は終了日以前にしてください");
+    return;
+  }
+
+  const rawRows = await fetchDriverMileageRows(startDate, endDate);
+  currentMileageExportRows = normalizeMileageExportRows(rawRows);
+  renderMileageReportTable(currentMileageExportRows);
+}
+
+function buildMileageSummaryRows(rows) {
+  const map = new Map();
+
+  rows.forEach(row => {
+    const key = row.driver_name || "-";
+    const prev = map.get(key) || {
+      driver_name: key,
+      days: 0,
+      total_distance_km: 0,
+      avg_distance_km: 0
+    };
+    prev.days += 1;
+    prev.total_distance_km += Number(row.distance_km || 0);
+    prev.avg_distance_km = prev.days ? prev.total_distance_km / prev.days : 0;
+    map.set(key, prev);
+  });
+
+  return [...map.values()].map(row => ({
+    driver_name: row.driver_name,
+    days: row.days,
+    total_distance_km: Number(row.total_distance_km.toFixed(1)),
+    avg_distance_km: Number(row.avg_distance_km.toFixed(1))
+  }));
+}
+
+
+function buildMileageDateRange(startDate, endDate) {
+  const dates = [];
+  const current = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+
+  while (current <= end) {
+    dates.push(new Date(current));
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
+}
+
+function formatMileageSheetDate(date) {
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${m}/${d}`;
+}
+
+function buildMileageMatrixRows(rows, startDate, endDate) {
+  const dates = buildMileageDateRange(startDate, endDate);
+  const grouped = new Map();
+
+  rows.forEach(row => {
+    const driver = row.driver_name || "-";
+    if (!grouped.has(driver)) {
+      grouped.set(driver, {
+        driver_name: driver,
+        byDate: new Map(),
+        total_distance_km: 0,
+        days: 0
+      });
+    }
+
+    const item = grouped.get(driver);
+    const key = row.report_date || "";
+
+    item.byDate.set(key, Number(row.distance_km || 0));
+    item.total_distance_km += Number(row.distance_km || 0);
+    if (Number(row.worked_flag || 0)) item.days += 1;
+  });
+
+  const sortedDrivers = [...grouped.values()].sort((a, b) =>
+    String(a.driver_name || "").localeCompare(String(b.driver_name || ""), "ja")
+  );
+
+  const aoa = [];
+  aoa.push([`${startDate.replaceAll("-", "/")}〜${endDate.replaceAll("-", "/")}`]);
+
+  const header = ["No", "名前", ...dates.map(formatMileageSheetDate), "月間走行距離", "出勤日数", "1日平均走行距離"];
+  aoa.push(header);
+
+  sortedDrivers.forEach((row, index) => {
+    const daily = dates.map(date => {
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      const value = row.byDate.get(key);
+      return value != null && value !== 0 ? Number(value.toFixed(1)) : "";
+    });
+
+    const avg = row.days ? row.total_distance_km / row.days : 0;
+
+    aoa.push([
+      index + 1,
+      row.driver_name,
+      ...daily,
+      Number(row.total_distance_km.toFixed(1)),
+      row.days,
+      Number(avg.toFixed(1))
+    ]);
+  });
+
+  return aoa;
+}
+
+function applyMileageMatrixSheetStyle(sheet, startDate, endDate) {
+  if (!sheet["!ref"] || !window.XLSX) return;
+
+  const range = window.XLSX.utils.decode_range(sheet["!ref"]);
+  sheet["!merges"] = sheet["!merges"] || [];
+  sheet["!merges"].push({
+    s: { r: 0, c: 0 },
+    e: { r: 0, c: range.e.c }
+  });
+
+  sheet["!cols"] = [];
+  for (let c = 0; c <= range.e.c; c++) {
+    let wch = 8;
+    if (c === 0) wch = 6;
+    if (c === 1) wch = 12;
+    if (c >= range.e.c - 2) wch = 14;
+    sheet["!cols"].push({ wch });
+  }
+}
+
+async function exportDriverMileageReportXlsx() {
+  if (!window.XLSX) {
+    alert("Excel出力ライブラリの読み込みに失敗しました");
+    return;
+  }
+
+  if (!currentMileageExportRows.length) {
+    await previewDriverMileageReport();
+    if (!currentMileageExportRows.length) return;
+  }
+
+  const summaryRows = buildMileageSummaryRows(currentMileageExportRows);
+
+  const workbook = window.XLSX.utils.book_new();
+  const dailySheet = window.XLSX.utils.json_to_sheet(currentMileageExportRows);
+  const summarySheet = window.XLSX.utils.json_to_sheet(summaryRows);
+
+  window.XLSX.utils.book_append_sheet(workbook, dailySheet, "日別一覧");
+  window.XLSX.utils.book_append_sheet(workbook, summarySheet, "ドライバー別集計");
+
+  const startDate = els.mileageReportStartDate?.value || todayStr();
+  const endDate = els.mileageReportEndDate?.value || todayStr();
+  window.XLSX.writeFile(workbook, `driver_mileage_${startDate}_${endDate}.xlsx`);
+}
+
+
 function exportVehiclesCsv() {
   const headers = [
     "plate_number",
@@ -2125,26 +2384,22 @@ function getCastSearchText(cast) {
 
 function filterCastCandidates(casts, query) {
   const q = String(query || "").trim().toLowerCase();
+  if (!q) return casts.slice(0, 8);
 
-  const sorted = [...casts].sort((a, b) =>
-    String(a.name || "").localeCompare(String(b.name || ""), "ja")
-  );
-
-  if (!q) return sorted;
-
-  return sorted.filter(cast => {
-    const hay = [
-      cast.name || "",
-      cast.address || "",
-      cast.area || "",
-      cast.phone || "",
-      cast.memo || ""
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return hay.includes(q);
-  });
+  return casts
+    .filter(cast => {
+      const hay = [
+        cast.name || "",
+        cast.address || "",
+        cast.area || "",
+        cast.phone || "",
+        cast.memo || ""
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    })
+    .slice(0, 8);
 }
 
 function renderCastSearchSuggest(container, casts, onPick) {
@@ -4067,6 +4322,8 @@ async function loadHomeAndAll() {
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.planDate) els.planDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
+  if (els.mileageReportStartDate && !els.mileageReportStartDate.value) els.mileageReportStartDate.value = getMonthStartStr(dateStr);
+  if (els.mileageReportEndDate && !els.mileageReportEndDate.value) els.mileageReportEndDate.value = dateStr;
 
   await loadCasts();
   await loadVehicles();
@@ -4324,6 +4581,8 @@ function setupEvents() {
   els.importVehicleCsvBtn?.addEventListener("click", () => els.vehicleCsvFileInput?.click());
   els.exportVehicleCsvBtn?.addEventListener("click", exportVehiclesCsv);
   els.vehicleCsvFileInput?.addEventListener("change", importVehicleCsvFile);
+  els.previewMileageReportBtn?.addEventListener("click", previewDriverMileageReport);
+  els.exportMileageReportBtn?.addEventListener("click", exportDriverMileageReportXlsx);
 
   els.savePlanBtn?.addEventListener("click", savePlan);
   els.guessPlanAreaBtn?.addEventListener("click", guessPlanArea);
