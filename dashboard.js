@@ -4791,123 +4791,28 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     return workingVehicles.filter(vehicle => getHourLoad(vehicle.id, hour) === 0).length;
   }
 
-  function getDistanceZone(km) {
-    const value = Number(km || 0);
-    if (value <= 10) return "near";
-    if (value <= 25) return "middle";
-    return "far";
+  function shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) {
+    if (cluster.count <= 1) return true;
+    if (sameHourLoad <= 0) return true;
+    const strongRouteLink = routeFlowScore >= 90 && routeContinuityPenalty <= 45;
+    const reasonableRideShare = routeFlowScore >= 70 && routeContinuityPenalty <= 60;
+    if (strongRouteLink) return false;
+    if (cluster.count <= 2 && reasonableRideShare) return false;
+    return true;
   }
 
-  function getDistanceZoneWeight(zone) {
-    if (zone === "near") return 1.0;
-    if (zone === "middle") return 1.2;
-    return 1.55;
-  }
-
-  function calcRotationScore({ sameHourLoad, idleVehicleCount, routeFlowScore, continuityPenalty, zone, state, addedDistance }) {
-    let score = 0;
-    const zoneWeight = getDistanceZoneWeight(zone);
+  function getNormalRunReturnPenalty(vehicleId, hour, addedDistance, sameHourLoad) {
+    const state = getVehicleState(vehicleId);
     const projectedDistance = Number(state.totalDistance || 0) + Number(addedDistance || 0);
     const projectedLoad = Number(state.totalAssigned || 0) + Number(sameHourLoad || 0);
-
-    if (sameHourLoad === 0) {
-      score += 18 * (idleVehicleCount > 1 ? 1.25 : 1.0);
-      if (zone === "near") score += 8;
-      if (zone === "far") score -= 6;
-    } else {
-      score -= 10 * zoneWeight;
-      score -= projectedLoad * 2.2;
-    }
-
-    if (idleVehicleCount > 0 && sameHourLoad > 0) {
-      const canRideShare =
-        routeFlowScore >= 78 &&
-        continuityPenalty <= 54 &&
-        zone !== "far";
-
-      if (!canRideShare) {
-        score -= 26 + idleVehicleCount * 3;
-      } else {
-        score += 8;
-      }
-    }
-
-    score -= projectedDistance * 0.095 * zoneWeight;
-    score -= projectedLoad * 1.4;
-    return score;
+    return projectedDistance * 0.22 + projectedLoad * 7;
   }
-
-  function calcRideShareScore({ sameHourLoad, routeFlowScore, continuityPenalty, zone, clusterCount, homeArea, clusterArea }) {
-    if (sameHourLoad <= 0) return 0;
-
-    let score = 0;
-    const hardReverse = isHardReverseForHome(clusterArea, homeArea);
-    if (hardReverse) return -120;
-
-    score += routeFlowScore * 0.52;
-    score += Math.max(0, 100 - continuityPenalty) * 0.34;
-    score += Math.max(0, getDirectionAffinityScore(clusterArea, homeArea)) * 0.16;
-
-    if (zone === "near") score += 12;
-    if (zone === "middle") score += 4;
-    if (zone === "far") score -= 26;
-
-    if (clusterCount >= 3) score -= 10;
-    if (continuityPenalty >= 120) score -= 24;
-    if (routeFlowScore < 60) score -= 18;
-    return score;
-  }
-
-  function calcBalanceScore({ monthly, addedDistance, fleetTargetAvg }) {
-    const workedDays = Math.max(Number(monthly.workedDays || 0), 1);
-    const projectedAvg = (Number(monthly.totalDistance || 0) + Number(addedDistance || 0)) / workedDays;
-    const delta = Number(fleetTargetAvg || 0) - projectedAvg;
-    return delta * 1.2;
-  }
-
-  function calcHomeTimeScore({ clusterArea, homeArea, zone, isLastRun, isDefaultLastHourCluster }) {
-    const affinity = getAreaAffinityScore(clusterArea, homeArea);
-    const direction = getDirectionAffinityScore(clusterArea, homeArea);
-    const strict = getStrictHomeCompatibilityScore(clusterArea, homeArea);
-
-    let score = affinity * 0.9 + Math.max(direction, 0) * 0.9 + strict * 1.1;
-
-    if (direction < 0) score += direction * 1.6;
-    if (isHardReverseForHome(clusterArea, homeArea)) {
-      score -= zone === "far" ? 140 : 90;
-    }
-
-    if (isLastRun) return score * 1.85;
-    if (isDefaultLastHourCluster) return score * 1.45;
-    return score * 0.38;
-  }
-
-  function shouldKeepClusterTogether({ zone, routeFlowScore, continuityPenalty, sameHourLoad, idleVehicleCount, clusterCount }) {
-    if (clusterCount <= 1) return false;
-    if (sameHourLoad <= 0) return false;
-    if (zone === "far") return false;
-    if (idleVehicleCount <= 0) return true;
-    if (zone === "near" && routeFlowScore >= 84 && continuityPenalty <= 48) return true;
-    if (zone === "middle" && routeFlowScore >= 92 && continuityPenalty <= 40 && clusterCount <= 2) return true;
-    return false;
-  }
-
-  const fleetMonthlyRows = workingVehicles.map(vehicle => monthlyMap.get(Number(vehicle.id)) || {
-    totalDistance: 0,
-    workedDays: 1,
-    avgDistance: 0
-  });
-  const fleetTargetAvg =
-    fleetMonthlyRows.length
-      ? fleetMonthlyRows.reduce((sum, row) => sum + Number(row.avgDistance || 0), 0) / fleetMonthlyRows.length
-      : 0;
 
   for (const cluster of clusters) {
     const dateStr = els.actualDate?.value || todayStr();
     const isLastRun = isLastClusterOfTheDay(cluster, dateStr);
     const defaultLastHour = getDefaultLastHour(dateStr);
     const isDefaultLastHourCluster = Number(cluster.hour) === Number(defaultLastHour);
-    const zone = getDistanceZone(cluster.totalDistance / Math.max(cluster.count, 1));
 
     const candidateScores = workingVehicles
       .map(vehicle => {
@@ -4923,101 +4828,113 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           avgDistance: 0
         };
 
-        const clusterArea = normalizeAreaLabel(cluster.area);
+        const normalizedClusterArea = normalizeAreaLabel(cluster.area);
         const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-        const state = getVehicleState(vehicle.id);
-        const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
-        const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-        const routeFlowScore = getRouteFlowVehicleScore(clusterArea, existingHourAreas, homeArea);
-        const continuityPenalty = getRouteContinuityPenalty(clusterArea, existingHourAreas, homeArea);
-        const directionAffinity = getDirectionAffinityScore(clusterArea, homeArea);
-        const strictHomeScore = getStrictHomeCompatibilityScore(clusterArea, homeArea);
-        const hardReverse = isHardReverseForHome(clusterArea, homeArea);
+
+        const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
+        const projectedAvg =
+          (Number(monthly.totalDistance || 0) + Number(cluster.totalDistance || 0)) /
+          projectedWorkedDays;
+
+        let score = 1000;
+
         const vehicleAreaMatch = getVehicleAreaMatchScore(vehicle, cluster.area);
+        const directionAffinity = getDirectionAffinityScore(normalizedClusterArea, homeArea);
+        const strictHomeScore = getStrictHomeCompatibilityScore(normalizedClusterArea, homeArea);
+        const hardReverse = isHardReverseForHome(normalizedClusterArea, homeArea);
+        const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
+        const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
+        const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
 
-        let totalScore = 0;
+        // 方面一致 + 方向クラスタ + 帰宅適合 + 経由ルート相性を優先
+        score -= vehicleAreaMatch;
+        score -= routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 2.05 : 1.35);
+        score += routeContinuityPenalty * (isLastRun || isDefaultLastHourCluster ? 1.75 : 1.1);
+        score -= Math.max(directionAffinity, 0) * (isLastRun || isDefaultLastHourCluster ? 2.2 : 0.45);
+        score -= strictHomeScore * (isLastRun || isDefaultLastHourCluster ? 2.8 : 0.55);
 
-        totalScore += calcRotationScore({
-          sameHourLoad,
-          idleVehicleCount,
-          routeFlowScore,
-          continuityPenalty,
-          zone,
-          state,
-          addedDistance: cluster.totalDistance
-        });
+        // 同時間帯の過積載を避ける
+        score += sameHourLoad * 35;
 
-        totalScore += calcRideShareScore({
-          sameHourLoad,
-          routeFlowScore,
-          continuityPenalty,
-          zone,
-          clusterCount: cluster.count,
+        // 今日の割当数の偏りを抑える
+        score += getVehicleState(vehicle.id).totalAssigned * 8;
+
+        // 今日の車両負荷が高すぎる車両を少し避ける
+        score += getVehicleState(vehicle.id).totalDistance * 0.18;
+
+        // 月間平均距離が高い車両に積みすぎない
+        score += projectedAvg * 0.55;
+
+        // 通常便は、空き車両があれば分散優先で松戸駅へ早く戻れるようにする
+        if (!(isLastRun || isDefaultLastHourCluster)) {
+          const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
+          const preferSpread = shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad);
+
+          if (sameHourLoad === 0) {
+            score -= idleVehicleCount > 1 ? 140 : 90;
+          } else if (preferSpread && idleVehicleCount > 0) {
+            score += 150 + sameHourLoad * 36;
+          } else if (!preferSpread) {
+            score -= Math.min(routeFlowScore, 120) * 0.35;
+            score += routeContinuityPenalty * 0.2;
+          }
+
+          score += getNormalRunReturnPenalty(vehicle.id, cluster.hour, cluster.totalDistance, sameHourLoad);
+        }
+
+        // ラスト便で逆方向は強く除外
+        if ((isLastRun || isDefaultLastHourCluster) && hardReverse) {
+          score += isLastRun ? 560 : 320;
+        }
+
+        // ラスト便時間帯では適合の弱い車両を避ける
+        if ((isLastRun || isDefaultLastHourCluster) && strictHomeScore < 50) {
+          score += 110;
+        }
+
+        // 同一ルートの折れ返しが大きい組み合わせを避ける
+        if (routeContinuityPenalty >= 170) {
+          score += isLastRun || isDefaultLastHourCluster ? 180 : 95;
+        } else if (routeContinuityPenalty >= 95) {
+          score += isLastRun || isDefaultLastHourCluster ? 90 : 42;
+        }
+
+        // 手動ラスト便車両は適合している時だけ優遇
+        if (manualLastVehicleId && (isLastRun || isDefaultLastHourCluster)) {
+          if (Number(vehicle.id) === Number(manualLastVehicleId) && !hardReverse && strictHomeScore >= 50) score -= 180;
+          else if (Number(vehicle.id) === Number(manualLastVehicleId) && hardReverse) score += 220;
+          else score += 35;
+        }
+
+        // ラスト便は帰宅方面の近接スコアを強く優遇
+        const homePriorityWeight = getLastTripHomePriorityWeight(
+          normalizedClusterArea,
           homeArea,
-          clusterArea
-        });
-
-        totalScore += calcBalanceScore({
-          monthly,
-          addedDistance: cluster.totalDistance,
-          fleetTargetAvg
-        });
-
-        totalScore += calcHomeTimeScore({
-          clusterArea,
-          homeArea,
-          zone,
           isLastRun,
           isDefaultLastHourCluster
-        });
+        );
+        score -= homePriorityWeight;
 
-        totalScore += vehicleAreaMatch * 0.72;
-        totalScore += routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 0.9 : 0.42);
-        totalScore -= continuityPenalty * (isLastRun || isDefaultLastHourCluster ? 0.88 : 0.52);
-        totalScore += Math.max(directionAffinity, 0) * (isLastRun || isDefaultLastHourCluster ? 0.75 : 0.18);
-        totalScore += strictHomeScore * (isLastRun || isDefaultLastHourCluster ? 1.0 : 0.24);
-
-        totalScore -= sameHourLoad * (zone === "near" ? 10 : zone === "middle" ? 18 : 28);
-        totalScore -= state.totalAssigned * 2.6;
-        totalScore -= state.totalDistance * 0.06;
-
-        if (!(isLastRun || isDefaultLastHourCluster) && hardReverse) {
-          totalScore -= zone === "far" ? 64 : 20;
+        if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
+          score += isLastRun ? 80 : 28;
         }
 
-        if ((isLastRun || isDefaultLastHourCluster) && hardReverse) {
-          totalScore -= zone === "far" ? 180 : 120;
-        }
-
-        if (manualLastVehicleId && (isLastRun || isDefaultLastHourCluster)) {
-          if (Number(vehicle.id) === Number(manualLastVehicleId) && !hardReverse && strictHomeScore >= 50) totalScore += 46;
-          else if (Number(vehicle.id) === Number(manualLastVehicleId) && hardReverse) totalScore -= 90;
-        }
-
-        return {
-          vehicle,
-          totalScore,
-          routeFlowScore,
-          continuityPenalty,
-          sameHourLoad,
-          idleVehicleCount
-        };
+        return { vehicle, score };
       })
       .filter(Boolean)
-      .sort((a, b) => b.totalScore - a.totalScore);
+      .sort((a, b) => a.score - b.score);
 
     if (candidateScores.length) {
-      const best = candidateScores[0];
-      const bestVehicle = best.vehicle;
+      const bestVehicle = candidateScores[0].vehicle;
       const sortedItems = sortItemsByNearestRoute(cluster.items);
-      const keepTogether = shouldKeepClusterTogether({
-        zone,
-        routeFlowScore: best.routeFlowScore,
-        continuityPenalty: best.continuityPenalty,
-        sameHourLoad: best.sameHourLoad,
-        idleVehicleCount: best.idleVehicleCount,
-        clusterCount: cluster.count
-      });
+      const bestHourLoad = getHourLoad(bestVehicle.id, cluster.hour);
+      const bestExistingAreas = getHourAreas(bestVehicle.id, cluster.hour);
+      const bestRouteFlowScore = getRouteFlowVehicleScore(normalizeAreaLabel(cluster.area), bestExistingAreas, normalizeAreaLabel(bestVehicle?.home_area || ""));
+      const bestRouteContinuityPenalty = getRouteContinuityPenalty(normalizeAreaLabel(cluster.area), bestExistingAreas, normalizeAreaLabel(bestVehicle?.home_area || ""));
+      const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
+      const keepTogether = (isLastRun || isDefaultLastHourCluster)
+        ? true
+        : !shouldPreferSpread(cluster, bestRouteFlowScore, bestRouteContinuityPenalty, bestHourLoad) || idleVehicleCount <= 1;
 
       if (keepTogether) {
         sortedItems.forEach(item => {
@@ -5044,12 +4961,11 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     const splitItems = sortItemsByNearestRoute(cluster.items);
 
     for (const item of splitItems) {
-      const itemZone = getDistanceZone(Number(item.distance_km || 0));
-
       const perItemCandidates = workingVehicles
         .map(vehicle => {
           const seatCapacity = Number(vehicle.seat_capacity || 4);
           const sameHourLoad = getHourLoad(vehicle.id, cluster.hour);
+
           if (sameHourLoad >= seatCapacity) return null;
 
           const monthly = monthlyMap.get(Number(vehicle.id)) || {
@@ -5058,78 +4974,74 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
             avgDistance: 0
           };
 
-          const clusterArea = normalizeAreaLabel(cluster.area);
+          const normalizedClusterArea = normalizeAreaLabel(cluster.area);
           const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-          const state = getVehicleState(vehicle.id);
           const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
-          const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-          const routeFlowScore = getRouteFlowVehicleScore(clusterArea, existingHourAreas, homeArea);
-          const continuityPenalty = getRouteContinuityPenalty(clusterArea, existingHourAreas, homeArea);
-          const directionAffinity = getDirectionAffinityScore(clusterArea, homeArea);
-          const strictHomeScore = getStrictHomeCompatibilityScore(clusterArea, homeArea);
-          const hardReverse = isHardReverseForHome(clusterArea, homeArea);
-          const vehicleAreaMatch = getVehicleAreaMatchScore(vehicle, cluster.area);
+          const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
+          const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
 
-          let totalScore = 0;
-          totalScore += calcRotationScore({
-            sameHourLoad,
-            idleVehicleCount,
-            routeFlowScore,
-            continuityPenalty,
-            zone: itemZone,
-            state,
-            addedDistance: Number(item.distance_km || 0)
-          });
+          const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
+          const projectedAvg =
+            (Number(monthly.totalDistance || 0) + Number(item.distance_km || 0)) /
+            projectedWorkedDays;
 
-          totalScore += calcRideShareScore({
-            sameHourLoad,
-            routeFlowScore,
-            continuityPenalty,
-            zone: itemZone,
-            clusterCount: 1,
+          let score = 1000;
+
+          // 方面一致 + 経由ルート相性を優先
+          score -= getVehicleAreaMatchScore(vehicle, cluster.area);
+          score -= routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 1.85 : 1.25);
+          score += routeContinuityPenalty * (isLastRun || isDefaultLastHourCluster ? 1.55 : 1.0);
+
+          // 同時間帯負荷
+          score += sameHourLoad * 35;
+
+          // 今日の割当数偏り
+          score += getVehicleState(vehicle.id).totalAssigned * 8;
+
+          // 今日の累積ルート距離偏り
+          score += getVehicleState(vehicle.id).totalDistance * 0.18;
+
+          // 月間平均の高い車両へ積みすぎない
+          score += projectedAvg * 0.55;
+
+          // 通常便は空いている車両を使い、戻り時間が短くなるよう分散を優先
+          if (!(isLastRun || isDefaultLastHourCluster)) {
+            const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
+            const preferSpread = sameHourLoad > 0 && !(routeFlowScore >= 85 && routeContinuityPenalty <= 45);
+
+            if (sameHourLoad === 0) {
+              score -= idleVehicleCount > 1 ? 130 : 82;
+            } else if (preferSpread && idleVehicleCount > 0) {
+              score += 125 + sameHourLoad * 28;
+            } else {
+              score -= Math.min(routeFlowScore, 120) * 0.22;
+            }
+
+            score += getNormalRunReturnPenalty(vehicle.id, cluster.hour, Number(item.distance_km || 0), sameHourLoad);
+          }
+
+          const homePriorityWeight = getLastTripHomePriorityWeight(
+            normalizedClusterArea,
             homeArea,
-            clusterArea
-          });
-
-          totalScore += calcBalanceScore({
-            monthly,
-            addedDistance: Number(item.distance_km || 0),
-            fleetTargetAvg
-          });
-
-          totalScore += calcHomeTimeScore({
-            clusterArea,
-            homeArea,
-            zone: itemZone,
             isLastRun,
             isDefaultLastHourCluster
-          });
+          );
+          score -= homePriorityWeight;
 
-          totalScore += vehicleAreaMatch * 0.76;
-          totalScore += routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 0.84 : 0.38);
-          totalScore -= continuityPenalty * (isLastRun || isDefaultLastHourCluster ? 0.82 : 0.48);
-          totalScore += Math.max(directionAffinity, 0) * (isLastRun || isDefaultLastHourCluster ? 0.7 : 0.16);
-          totalScore += strictHomeScore * (isLastRun || isDefaultLastHourCluster ? 0.96 : 0.22);
-
-          totalScore -= sameHourLoad * (itemZone === "near" ? 9 : itemZone === "middle" ? 16 : 26);
-          totalScore -= state.totalAssigned * 2.4;
-          totalScore -= state.totalDistance * 0.055;
-
-          if (!(isLastRun || isDefaultLastHourCluster) && hardReverse) {
-            totalScore -= itemZone === "far" ? 70 : 24;
+          if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
+            score += isLastRun ? 36 : 10;
           }
 
-          if ((isLastRun || isDefaultLastHourCluster) && hardReverse) {
-            totalScore -= itemZone === "far" ? 190 : 130;
+          if (routeContinuityPenalty >= 170) {
+            score += isLastRun || isDefaultLastHourCluster ? 160 : 80;
+          } else if (routeContinuityPenalty >= 95) {
+            score += isLastRun || isDefaultLastHourCluster ? 72 : 30;
           }
 
-          return {
-            vehicle,
-            totalScore
-          };
+          return { vehicle, score };
         })
         .filter(Boolean)
-        .sort((a, b) => b.totalScore - a.totalScore);
+        .sort((a, b) => a.score - b.score);
 
       if (!perItemCandidates.length) continue;
 
@@ -5214,6 +5126,138 @@ async function runAutoDispatch() {
   renderDailyDispatchResult();
 }
 
+
+function getDistanceZoneInfo(distanceKm) {
+  const km = Number(distanceKm || 0);
+  if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
+  if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
+  return { key: "long", label: "長距離", speedKmh: 35 };
+}
+
+function getExpectedDepartureDelayMinutes(baseHour) {
+  const hour = Number(baseHour || 0);
+  if (hour <= 2) return 20;
+  if (hour === 3) return 18;
+  if (hour === 4) return 12;
+  if (hour >= 5) return 8;
+  return 20;
+}
+
+function estimateTravelMinutesByDistance(distanceKm) {
+  const zone = getDistanceZoneInfo(distanceKm);
+  const km = Math.max(0, Number(distanceKm || 0));
+  return km > 0 ? (km / zone.speedKmh) * 60 : 0;
+}
+
+function formatClockTimeFromMinutes(totalMinutes) {
+  const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
+  const h = Math.floor(safe / 60) % 24;
+  const m = safe % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function calcVehicleRotationForecast(vehicle, orderedRows) {
+  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+  if (!rows.length) {
+    return {
+      routeDistanceKm: 0,
+      returnDistanceKm: 0,
+      zoneLabel: "-",
+      predictedDepartureTime: "-",
+      predictedReturnTime: "-",
+      predictedReadyTime: "-",
+      predictedReturnMinutes: 0,
+      extraSharedDelayMinutes: 0,
+      stopCount: 0
+    };
+  }
+
+  const firstHour = rows.reduce((min, row) => {
+    const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
+    return Number.isFinite(val) ? Math.min(min, val) : min;
+  }, 99);
+
+  const baseHour = firstHour === 99 ? 0 : firstHour;
+  const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
+  const lastRow = rows[rows.length - 1] || {};
+  const returnDistanceKm = Number(lastRow.distance_km || 0);
+  const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm));
+
+  const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
+  const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm);
+  const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm);
+  const dropoffMinutes = rows.length * 1;
+
+  const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
+  const predictedReturnAbs = predictedDepartureAbs + outboundMinutes + dropoffMinutes + returnMinutes;
+  const predictedReadyAbs = predictedReturnAbs + 1;
+
+  let extraSharedDelayMinutes = 0;
+  if (rows.length >= 2) {
+    const firstOnly = [rows[0]];
+    const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
+    const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
+    const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm);
+    const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm);
+    const singleDropoff = 1;
+    const singlePredictedReturnAbs = predictedDepartureAbs + singleOutbound + singleDropoff + singleReturn;
+    extraSharedDelayMinutes = Math.max(0, predictedReturnAbs - singlePredictedReturnAbs);
+  }
+
+  return {
+    routeDistanceKm,
+    returnDistanceKm,
+    zoneLabel: primaryZone.label,
+    predictedDepartureTime: formatClockTimeFromMinutes(predictedDepartureAbs),
+    predictedReturnTime: formatClockTimeFromMinutes(predictedReturnAbs),
+    predictedReadyTime: formatClockTimeFromMinutes(predictedReadyAbs),
+    predictedReturnMinutes: Math.round(predictedReturnAbs - predictedDepartureAbs),
+    extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
+    stopCount: rows.length
+  };
+}
+
+function buildRotationTimelineHtml(vehicles, activeItems) {
+  const timeline = vehicles
+    .map(vehicle => {
+      const rows = moveManualLastItemsToEnd(
+        sortItemsByNearestRoute(
+          activeItems
+            .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+            .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
+        )
+      );
+      const forecast = calcVehicleRotationForecast(vehicle, rows);
+      return {
+        name: vehicle.driver_name || vehicle.plate_number || "-",
+        readyTime: forecast.predictedReadyTime,
+        returnTime: forecast.predictedReturnTime,
+        rotationMinutes: forecast.predictedReturnMinutes,
+        hasRows: rows.length > 0
+      };
+    })
+    .filter(x => x.hasRows)
+    .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
+
+  if (!timeline.length) return "";
+
+  return `
+    <div class="panel-card" style="margin-bottom:16px;">
+      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        ${timeline.map(item => `
+          <div class="chip" style="padding:8px 12px;">
+            <strong>${escapeHtml(item.name)}</strong>
+            / 戻り ${escapeHtml(item.returnTime)}
+            / 次便 ${escapeHtml(item.readyTime)}
+            / 回転 ${item.rotationMinutes}分
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
 
@@ -5228,6 +5272,7 @@ function renderDailyDispatchResult() {
   );
 
   try {
+    const timelineHtml = buildRotationTimelineHtml(vehicles, activeItems);
     const cardsHtml = vehicles
       .map(vehicle => {
         const rows = activeItems
@@ -5246,6 +5291,7 @@ function renderDailyDispatchResult() {
 
         const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
         const totalDistance = calculateRouteDistance(orderedRows);
+        const forecast = calcVehicleRotationForecast(vehicle, orderedRows);
 
         const body = orderedRows.length
           ? orderedRows
@@ -5299,15 +5345,26 @@ function renderDailyDispatchResult() {
               <div class="vehicle-result-badges">
                 <span class="metric-badge">人数 ${rows.length}</span>
                 <span class="metric-badge">距離 ${totalDistance.toFixed(1)}km</span>
+                ${orderedRows.length ? `<span class="metric-badge">⟳戻り ${escapeHtml(forecast.predictedReturnTime)}</span>` : ""}
               </div>
             </div>
             <div class="vehicle-result-body">${body}</div>
+            ${orderedRows.length ? `
+              <div class="dispatch-meta" style="margin-top:10px; font-size:12px; color:#9aa3b2; line-height:1.8;">
+                予想出発 ${escapeHtml(forecast.predictedDepartureTime)}
+                / 予想戻り ${escapeHtml(forecast.predictedReturnTime)}
+                / 次便可能 ${escapeHtml(forecast.predictedReadyTime)}
+                / 回転時間 ${forecast.predictedReturnMinutes}分
+                / ゾーン ${escapeHtml(forecast.zoneLabel)}
+                ${forecast.extraSharedDelayMinutes > 0 ? `/ 同乗追加遅延 ${forecast.extraSharedDelayMinutes}分` : ""}
+              </div>
+            ` : ""}
           </div>
         `;
       })
       .join("");
 
-    els.dailyDispatchResult.innerHTML = cardsHtml;
+    els.dailyDispatchResult.innerHTML = timelineHtml + cardsHtml;
 
     els.dailyDispatchResult.querySelectorAll(".dispatch-vehicle-select").forEach(select => {
       select.addEventListener("change", async () => {
