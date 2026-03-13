@@ -323,10 +323,11 @@ function isValidLatLng(lat, lng) {
   return true;
 }
 
-const FREE_GEOCODE_CACHE_KEY = "themis_free_geocode_cache_v1";
+const GOOGLE_GEOCODE_CACHE_KEY = "themis_google_geocode_cache_v1";
 let castGeocodeTimer = null;
 let lastCastGeocodeKey = "";
 let castGeocodeSeq = 0;
+let googleMapsApiPromise = null;
 
 function normalizeGeocodeAddressKey(address) {
   return String(address || "")
@@ -334,7 +335,6 @@ function normalizeGeocodeAddressKey(address) {
     .replace(/\s+/g, " ")
     .toLowerCase();
 }
-
 
 function setCastGeoStatus(state = "idle", message = "") {
   if (!els.castGeoStatus) return;
@@ -360,7 +360,7 @@ function scheduleCastAutoGeocode() {
     const result = await fillCastLatLngFromAddress({ silent: true, force: currentKey !== lastCastGeocodeKey });
     if (runSeq !== castGeocodeSeq) return;
     if (result) {
-      const sourceText = result.source === "cache" ? "キャッシュから取得" : "Google / ジオコーディング取得済";
+      const sourceText = result.source === "cache" ? "キャッシュから取得" : result.source === "existing" ? "入力済み座標" : "Google Geocoding";
       setCastGeoStatus("success", `✔ 座標取得済 (${sourceText})`);
     } else {
       setCastGeoStatus("error", "座標を自動取得できませんでした。座標貼り付けで手動入力してください");
@@ -368,26 +368,65 @@ function scheduleCastAutoGeocode() {
   }, 650);
 }
 
-function loadFreeGeocodeCache() {
+function loadGeocodeCache() {
   try {
-    return JSON.parse(localStorage.getItem(FREE_GEOCODE_CACHE_KEY) || "{}");
+    return JSON.parse(localStorage.getItem(GOOGLE_GEOCODE_CACHE_KEY) || "{}");
   } catch (_) {
     return {};
   }
 }
 
-function saveFreeGeocodeCache(cache) {
+function saveGeocodeCache(cache) {
   try {
-    localStorage.setItem(FREE_GEOCODE_CACHE_KEY, JSON.stringify(cache || {}));
+    localStorage.setItem(GOOGLE_GEOCODE_CACHE_KEY, JSON.stringify(cache || {}));
   } catch (_) {}
 }
 
-async function geocodeAddressFree(address) {
+function loadGoogleMapsApi() {
+  if (window.google?.maps?.Geocoder) return Promise.resolve(window.google.maps);
+  if (googleMapsApiPromise) return googleMapsApiPromise;
+
+  const apiKey = String(window.APP_CONFIG?.GOOGLE_MAPS_API_KEY || "").trim();
+  if (!apiKey) {
+    return Promise.reject(new Error("GOOGLE_MAPS_API_KEY が未設定です"));
+  }
+
+  googleMapsApiPromise = new Promise((resolve, reject) => {
+    const existing = document.getElementById("googleMapsApiScript");
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.google.maps), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Google Maps API の読み込みに失敗しました")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = "googleMapsApiScript";
+    script.async = true;
+    script.defer = true;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&language=ja&region=JP&loading=async`;
+    script.onload = () => {
+      if (window.google?.maps?.Geocoder) {
+        resolve(window.google.maps);
+      } else {
+        reject(new Error("Google Maps API は読み込まれましたが Geocoder が使えません"));
+      }
+    };
+    script.onerror = () => reject(new Error("Google Maps API の読み込みに失敗しました"));
+    document.head.appendChild(script);
+  }).catch((error) => {
+    googleMapsApiPromise = null;
+    throw error;
+  });
+
+  return googleMapsApiPromise;
+}
+
+async function geocodeAddressGoogle(address) {
   const normalizedAddress = String(address || "").trim();
   if (!normalizedAddress) return null;
 
   const key = normalizeGeocodeAddressKey(normalizedAddress);
-  const cache = loadFreeGeocodeCache();
+  const cache = loadGeocodeCache();
   const cached = cache[key];
   if (cached && isValidLatLng(Number(cached.lat), Number(cached.lng))) {
     return {
@@ -397,30 +436,42 @@ async function geocodeAddressFree(address) {
     };
   }
 
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=jp&q=${encodeURIComponent(normalizedAddress)}`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "Accept": "application/json"
-    }
+  await loadGoogleMapsApi();
+
+  const result = await new Promise((resolve, reject) => {
+    const geocoder = new google.maps.Geocoder();
+    geocoder.geocode({
+      address: normalizedAddress,
+      region: "JP",
+      componentRestrictions: { country: "JP" }
+    }, (results, status) => {
+      if (status === "OK") {
+        const first = Array.isArray(results) ? results[0] : null;
+        if (!first?.geometry?.location) {
+          resolve(null);
+          return;
+        }
+        const loc = first.geometry.location;
+        resolve({
+          lat: Number(loc.lat()),
+          lng: Number(loc.lng()),
+          source: "api"
+        });
+        return;
+      }
+      if (status === "ZERO_RESULTS") {
+        resolve(null);
+        return;
+      }
+      reject(new Error(`Google geocode error: ${status}`));
+    });
   });
 
-  if (!res.ok) {
-    throw new Error(`住所検索エラー: ${res.status}`);
-  }
+  if (!result || !isValidLatLng(result.lat, result.lng)) return null;
 
-  const rows = await res.json();
-  const first = Array.isArray(rows) ? rows[0] : null;
-  if (!first) return null;
-
-  const lat = Number(first.lat);
-  const lng = Number(first.lon);
-  if (!isValidLatLng(lat, lng)) return null;
-
-  cache[key] = { lat, lng, ts: Date.now() };
-  saveFreeGeocodeCache(cache);
-
-  return { lat, lng, source: "api" };
+  cache[key] = { lat: result.lat, lng: result.lng, ts: Date.now() };
+  saveGeocodeCache(cache);
+  return result;
 }
 
 async function fillCastLatLngFromAddress(options = {}) {
@@ -440,7 +491,7 @@ async function fillCastLatLngFromAddress(options = {}) {
   }
 
   try {
-    const result = await geocodeAddressFree(address);
+    const result = await geocodeAddressGoogle(address);
     if (!result) {
       if (!silent) alert("住所から座標を取得できませんでした。手動入力してください");
       return null;
@@ -458,15 +509,14 @@ async function fillCastLatLngFromAddress(options = {}) {
 
     lastCastGeocodeKey = currentKey;
     if (!silent) {
-      const label = result.source === "cache" ? "キャッシュ" : "無料ジオコーディング";
+      const label = result.source === "cache" ? "キャッシュ" : "Google Geocoding";
       alert(`${label}で座標を取得しました`);
     }
     return result;
   } catch (error) {
     console.error("fillCastLatLngFromAddress error:", error);
-    if (!silent) alert("住所から座標取得できませんでした。時間をおいて再試行するか、手動で入力してください");
+    if (!silent) alert(`住所から座標取得できませんでした。${error.message || "時間をおいて再試行するか、手動で入力してください"}`);
     return null;
-  } finally {
   }
 }
 
