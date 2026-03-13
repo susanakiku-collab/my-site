@@ -9,8 +9,6 @@ window.APP_CONFIG = {
   ORIGIN_LAT: 35.784315,
   ORIGIN_LNG: 139.900215,
 
-  // Google Geocoding APIキー
-  // 本番ではHTTPリファラ制限を必ず設定してください
   GOOGLE_MAPS_API_KEY: "AIzaSyCHp8CAK-Z1OXWpDzill27MKLzRSNoZ5hI"
 };
  
