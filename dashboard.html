@@ -12,7 +12,11 @@
     <header class="app-header">
       <div class="brand-wrap">
         <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
-        <p class="app-subtitle">緯度経度対応 / 方面自動判定 / AI配車 / ルート確認</p>
+        <p class="app-subtitle">AI Route & Dispatch System</p>
+        <div class="app-version">
+        THEMIS AI Dispatch v3.8 Beta<br>
+        Build 2026
+        </div>
       </div>
     </header>
 
@@ -57,22 +61,29 @@
           </section>
 
           <section class="panel-card">
-            <h2>運用メモ</h2>
+            <h2>システム概要</h2>
             <ul class="memo-list">
-              <li>キャストには住所・緯度経度・方面を保存</li>
-              <li>完了した送りは次回の自動配車から除外</li>
-              <li>予定表は時間別・方面別で整理表示</li>
-              <li>ルートボタンで松戸駅起点のGoogleマップを開く</li>
-              <li>自動配車後に車両変更も可能</li>
+              <li>THEMISを起点とした送迎配車AIシステム</li>
+              <li>キャスト住所から緯度経度を取得して距離計算</li>
+              <li>住所から方面を自動判定（手動修正可）</li>
+              <li>空き車両がある場合は分散優先</li>
+              <li>ルートが自然につながる場合のみ同乗</li>
+              <li>ラスト便はドライバー帰宅方向を優先</li>
+              <li>GoogleMapでルート確認可能</li>
             </ul>
           </section>
 
           <section class="panel-card">
-            <h2>補足</h2>
-            <p class="soft-text">
-              緯度経度は住所から自動取得し、方面判定や距離推定に利用します。<br />
-              実際の送りで「完了」にしたキャストは、配車結果から外れます。
-            </p>
+            <h2>システム仕様</h2>
+            <ul class="memo-list">
+              <li>住所入力 → Enterで座標取得</li>
+              <li>同一住所はジオコードキャッシュ</li>
+              <li>距離はTHEMIS起点で自動計算</li>
+              <li>車両距離バランスAIを使用</li>
+              <li>完了キャストは次回配車から除外</li>
+              <li>配車後の車両変更可能</li>
+              <li>CSV / Excel出力対応</li>
+            </ul>
           </section>
         </div>
       </section>
@@ -131,7 +142,7 @@
 
             <div class="field field-full">
               <label>座標取得状況</label>
-              <div id="castGeoStatus" class="geo-status idle">住所入力でGoogle Geocodingを自動実行 / 未取得時は座標貼り付けから手動反映できます</div>
+              <div id="castGeoStatus" class="geo-status idle">住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます</div>
             </div>
 
             <input id="castLat" type="hidden" />
@@ -547,7 +558,7 @@
 
             <div class="field">
               <label for="originLabelText">起点名</label>
-              <input id="originLabelText" type="text" value="松戸駅" readonly />
+              <input id="originLabelText" type="text" value="THEMIS" readonly />
             </div>
           </div>
 
@@ -583,6 +594,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="config.js"></script>
-  <script src="dashboard.js?v=v3-4-google-merged-v1"></script>
+  <script src="dashboard.js?v=v3-2-ui-tidy-v1"></script>
 </body>
 </html>
