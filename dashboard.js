@@ -392,10 +392,38 @@ function loadGoogleMapsApi() {
   }
 
   googleMapsApiPromise = new Promise((resolve, reject) => {
+    const callbackName = "__themisGoogleMapsInit";
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Google Maps API の読み込みがタイムアウトしました"));
+    }, 15000);
+
+    function cleanup() {
+      window.clearTimeout(timeout);
+      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
+    }
+
+    if (window.google?.maps?.Geocoder) {
+      cleanup();
+      resolve(window.google.maps);
+      return;
+    }
+
     const existing = document.getElementById("googleMapsApiScript");
+    window[callbackName] = () => {
+      cleanup();
+      if (window.google?.maps?.Geocoder) {
+        resolve(window.google.maps);
+      } else {
+        reject(new Error("Google Maps API は読み込まれましたが Geocoder が使えません"));
+      }
+    };
+
     if (existing) {
-      existing.addEventListener("load", () => resolve(window.google.maps), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Google Maps API の読み込みに失敗しました")), { once: true });
+      existing.addEventListener("error", () => {
+        cleanup();
+        reject(new Error("Google Maps API の読み込みに失敗しました"));
+      }, { once: true });
       return;
     }
 
@@ -403,15 +431,11 @@ function loadGoogleMapsApi() {
     script.id = "googleMapsApiScript";
     script.async = true;
     script.defer = true;
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&language=ja&region=JP&loading=async`;
-    script.onload = () => {
-      if (window.google?.maps?.Geocoder) {
-        resolve(window.google.maps);
-      } else {
-        reject(new Error("Google Maps API は読み込まれましたが Geocoder が使えません"));
-      }
+    script.onerror = () => {
+      cleanup();
+      reject(new Error("Google Maps API の読み込みに失敗しました"));
     };
-    script.onerror = () => reject(new Error("Google Maps API の読み込みに失敗しました"));
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&language=ja&region=JP&callback=${callbackName}`;
     document.head.appendChild(script);
   }).catch((error) => {
     googleMapsApiPromise = null;
