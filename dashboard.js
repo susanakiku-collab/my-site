@@ -4787,6 +4787,27 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     }
   }
 
+  function getIdleVehicleCountForHour(hour) {
+    return workingVehicles.filter(vehicle => getHourLoad(vehicle.id, hour) === 0).length;
+  }
+
+  function shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) {
+    if (cluster.count <= 1) return true;
+    if (sameHourLoad <= 0) return true;
+    const strongRouteLink = routeFlowScore >= 90 && routeContinuityPenalty <= 45;
+    const reasonableRideShare = routeFlowScore >= 70 && routeContinuityPenalty <= 60;
+    if (strongRouteLink) return false;
+    if (cluster.count <= 2 && reasonableRideShare) return false;
+    return true;
+  }
+
+  function getNormalRunReturnPenalty(vehicleId, hour, addedDistance, sameHourLoad) {
+    const state = getVehicleState(vehicleId);
+    const projectedDistance = Number(state.totalDistance || 0) + Number(addedDistance || 0);
+    const projectedLoad = Number(state.totalAssigned || 0) + Number(sameHourLoad || 0);
+    return projectedDistance * 0.22 + projectedLoad * 7;
+  }
+
   for (const cluster of clusters) {
     const dateStr = els.actualDate?.value || todayStr();
     const isLastRun = isLastClusterOfTheDay(cluster, dateStr);
@@ -4844,6 +4865,23 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         // 月間平均距離が高い車両に積みすぎない
         score += projectedAvg * 0.55;
 
+        // 通常便は、空き車両があれば分散優先で松戸駅へ早く戻れるようにする
+        if (!(isLastRun || isDefaultLastHourCluster)) {
+          const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
+          const preferSpread = shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad);
+
+          if (sameHourLoad === 0) {
+            score -= idleVehicleCount > 1 ? 140 : 90;
+          } else if (preferSpread && idleVehicleCount > 0) {
+            score += 150 + sameHourLoad * 36;
+          } else if (!preferSpread) {
+            score -= Math.min(routeFlowScore, 120) * 0.35;
+            score += routeContinuityPenalty * 0.2;
+          }
+
+          score += getNormalRunReturnPenalty(vehicle.id, cluster.hour, cluster.totalDistance, sameHourLoad);
+        }
+
         // ラスト便で逆方向は強く除外
         if ((isLastRun || isDefaultLastHourCluster) && hardReverse) {
           score += isLastRun ? 560 : 320;
@@ -4889,25 +4927,35 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     if (candidateScores.length) {
       const bestVehicle = candidateScores[0].vehicle;
       const sortedItems = sortItemsByNearestRoute(cluster.items);
+      const bestHourLoad = getHourLoad(bestVehicle.id, cluster.hour);
+      const bestExistingAreas = getHourAreas(bestVehicle.id, cluster.hour);
+      const bestRouteFlowScore = getRouteFlowVehicleScore(normalizeAreaLabel(cluster.area), bestExistingAreas, normalizeAreaLabel(bestVehicle?.home_area || ""));
+      const bestRouteContinuityPenalty = getRouteContinuityPenalty(normalizeAreaLabel(cluster.area), bestExistingAreas, normalizeAreaLabel(bestVehicle?.home_area || ""));
+      const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
+      const keepTogether = (isLastRun || isDefaultLastHourCluster)
+        ? true
+        : !shouldPreferSpread(cluster, bestRouteFlowScore, bestRouteContinuityPenalty, bestHourLoad) || idleVehicleCount <= 1;
 
-      sortedItems.forEach(item => {
-        assignments.push({
-          item_id: item.id,
-          actual_hour: cluster.hour,
-          vehicle_id: bestVehicle.id,
-          driver_name: bestVehicle.driver_name || "",
-          distance_km: Number(item.distance_km || 0)
+      if (keepTogether) {
+        sortedItems.forEach(item => {
+          assignments.push({
+            item_id: item.id,
+            actual_hour: cluster.hour,
+            vehicle_id: bestVehicle.id,
+            driver_name: bestVehicle.driver_name || "",
+            distance_km: Number(item.distance_km || 0)
+          });
         });
-      });
 
-      addHourLoad(
-        bestVehicle.id,
-        cluster.hour,
-        cluster.count,
-        calculateRouteDistance(sortedItems),
-        cluster.area
-      );
-      continue;
+        addHourLoad(
+          bestVehicle.id,
+          cluster.hour,
+          cluster.count,
+          calculateRouteDistance(sortedItems),
+          cluster.area
+        );
+        continue;
+      }
     }
 
     const splitItems = sortItemsByNearestRoute(cluster.items);
@@ -4955,6 +5003,22 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
 
           // 月間平均の高い車両へ積みすぎない
           score += projectedAvg * 0.55;
+
+          // 通常便は空いている車両を使い、戻り時間が短くなるよう分散を優先
+          if (!(isLastRun || isDefaultLastHourCluster)) {
+            const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
+            const preferSpread = sameHourLoad > 0 && !(routeFlowScore >= 85 && routeContinuityPenalty <= 45);
+
+            if (sameHourLoad === 0) {
+              score -= idleVehicleCount > 1 ? 130 : 82;
+            } else if (preferSpread && idleVehicleCount > 0) {
+              score += 125 + sameHourLoad * 28;
+            } else {
+              score -= Math.min(routeFlowScore, 120) * 0.22;
+            }
+
+            score += getNormalRunReturnPenalty(vehicle.id, cluster.hour, Number(item.distance_km || 0), sameHourLoad);
+          }
 
           const homePriorityWeight = getLastTripHomePriorityWeight(
             normalizedClusterArea,
@@ -6189,3 +6253,267 @@ document.addEventListener("DOMContentLoaded", async () => {
     alert("初期化中にエラーが発生しました。Console を確認してください。");
   }
 });
+
+
+/* ===== THEMIS v3.7 配車AI強化版 patch start ===== */
+const THEMIS_V37_LEARN_KEY = "themis_v37_dispatch_learning_v1";
+
+function getThemisV37LearningStore() {
+  try {
+    return JSON.parse(window.localStorage.getItem(THEMIS_V37_LEARN_KEY) || "{}") || {};
+  } catch (e) {
+    console.error(e);
+    return {};
+  }
+}
+
+function saveThemisV37LearningStore(store) {
+  try {
+    window.localStorage.setItem(THEMIS_V37_LEARN_KEY, JSON.stringify(store || {}));
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function normalizeMunicipalityLabel(value) {
+  return String(value || "").trim().replace(/[　\s]+/g, "");
+}
+
+function extractMunicipalityFromAddress(address) {
+  const normalized = normalizeAddressText(address || "");
+  if (!normalized) return "";
+
+  const patterns = [
+    /(東京都[^0-9\-]{1,12}?区)/,
+    /(東京都[^0-9\-]{1,16}?市)/,
+    /((?:北海道|大阪府|京都府|[^都道府県]{2,6}県)[^0-9\-]{1,16}?市)/,
+    /((?:北海道|大阪府|京都府|[^都道府県]{2,6}県)[^0-9\-]{1,16}?郡[^0-9\-]{1,16}町)/,
+    /((?:北海道|大阪府|京都府|[^都道府県]{2,6}県)[^0-9\-]{1,16}?郡[^0-9\-]{1,16}村)/,
+    /((?:北海道|大阪府|京都府|[^都道府県]{2,6}県)[^0-9\-]{1,16}?町)/,
+    /((?:北海道|大阪府|京都府|[^都道府県]{2,6}県)[^0-9\-]{1,16}?村)/
+  ];
+
+  for (const pattern of patterns) {
+    const matched = normalized.match(pattern);
+    if (matched && matched[1]) return normalizeMunicipalityLabel(matched[1]);
+  }
+  return "";
+}
+
+const THEMIS_V37_MUNICIPALITY_AREA_HINTS = [
+  { area: "葛飾方面", keys: ["東京都葛飾区"] },
+  { area: "足立方面", keys: ["東京都足立区"] },
+  { area: "江戸川方面", keys: ["東京都江戸川区"] },
+  { area: "墨田方面", keys: ["東京都墨田区"] },
+  { area: "江東方面", keys: ["東京都江東区"] },
+  { area: "荒川方面", keys: ["東京都荒川区"] },
+  { area: "台東方面", keys: ["東京都台東区"] },
+  { area: "市川方面", keys: ["千葉県市川市"] },
+  { area: "船橋方面", keys: ["千葉県船橋市", "千葉県習志野市"] },
+  { area: "鎌ヶ谷方面", keys: ["千葉県鎌ケ谷市", "千葉県鎌ヶ谷市"] },
+  { area: "我孫子方面", keys: ["千葉県我孫子市"] },
+  { area: "柏方面", keys: ["千葉県柏市"] },
+  { area: "流山方面", keys: ["千葉県流山市"] },
+  { area: "野田方面", keys: ["千葉県野田市"] },
+  { area: "松戸近郊", keys: ["千葉県松戸市"] },
+  { area: "三郷方面", keys: ["埼玉県三郷市"] },
+  { area: "吉川方面", keys: ["埼玉県吉川市"] },
+  { area: "八潮方面", keys: ["埼玉県八潮市"] },
+  { area: "草加方面", keys: ["埼玉県草加市"] },
+  { area: "越谷方面", keys: ["埼玉県越谷市"] },
+  { area: "取手方面", keys: ["茨城県取手市"] },
+  { area: "藤代方面", keys: ["茨城県取手市藤代"] },
+  { area: "守谷方面", keys: ["茨城県守谷市"] },
+  { area: "つくば方面", keys: ["茨城県つくば市"] },
+  { area: "牛久方面", keys: ["茨城県牛久市"] }
+];
+
+function getAreaByMunicipality(address) {
+  const municipality = extractMunicipalityFromAddress(address);
+  if (!municipality) return "";
+  for (const row of THEMIS_V37_MUNICIPALITY_AREA_HINTS) {
+    if (row.keys.some(key => municipality.includes(normalizeMunicipalityLabel(key)) || normalizeMunicipalityLabel(key).includes(municipality))) {
+      return row.area;
+    }
+  }
+  return "";
+}
+
+const _THEMIS_V36_guessArea = guessArea;
+// v3.7 municipality extraction is intentionally disabled.
+// Keep the cleaner pre-v3.7 area labeling/display while preserving other v3.7 logic.
+guessArea = function(lat, lng, address = "") {
+  return _THEMIS_V36_guessArea(lat, lng, address);
+};
+
+function getThemisV37LearnedAreaScore(homeArea, destArea) {
+  const store = getThemisV37LearningStore();
+  const key = `${getCanonicalArea(homeArea) || normalizeAreaLabel(homeArea)}__${getCanonicalArea(destArea) || normalizeAreaLabel(destArea)}`;
+  return Number(store.areaPair?.[key] || 0);
+}
+
+function learnThemisV37FromDoneRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const store = getThemisV37LearningStore();
+  store.areaPair = store.areaPair || {};
+  store.routePair = store.routePair || {};
+
+  const byVehicle = new Map();
+  rows.forEach(row => {
+    const vehicleId = Number(row.vehicle_id || 0);
+    if (!vehicleId) return;
+    if (!byVehicle.has(vehicleId)) byVehicle.set(vehicleId, []);
+    byVehicle.get(vehicleId).push(row);
+
+    const homeArea = normalizeAreaLabel(
+      allVehiclesCache.find(v => Number(v.id) === vehicleId)?.home_area || row.driver_home_area || ""
+    );
+    const destArea = normalizeAreaLabel(row.destination_area || row.cluster_area || "無し");
+    if (homeArea && destArea && homeArea !== "無し" && destArea !== "無し") {
+      const key = `${getCanonicalArea(homeArea) || homeArea}__${getCanonicalArea(destArea) || destArea}`;
+      store.areaPair[key] = Math.min(120, Number(store.areaPair[key] || 0) + 3);
+    }
+  });
+
+  for (const rowsByVehicle of byVehicle.values()) {
+    const ordered = [...rowsByVehicle].sort((a, b) => {
+      const ah = Number(a.actual_hour ?? 0);
+      const bh = Number(b.actual_hour ?? 0);
+      if (ah !== bh) return ah - bh;
+      return Number(a.stop_order || 0) - Number(b.stop_order || 0);
+    });
+    for (let i = 0; i < ordered.length - 1; i += 1) {
+      const a = normalizeAreaLabel(ordered[i].destination_area || "");
+      const b = normalizeAreaLabel(ordered[i + 1].destination_area || "");
+      if (!a || !b || a === "無し" || b === "無し") continue;
+      const key = `${getCanonicalArea(a) || a}__${getCanonicalArea(b) || b}`;
+      store.routePair[key] = Math.min(80, Number(store.routePair[key] || 0) + 2);
+    }
+  }
+
+  saveThemisV37LearningStore(store);
+}
+
+const _THEMIS_V36_confirmDailyToMonthly = confirmDailyToMonthly;
+confirmDailyToMonthly = async function() {
+  const doneRowsBefore = Array.isArray(currentActualsCache)
+    ? currentActualsCache.filter(x => normalizeStatus(x.status) === "done")
+    : [];
+  const result = await _THEMIS_V36_confirmDailyToMonthly.apply(this, arguments);
+  try {
+    learnThemisV37FromDoneRows(doneRowsBefore);
+  } catch (e) {
+    console.error(e);
+  }
+  return result;
+};
+
+const _THEMIS_V36_getLastTripHomePriorityWeight = getLastTripHomePriorityWeight;
+getLastTripHomePriorityWeight = function(clusterArea, homeArea, isLastRun, isDefaultLastHourCluster) {
+  let weight = _THEMIS_V36_getLastTripHomePriorityWeight(clusterArea, homeArea, isLastRun, isDefaultLastHourCluster);
+  const learned = getThemisV37LearnedAreaScore(homeArea, clusterArea);
+  const strict = getStrictHomeCompatibilityScore(clusterArea, homeArea);
+  const direction = getDirectionAffinityScore(clusterArea, homeArea);
+
+  let returnTimeScore = 0;
+  if (strict >= 78) returnTimeScore += 42;
+  else if (strict >= 52) returnTimeScore += 22;
+  if (direction >= 72) returnTimeScore += 18;
+  else if (direction >= 28) returnTimeScore += 8;
+  if (isHardReverseForHome(clusterArea, homeArea)) returnTimeScore -= (isLastRun ? 120 : 50);
+
+  weight += learned * (isLastRun ? 1.6 : 0.8);
+  weight += returnTimeScore * (isLastRun ? 1.8 : (isDefaultLastHourCluster ? 1.2 : 0.35));
+  return weight;
+};
+
+function getThemisV37LearnedRoutePairScore(areaA, areaB) {
+  const store = getThemisV37LearningStore();
+  const key1 = `${getCanonicalArea(areaA) || normalizeAreaLabel(areaA)}__${getCanonicalArea(areaB) || normalizeAreaLabel(areaB)}`;
+  const key2 = `${getCanonicalArea(areaB) || normalizeAreaLabel(areaB)}__${getCanonicalArea(areaA) || normalizeAreaLabel(areaA)}`;
+  return Math.max(Number(store.routePair?.[key1] || 0), Number(store.routePair?.[key2] || 0));
+}
+
+function getThemisV37RouteSequenceScore(fromItem, toItem) {
+  const pointA = getItemLatLng(fromItem);
+  const pointB = getItemLatLng(toItem);
+  const areaA = normalizeAreaLabel(fromItem?.destination_area || fromItem?.cluster_area || fromItem?.planned_area || "無し");
+  const areaB = normalizeAreaLabel(toItem?.destination_area || toItem?.cluster_area || toItem?.planned_area || "無し");
+  const routeFlow = getRouteFlowCompatibilityBetweenAreas(areaA, areaB);
+  const continuityPenalty = getPairRouteContinuityPenalty(areaA, areaB);
+  const learned = getThemisV37LearnedRoutePairScore(areaA, areaB);
+  let score = routeFlow * 2.4 + learned * 4.2 - continuityPenalty * 1.35;
+
+  if (pointA && pointB) {
+    const leg = estimateRoadKmBetweenPoints(pointA.lat, pointA.lng, pointB.lat, pointB.lng);
+    score -= leg * 3.2;
+  } else {
+    score -= Math.abs(Number(toItem?.distance_km || 0) - Number(fromItem?.distance_km || 0)) * 0.4;
+  }
+
+  const dirA = getAreaDirectionCluster(areaA);
+  const dirB = getAreaDirectionCluster(areaB);
+  if (dirA && dirB && dirA === dirB) score += 18;
+  return score;
+}
+
+sortItemsByNearestRoute = function(items) {
+  const remaining = [...items];
+  const sorted = [];
+  let currentLat = ORIGIN_LAT;
+  let currentLng = ORIGIN_LNG;
+  let currentItem = null;
+
+  while (remaining.length) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+
+    remaining.forEach((item, index) => {
+      const point = getItemLatLng(item);
+      let score = 0;
+      if (point) {
+        score -= estimateRoadKmBetweenPoints(currentLat, currentLng, point.lat, point.lng) * 3.0;
+      } else {
+        score -= Number(item.distance_km || 999999) * 1.1;
+      }
+
+      if (currentItem) {
+        score += getThemisV37RouteSequenceScore(currentItem, item);
+      } else {
+        const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || item?.planned_area || "無し");
+        score += getRouteFlowSortWeight(area) * 4.8;
+        score += getAreaAffinityScore(area, "松戸近郊") * 0.12;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+
+    const picked = remaining.splice(bestIndex, 1)[0];
+    sorted.push(picked);
+    currentItem = picked;
+
+    const pickedPoint = getItemLatLng(picked);
+    if (pickedPoint) {
+      currentLat = pickedPoint.lat;
+      currentLng = pickedPoint.lng;
+    }
+  }
+
+  return sorted;
+};
+
+const _THEMIS_V36_runAutoDispatch = runAutoDispatch;
+runAutoDispatch = async function() {
+  const result = await _THEMIS_V36_runAutoDispatch.apply(this, arguments);
+  try {
+    await loadActualsByDate(els.actualDate?.value || todayStr());
+    renderDailyDispatchResult();
+  } catch (e) {
+    console.error(e);
+  }
+  return result;
+};
+/* ===== THEMIS v3.7 配車AI強化版 patch end ===== */
