@@ -1673,3 +1673,11 @@ img, table, input, select, textarea, button{
     flex:1 1 100%;
   }
 }
+
+
+.field-full{grid-column:1/-1;}
+.geo-status{min-height:50px;padding:12px 14px;border:1px solid rgba(255,255,255,.12);border-radius:16px;background:rgba(255,255,255,.04);color:#a9b4c5;display:flex;align-items:center;line-height:1.5;font-size:.95rem;}
+.geo-status.loading{color:#d7e3ff;border-color:rgba(96,149,255,.55);box-shadow:0 0 0 1px rgba(96,149,255,.15) inset;}
+.geo-status.success{color:#7be2ab;border-color:rgba(47,191,122,.55);background:rgba(47,191,122,.10);}
+.geo-status.error{color:#ffb4b4;border-color:rgba(224,82,82,.55);background:rgba(224,82,82,.10);}
+.geo-status.manual{color:#ffd782;border-color:rgba(255,195,0,.45);background:rgba(255,195,0,.08);}
