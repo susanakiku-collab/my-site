@@ -12,7 +12,7 @@
     <header class="app-header">
       <div class="brand-wrap">
         <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
-        <p class="app-subtitle">緯度経度対応 / 方面自動判定 / 自動配車 / ルート確認</p>
+        <p class="app-subtitle">緯度経度対応 / 方面自動判定 / AI配車 / ルート確認</p>
       </div>
     </header>
 
@@ -129,6 +129,11 @@
               <input id="castPhone" type="text" placeholder="任意" />
             </div>
 
+            <div class="field field-full">
+              <label>座標取得状況</label>
+              <div id="castGeoStatus" class="geo-status idle">住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます</div>
+            </div>
+
             <input id="castLat" type="hidden" />
             <input id="castLng" type="hidden" />
           </div>
@@ -136,7 +141,6 @@
           <div class="action-row">
             <button id="saveCastBtn" class="btn primary">追加/更新</button>
             <button id="guessAreaBtn" class="btn ghost">住所から方面判定</button>
-            <button id="applyLatLngBtn" class="btn ghost">座標反映</button>
             <button id="openGoogleMapBtn" class="btn ghost">ルート</button>
             <button id="cancelEditBtn" class="btn ghost hidden">入力リセット</button>
             <button id="importCsvBtn" class="btn ghost">インポート</button>
