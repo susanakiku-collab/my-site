@@ -64,11 +64,11 @@ const els = {
   castMemo: document.getElementById("castMemo"),
   castLatLngText: document.getElementById("castLatLngText"),
   castPhone: document.getElementById("castPhone"),
+  castGeoStatus: document.getElementById("castGeoStatus"),
   castLat: document.getElementById("castLat"),
   castLng: document.getElementById("castLng"),
   saveCastBtn: document.getElementById("saveCastBtn"),
   guessAreaBtn: document.getElementById("guessAreaBtn"),
-  applyLatLngBtn: document.getElementById("applyLatLngBtn"),
   openGoogleMapBtn: document.getElementById("openGoogleMapBtn"),
   cancelEditBtn: document.getElementById("cancelEditBtn"),
   importCsvBtn: document.getElementById("importCsvBtn"),
@@ -321,6 +321,153 @@ function isValidLatLng(lat, lng) {
   if (lat < -90 || lat > 90) return false;
   if (lng < -180 || lng > 180) return false;
   return true;
+}
+
+const FREE_GEOCODE_CACHE_KEY = "themis_free_geocode_cache_v1";
+let castGeocodeTimer = null;
+let lastCastGeocodeKey = "";
+let castGeocodeSeq = 0;
+
+function normalizeGeocodeAddressKey(address) {
+  return String(address || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+
+function setCastGeoStatus(state = "idle", message = "") {
+  if (!els.castGeoStatus) return;
+  els.castGeoStatus.className = `geo-status ${state}`;
+  els.castGeoStatus.textContent = message || "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます";
+}
+
+function scheduleCastAutoGeocode() {
+  if (castGeocodeTimer) clearTimeout(castGeocodeTimer);
+  const address = String(els.castAddress?.value || "").trim();
+  if (!address) {
+    if (els.castLat) els.castLat.value = "";
+    if (els.castLng) els.castLng.value = "";
+    if (els.castLatLngText) els.castLatLngText.value = "";
+    lastCastGeocodeKey = "";
+    setCastGeoStatus("idle", "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます");
+    return;
+  }
+  setCastGeoStatus("loading", "取得中…");
+  castGeocodeTimer = setTimeout(async () => {
+    const runSeq = ++castGeocodeSeq;
+    const currentKey = normalizeGeocodeAddressKey(address);
+    const result = await fillCastLatLngFromAddress({ silent: true, force: currentKey !== lastCastGeocodeKey });
+    if (runSeq !== castGeocodeSeq) return;
+    if (result) {
+      const sourceText = result.source === "cache" ? "キャッシュから取得" : "Google / ジオコーディング取得済";
+      setCastGeoStatus("success", `✔ 座標取得済 (${sourceText})`);
+    } else {
+      setCastGeoStatus("error", "座標を自動取得できませんでした。座標貼り付けで手動入力してください");
+    }
+  }, 650);
+}
+
+function loadFreeGeocodeCache() {
+  try {
+    return JSON.parse(localStorage.getItem(FREE_GEOCODE_CACHE_KEY) || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveFreeGeocodeCache(cache) {
+  try {
+    localStorage.setItem(FREE_GEOCODE_CACHE_KEY, JSON.stringify(cache || {}));
+  } catch (_) {}
+}
+
+async function geocodeAddressFree(address) {
+  const normalizedAddress = String(address || "").trim();
+  if (!normalizedAddress) return null;
+
+  const key = normalizeGeocodeAddressKey(normalizedAddress);
+  const cache = loadFreeGeocodeCache();
+  const cached = cache[key];
+  if (cached && isValidLatLng(Number(cached.lat), Number(cached.lng))) {
+    return {
+      lat: Number(cached.lat),
+      lng: Number(cached.lng),
+      source: "cache"
+    };
+  }
+
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=jp&q=${encodeURIComponent(normalizedAddress)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json"
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`住所検索エラー: ${res.status}`);
+  }
+
+  const rows = await res.json();
+  const first = Array.isArray(rows) ? rows[0] : null;
+  if (!first) return null;
+
+  const lat = Number(first.lat);
+  const lng = Number(first.lon);
+  if (!isValidLatLng(lat, lng)) return null;
+
+  cache[key] = { lat, lng, ts: Date.now() };
+  saveFreeGeocodeCache(cache);
+
+  return { lat, lng, source: "api" };
+}
+
+async function fillCastLatLngFromAddress(options = {}) {
+  const silent = Boolean(options.silent);
+  const address = String(els.castAddress?.value || "").trim();
+
+  if (!address) {
+    if (!silent) alert("住所を入力してください");
+    return null;
+  }
+
+  const currentKey = normalizeGeocodeAddressKey(address);
+  const existingLat = toNullableNumber(els.castLat?.value);
+  const existingLng = toNullableNumber(els.castLng?.value);
+  if (isValidLatLng(existingLat, existingLng) && !options.force && currentKey === lastCastGeocodeKey) {
+    return { lat: existingLat, lng: existingLng, source: "existing" };
+  }
+
+  try {
+    const result = await geocodeAddressFree(address);
+    if (!result) {
+      if (!silent) alert("住所から座標を取得できませんでした。手動入力してください");
+      return null;
+    }
+
+    if (els.castLat) els.castLat.value = String(result.lat);
+    if (els.castLng) els.castLng.value = String(result.lng);
+    if (els.castLatLngText) els.castLatLngText.value = `${result.lat},${result.lng}`;
+    if (els.castArea) {
+      els.castArea.value = normalizeAreaLabel(guessArea(result.lat, result.lng, address));
+    }
+    if (els.castDistanceKm && !String(els.castDistanceKm.value || "").trim()) {
+      els.castDistanceKm.value = String(estimateRoadKmFromStation(result.lat, result.lng));
+    }
+
+    lastCastGeocodeKey = currentKey;
+    if (!silent) {
+      const label = result.source === "cache" ? "キャッシュ" : "無料ジオコーディング";
+      alert(`${label}で座標を取得しました`);
+    }
+    return result;
+  } catch (error) {
+    console.error("fillCastLatLngFromAddress error:", error);
+    if (!silent) alert("住所から座標取得できませんでした。時間をおいて再試行するか、手動で入力してください");
+    return null;
+  } finally {
+  }
 }
 
 function parseLatLngText(text) {
@@ -1766,6 +1913,8 @@ function resetCastForm() {
   if (els.castPhone) els.castPhone.value = "";
   if (els.castLat) els.castLat.value = "";
   if (els.castLng) els.castLng.value = "";
+  lastCastGeocodeKey = "";
+  setCastGeoStatus("idle", "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます");
   if (els.cancelEditBtn) els.cancelEditBtn.classList.add("hidden");
 }
 
@@ -1784,6 +1933,12 @@ function fillCastForm(cast) {
       cast.latitude != null && cast.longitude != null
         ? `${cast.latitude},${cast.longitude}`
         : "";
+  }
+  lastCastGeocodeKey = normalizeGeocodeAddressKey(cast.address || "");
+  if (cast.latitude != null && cast.longitude != null) {
+    setCastGeoStatus("success", "✔ 座標取得済");
+  } else {
+    setCastGeoStatus("idle", "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます");
   }
   if (els.cancelEditBtn) els.cancelEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1816,8 +1971,16 @@ async function saveCast() {
     return;
   }
 
-  const lat = toNullableNumber(els.castLat?.value);
-  const lng = toNullableNumber(els.castLng?.value);
+  let lat = toNullableNumber(els.castLat?.value);
+  let lng = toNullableNumber(els.castLng?.value);
+
+  const addressKey = normalizeGeocodeAddressKey(address);
+  if (address && (!isValidLatLng(lat, lng) || addressKey !== lastCastGeocodeKey)) {
+    const geocoded = await fillCastLatLngFromAddress({ silent: true, force: addressKey !== lastCastGeocodeKey });
+    lat = geocoded?.lat ?? toNullableNumber(els.castLat?.value);
+    lng = geocoded?.lng ?? toNullableNumber(els.castLng?.value);
+  }
+
   const manualArea = els.castArea?.value.trim() || "";
   const autoArea = guessArea(lat, lng, address);
   const autoDistance = isValidLatLng(lat, lng)
@@ -2077,6 +2240,8 @@ function applyCastLatLng() {
   if (els.castDistanceKm) {
     els.castDistanceKm.value = String(estimateRoadKmFromStation(parsed.lat, parsed.lng));
   }
+  lastCastGeocodeKey = normalizeGeocodeAddressKey(els.castAddress?.value || "");
+  setCastGeoStatus("manual", "✔ 座標反映済（手動入力）");
 }
 
 function guessCastArea() {
@@ -5700,7 +5865,12 @@ function setupEvents() {
 
   els.saveCastBtn?.addEventListener("click", saveCast);
   els.guessAreaBtn?.addEventListener("click", guessCastArea);
-  els.applyLatLngBtn?.addEventListener("click", applyCastLatLng);
+  els.castAddress?.addEventListener("input", scheduleCastAutoGeocode);
+  els.castLatLngText?.addEventListener("change", () => {
+    const hasText = String(els.castLatLngText?.value || "").trim();
+    if (!hasText) return;
+    applyCastLatLng();
+  });
   els.openGoogleMapBtn?.addEventListener("click", () => openGoogleMap(els.castAddress?.value || ""));
   els.cancelEditBtn?.addEventListener("click", resetCastForm);
   els.importCsvBtn?.addEventListener("click", () => els.csvFileInput?.click());
