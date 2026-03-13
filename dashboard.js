@@ -812,6 +812,139 @@ function calculateRouteDistance(items) {
 }
 
 
+function formatClockTimeFromMinutes(totalMinutes) {
+  const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
+  const h = Math.floor(safe / 60) % 24;
+  const m = safe % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function getDistanceZoneInfo(distanceKm) {
+  const km = Number(distanceKm || 0);
+  if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
+  if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
+  return { key: "long", label: "長距離", speedKmh: 35 };
+}
+
+function getExpectedDepartureDelayMinutes(baseHour) {
+  const hour = Number(baseHour || 0);
+  if (hour <= 2) return 20;
+  if (hour === 3) return 18;
+  if (hour === 4) return 12;
+  if (hour >= 5) return 8;
+  return 20;
+}
+
+function estimateTravelMinutesByDistance(distanceKm) {
+  const zone = getDistanceZoneInfo(distanceKm);
+  const km = Math.max(0, Number(distanceKm || 0));
+  const speed = Number(zone.speedKmh || 30);
+  return Math.round((km / speed) * 60);
+}
+
+function calcVehicleRotationForecast(vehicle, orderedRows) {
+  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+  if (!rows.length) {
+    return {
+      routeDistanceKm: 0,
+      returnDistanceKm: 0,
+      zoneLabel: "-",
+      predictedDepartureTime: "-",
+      predictedReturnTime: "-",
+      predictedReadyTime: "-",
+      predictedReturnMinutes: 0,
+      extraSharedDelayMinutes: 0,
+      stopCount: 0
+    };
+  }
+
+  const firstHour = rows.reduce((min, row) => {
+    const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
+    return Number.isFinite(val) ? Math.min(min, val) : min;
+  }, 99);
+
+  const baseHour = firstHour === 99 ? 0 : firstHour;
+  const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
+  const lastRow = rows[rows.length - 1] || {};
+  const returnDistanceKm = Number(lastRow.distance_km || 0);
+  const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm));
+
+  const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
+  const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm);
+  const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm);
+  const dropoffMinutes = rows.length * 1;
+
+  const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
+  const predictedReturnAbs = predictedDepartureAbs + outboundMinutes + dropoffMinutes + returnMinutes;
+  const predictedReadyAbs = predictedReturnAbs + 1;
+
+  let extraSharedDelayMinutes = 0;
+  if (rows.length >= 2) {
+    const firstOnly = [rows[0]];
+    const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
+    const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
+    const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm);
+    const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm);
+    const singleDropoff = 1;
+    const singlePredictedReturnAbs = predictedDepartureAbs + singleOutbound + singleDropoff + singleReturn;
+    extraSharedDelayMinutes = Math.max(0, predictedReturnAbs - singlePredictedReturnAbs);
+  }
+
+  return {
+    routeDistanceKm,
+    returnDistanceKm,
+    zoneLabel: primaryZone.label,
+    predictedDepartureTime: formatClockTimeFromMinutes(predictedDepartureAbs),
+    predictedReturnTime: formatClockTimeFromMinutes(predictedReturnAbs),
+    predictedReadyTime: formatClockTimeFromMinutes(predictedReadyAbs),
+    predictedReturnMinutes: Math.round(predictedReturnAbs - predictedDepartureAbs),
+    extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
+    stopCount: rows.length
+  };
+}
+
+function buildRotationTimelineHtml(vehicles, activeItems) {
+  const timeline = (vehicles || [])
+    .map(vehicle => {
+      const rows = moveManualLastItemsToEnd(
+        sortItemsByNearestRoute(
+          (activeItems || [])
+            .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+            .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
+        )
+      );
+      const forecast = calcVehicleRotationForecast(vehicle, rows);
+      return {
+        name: vehicle.driver_name || vehicle.plate_number || "-",
+        readyTime: forecast.predictedReadyTime,
+        returnTime: forecast.predictedReturnTime,
+        rotationMinutes: forecast.predictedReturnMinutes,
+        hasRows: rows.length > 0
+      };
+    })
+    .filter(x => x.hasRows)
+    .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
+
+  if (!timeline.length) return "";
+
+  return `
+    <div class="panel-card" style="margin-bottom:16px;">
+      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        ${timeline.map(item => `
+          <div class="chip" style="padding:8px 12px;">
+            <strong>${escapeHtml(item.name)}</strong>
+            / 戻り ${escapeHtml(item.returnTime)}
+            / 次便 ${escapeHtml(item.readyTime)}
+            / 回転 ${item.rotationMinutes}分
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+
 function normalizeAddressText(address) {
   return String(address || "")
     .trim()
@@ -4801,11 +4934,271 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     return true;
   }
 
-  function getNormalRunReturnPenalty(vehicleId, hour, addedDistance, sameHourLoad) {
-    const state = getVehicleState(vehicleId);
-    const projectedDistance = Number(state.totalDistance || 0) + Number(addedDistance || 0);
-    const projectedLoad = Number(state.totalAssigned || 0) + Number(sameHourLoad || 0);
-    return projectedDistance * 0.22 + projectedLoad * 7;
+  function getDistanceZoneForAi(distanceKm) {
+    const km = Number(distanceKm || 0);
+    if (km <= 10) return "near";
+    if (km <= 25) return "mid";
+    return "far";
+  }
+
+  function getZoneSpeedKmh(zone) {
+    if (zone === "near") return 25;
+    if (zone === "mid") return 30;
+    return 35;
+  }
+
+  function getBaseDispatchDelayMinutes(hour) {
+    const h = Number(hour || 0);
+    if (h <= 1) return 20;
+    if (h === 2) return 20;
+    if (h === 3) return 18;
+    if (h === 4) return 12;
+    return 8;
+  }
+
+  function estimateTravelMinutesByDistance(distanceKm) {
+    const km = Math.max(0, Number(distanceKm || 0));
+    const zone = getDistanceZoneForAi(km);
+    const speed = getZoneSpeedKmh(zone);
+    if (!speed) return 0;
+    return Math.round((km / speed) * 60);
+  }
+
+  function estimateDropoffMinutes(stopCount) {
+    return Math.max(1, Number(stopCount || 1)) * 1;
+  }
+
+  function estimateRotationReadyMinutes(hour, distanceKm, stopCount) {
+    const travelOut = estimateTravelMinutesByDistance(distanceKm);
+    const dropoff = estimateDropoffMinutes(stopCount);
+    const returnTrip = estimateTravelMinutesByDistance(distanceKm);
+    return getBaseDispatchDelayMinutes(hour) + travelOut + dropoff + returnTrip;
+  }
+
+  function estimateRideShareExtraDelay(distanceKm, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty) {
+    if (Number(sameHourLoad || 0) <= 0) return 0;
+
+    const zone = getDistanceZoneForAi(distanceKm);
+    const zoneBase =
+      zone === "near" ? 2 :
+      zone === "mid" ? 5 : 8;
+
+    const raw =
+      zoneBase +
+      Number(sameHourLoad || 0) * 2 +
+      Number(stopCount || 1) * 1 +
+      Number(routeContinuityPenalty || 0) / 30 -
+      Number(routeFlowScore || 0) / 40;
+
+    return Math.max(0, Math.round(raw));
+  }
+
+  function getRotationPredictionScore(hour, distanceKm, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount) {
+    const predictedReadyMinutes = estimateRotationReadyMinutes(hour, distanceKm, stopCount);
+    const extraDelay = estimateRideShareExtraDelay(
+      distanceKm,
+      stopCount,
+      sameHourLoad,
+      routeFlowScore,
+      routeContinuityPenalty
+    );
+    const canShare = extraDelay <= 8;
+
+    let score = predictedReadyMinutes * 0.65 + extraDelay * 1.8;
+
+    if (Number(sameHourLoad || 0) === 0 && Number(idleVehicleCount || 0) > 0) {
+      score -= 24;
+    }
+
+    if (Number(sameHourLoad || 0) > 0 && !canShare) {
+      score += 42;
+    } else if (Number(sameHourLoad || 0) > 0 && canShare) {
+      score -= 10;
+    }
+
+    return {
+      predictedReadyMinutes,
+      extraDelay,
+      canShare,
+      score
+    };
+  }
+
+  function getNormalRunReturnPenalty(hour, addedDistance, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount) {
+    const rotation = getRotationPredictionScore(
+      hour,
+      addedDistance,
+      stopCount,
+      sameHourLoad,
+      routeFlowScore,
+      routeContinuityPenalty,
+      idleVehicleCount
+    );
+    return rotation.score;
+  }
+
+  function formatClockTimeFromMinutes(totalMinutes) {
+    const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
+    const h = Math.floor(safe / 60) % 24;
+    const m = safe % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  function getDistanceZoneInfo(distanceKm) {
+    const km = Number(distanceKm || 0);
+    if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
+    if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
+    return { key: "long", label: "長距離", speedKmh: 35 };
+  }
+
+  function getExpectedDepartureDelayMinutes(baseHour) {
+    const hour = Number(baseHour || 0);
+    if (hour <= 2) return 20;
+    if (hour === 3) return 18;
+    if (hour === 4) return 12;
+    if (hour >= 5) return 8;
+    return 20;
+  }
+
+  function calcVehicleRotationForecast(vehicle, orderedRows) {
+    const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+    if (!rows.length) {
+      return {
+        routeDistanceKm: 0,
+        returnDistanceKm: 0,
+        zoneLabel: "-",
+        predictedDepartureTime: "-",
+        predictedReturnTime: "-",
+        predictedReadyTime: "-",
+        predictedReturnMinutes: 0,
+        extraSharedDelayMinutes: 0,
+        stopCount: 0
+      };
+    }
+  
+    const firstHour = rows.reduce((min, row) => {
+      const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
+      return Number.isFinite(val) ? Math.min(min, val) : min;
+    }, 99);
+  
+    const baseHour = firstHour === 99 ? 0 : firstHour;
+    const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
+    const lastRow = rows[rows.length - 1] || {};
+    const returnDistanceKm = Number(lastRow.distance_km || 0);
+    const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm));
+  
+    const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
+    const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm);
+    const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm);
+    const dropoffMinutes = rows.length * 1;
+  
+    const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
+    const predictedReturnAbs = predictedDepartureAbs + outboundMinutes + dropoffMinutes + returnMinutes;
+    const predictedReadyAbs = predictedReturnAbs + 1;
+  
+    let extraSharedDelayMinutes = 0;
+    if (rows.length >= 2) {
+      const firstOnly = [rows[0]];
+      const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
+      const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
+      const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm);
+      const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm);
+      const singleDropoff = 1;
+      const singlePredictedReturnAbs = predictedDepartureAbs + singleOutbound + singleDropoff + singleReturn;
+      extraSharedDelayMinutes = Math.max(0, predictedReturnAbs - singlePredictedReturnAbs);
+    }
+  
+    return {
+      routeDistanceKm,
+      returnDistanceKm,
+      zoneLabel: primaryZone.label,
+      predictedDepartureTime: formatClockTimeFromMinutes(predictedDepartureAbs),
+      predictedReturnTime: formatClockTimeFromMinutes(predictedReturnAbs),
+      predictedReadyTime: formatClockTimeFromMinutes(predictedReadyAbs),
+      predictedReturnMinutes: Math.round(predictedReturnAbs - predictedDepartureAbs),
+      extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
+      stopCount: rows.length
+    };
+  }
+
+  function buildRotationTimelineHtml(vehicles, activeItems) {
+    const timeline = vehicles
+      .map(vehicle => {
+        const rows = moveManualLastItemsToEnd(
+          sortItemsByNearestRoute(
+            activeItems
+              .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+              .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
+          )
+        );
+        const forecast = calcVehicleRotationForecast(vehicle, rows);
+        return {
+          name: vehicle.driver_name || vehicle.plate_number || "-",
+          readyTime: forecast.predictedReadyTime,
+          returnTime: forecast.predictedReturnTime,
+          rotationMinutes: forecast.predictedReturnMinutes,
+          hasRows: rows.length > 0
+        };
+      })
+      .filter(x => x.hasRows)
+      .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
+  
+    if (!timeline.length) return "";
+  
+    return `
+      <div class="panel-card" style="margin-bottom:16px;">
+        <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          ${timeline.map(item => `
+            <div class="chip" style="padding:8px 12px;">
+              <strong>${escapeHtml(item.name)}</strong>
+              / 戻り ${escapeHtml(item.returnTime)}
+              / 次便 ${escapeHtml(item.readyTime)}
+              / 回転 ${item.rotationMinutes}分
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function isDirectionSplitPair(baseArea, compareArea) {
+    const a = normalizeAreaLabel(baseArea);
+    const b = normalizeAreaLabel(compareArea);
+    if (!a || !b) return false;
+    const affinity = getDirectionAffinityScore(a, b);
+    return affinity <= -38;
+  }
+
+  function getDirectionSplitGuardScore(clusterArea, existingAreas, distanceKm, isLastRun, isDefaultLastHourCluster) {
+    if (isLastRun || isDefaultLastHourCluster) return 0;
+
+    const zone = getDistanceZoneForAi(distanceKm);
+    const areas = (existingAreas || []).map(normalizeAreaLabel).filter(Boolean);
+    if (!areas.length) return 0;
+
+    let score = 0;
+    for (const area of areas) {
+      if (!isDirectionSplitPair(clusterArea, area)) continue;
+
+      if (zone === 'long') score += 260;
+      else if (zone === 'mid') score += 120;
+      else score += 40;
+    }
+
+    return score;
+  }
+
+  function isHardDirectionSplitBlocked(clusterArea, existingAreas, distanceKm, isLastRun, isDefaultLastHourCluster) {
+    if (isLastRun || isDefaultLastHourCluster) return false;
+
+    const zone = getDistanceZoneForAi(distanceKm);
+    if (zone !== 'long') return false;
+
+    const areas = (existingAreas || []).map(normalizeAreaLabel).filter(Boolean);
+    if (!areas.length) return false;
+
+    return areas.some(area => isDirectionSplitPair(clusterArea, area));
   }
 
   for (const cluster of clusters) {
@@ -4845,6 +5238,20 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
         const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
         const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
+        const directionSplitGuardScore = getDirectionSplitGuardScore(
+          normalizedClusterArea,
+          existingHourAreas,
+          Number(cluster.totalDistance || 0),
+          isLastRun,
+          isDefaultLastHourCluster
+        );
+        const hardDirectionSplitBlocked = isHardDirectionSplitBlocked(
+          normalizedClusterArea,
+          existingHourAreas,
+          Number(cluster.totalDistance || 0),
+          isLastRun,
+          isDefaultLastHourCluster
+        );
 
         // 方面一致 + 方向クラスタ + 帰宅適合 + 経由ルート相性を優先
         score -= vehicleAreaMatch;
@@ -4868,18 +5275,38 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         // 通常便は、空き車両があれば分散優先で松戸駅へ早く戻れるようにする
         if (!(isLastRun || isDefaultLastHourCluster)) {
           const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-          const preferSpread = shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad);
+          const rotationPrediction = getRotationPredictionScore(
+            cluster.hour,
+            Number(cluster.totalDistance || 0),
+            Number(cluster.count || 1),
+            sameHourLoad,
+            routeFlowScore,
+            routeContinuityPenalty,
+            idleVehicleCount
+          );
+          const preferSpread =
+            shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) ||
+            !rotationPrediction.canShare;
 
           if (sameHourLoad === 0) {
-            score -= idleVehicleCount > 1 ? 140 : 90;
+            score -= idleVehicleCount > 1 ? 150 : 95;
           } else if (preferSpread && idleVehicleCount > 0) {
-            score += 150 + sameHourLoad * 36;
-          } else if (!preferSpread) {
-            score -= Math.min(routeFlowScore, 120) * 0.35;
-            score += routeContinuityPenalty * 0.2;
+            score += 165 + sameHourLoad * 38;
+          } else if (!preferSpread && rotationPrediction.canShare) {
+            score -= Math.min(routeFlowScore, 120) * 0.40;
+            score += routeContinuityPenalty * 0.15;
+            score -= 18;
           }
 
-          score += getNormalRunReturnPenalty(vehicle.id, cluster.hour, cluster.totalDistance, sameHourLoad);
+          score += getNormalRunReturnPenalty(
+            cluster.hour,
+            Number(cluster.totalDistance || 0),
+            Number(cluster.count || 1),
+            sameHourLoad,
+            routeFlowScore,
+            routeContinuityPenalty,
+            idleVehicleCount
+          );
         }
 
         // ラスト便で逆方向は強く除外
@@ -4890,6 +5317,12 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         // ラスト便時間帯では適合の弱い車両を避ける
         if ((isLastRun || isDefaultLastHourCluster) && strictHomeScore < 50) {
           score += 110;
+        }
+
+        // 長距離ゾーンで方向が割れる組み合わせを強く避ける
+        score += directionSplitGuardScore;
+        if (hardDirectionSplitBlocked) {
+          score += 420;
         }
 
         // 同一ルートの折れ返しが大きい組み合わせを避ける
@@ -4979,6 +5412,20 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
           const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
           const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
+          const directionSplitGuardScore = getDirectionSplitGuardScore(
+            normalizedClusterArea,
+            existingHourAreas,
+            Number(item.distance_km || 0),
+            isLastRun,
+            isDefaultLastHourCluster
+          );
+          const hardDirectionSplitBlocked = isHardDirectionSplitBlocked(
+            normalizedClusterArea,
+            existingHourAreas,
+            Number(item.distance_km || 0),
+            isLastRun,
+            isDefaultLastHourCluster
+          );
 
           const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
           const projectedAvg =
@@ -5004,20 +5451,46 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           // 月間平均の高い車両へ積みすぎない
           score += projectedAvg * 0.55;
 
+          // 長距離ゾーンで方向が割れる組み合わせを強く避ける
+          score += directionSplitGuardScore;
+          if (hardDirectionSplitBlocked) {
+            score += 420;
+          }
+
           // 通常便は空いている車両を使い、戻り時間が短くなるよう分散を優先
           if (!(isLastRun || isDefaultLastHourCluster)) {
             const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-            const preferSpread = sameHourLoad > 0 && !(routeFlowScore >= 85 && routeContinuityPenalty <= 45);
+            const rotationPrediction = getRotationPredictionScore(
+              cluster.hour,
+              Number(item.distance_km || 0),
+              1,
+              sameHourLoad,
+              routeFlowScore,
+              routeContinuityPenalty,
+              idleVehicleCount
+            );
+            const preferSpread =
+              sameHourLoad > 0 &&
+              (!(routeFlowScore >= 85 && routeContinuityPenalty <= 45) || !rotationPrediction.canShare);
 
             if (sameHourLoad === 0) {
-              score -= idleVehicleCount > 1 ? 130 : 82;
+              score -= idleVehicleCount > 1 ? 135 : 84;
             } else if (preferSpread && idleVehicleCount > 0) {
-              score += 125 + sameHourLoad * 28;
-            } else {
-              score -= Math.min(routeFlowScore, 120) * 0.22;
+              score += 130 + sameHourLoad * 30;
+            } else if (rotationPrediction.canShare) {
+              score -= Math.min(routeFlowScore, 120) * 0.26;
+              score -= 10;
             }
 
-            score += getNormalRunReturnPenalty(vehicle.id, cluster.hour, Number(item.distance_km || 0), sameHourLoad);
+            score += getNormalRunReturnPenalty(
+              cluster.hour,
+              Number(item.distance_km || 0),
+              1,
+              sameHourLoad,
+              routeFlowScore,
+              routeContinuityPenalty,
+              idleVehicleCount
+            );
           }
 
           const homePriorityWeight = getLastTripHomePriorityWeight(
@@ -5124,138 +5597,6 @@ async function runAutoDispatch() {
   await loadActualsByDate(els.actualDate?.value || todayStr());
   await loadPlansByDate(els.planDate?.value || todayStr());
   renderDailyDispatchResult();
-}
-
-
-function getDistanceZoneInfo(distanceKm) {
-  const km = Number(distanceKm || 0);
-  if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
-  if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
-  return { key: "long", label: "長距離", speedKmh: 35 };
-}
-
-function getExpectedDepartureDelayMinutes(baseHour) {
-  const hour = Number(baseHour || 0);
-  if (hour <= 2) return 20;
-  if (hour === 3) return 18;
-  if (hour === 4) return 12;
-  if (hour >= 5) return 8;
-  return 20;
-}
-
-function estimateTravelMinutesByDistance(distanceKm) {
-  const zone = getDistanceZoneInfo(distanceKm);
-  const km = Math.max(0, Number(distanceKm || 0));
-  return km > 0 ? (km / zone.speedKmh) * 60 : 0;
-}
-
-function formatClockTimeFromMinutes(totalMinutes) {
-  const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
-  const h = Math.floor(safe / 60) % 24;
-  const m = safe % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function calcVehicleRotationForecast(vehicle, orderedRows) {
-  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
-  if (!rows.length) {
-    return {
-      routeDistanceKm: 0,
-      returnDistanceKm: 0,
-      zoneLabel: "-",
-      predictedDepartureTime: "-",
-      predictedReturnTime: "-",
-      predictedReadyTime: "-",
-      predictedReturnMinutes: 0,
-      extraSharedDelayMinutes: 0,
-      stopCount: 0
-    };
-  }
-
-  const firstHour = rows.reduce((min, row) => {
-    const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
-    return Number.isFinite(val) ? Math.min(min, val) : min;
-  }, 99);
-
-  const baseHour = firstHour === 99 ? 0 : firstHour;
-  const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
-  const lastRow = rows[rows.length - 1] || {};
-  const returnDistanceKm = Number(lastRow.distance_km || 0);
-  const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm));
-
-  const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
-  const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm);
-  const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm);
-  const dropoffMinutes = rows.length * 1;
-
-  const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
-  const predictedReturnAbs = predictedDepartureAbs + outboundMinutes + dropoffMinutes + returnMinutes;
-  const predictedReadyAbs = predictedReturnAbs + 1;
-
-  let extraSharedDelayMinutes = 0;
-  if (rows.length >= 2) {
-    const firstOnly = [rows[0]];
-    const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
-    const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
-    const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm);
-    const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm);
-    const singleDropoff = 1;
-    const singlePredictedReturnAbs = predictedDepartureAbs + singleOutbound + singleDropoff + singleReturn;
-    extraSharedDelayMinutes = Math.max(0, predictedReturnAbs - singlePredictedReturnAbs);
-  }
-
-  return {
-    routeDistanceKm,
-    returnDistanceKm,
-    zoneLabel: primaryZone.label,
-    predictedDepartureTime: formatClockTimeFromMinutes(predictedDepartureAbs),
-    predictedReturnTime: formatClockTimeFromMinutes(predictedReturnAbs),
-    predictedReadyTime: formatClockTimeFromMinutes(predictedReadyAbs),
-    predictedReturnMinutes: Math.round(predictedReturnAbs - predictedDepartureAbs),
-    extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
-    stopCount: rows.length
-  };
-}
-
-function buildRotationTimelineHtml(vehicles, activeItems) {
-  const timeline = vehicles
-    .map(vehicle => {
-      const rows = moveManualLastItemsToEnd(
-        sortItemsByNearestRoute(
-          activeItems
-            .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-            .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
-        )
-      );
-      const forecast = calcVehicleRotationForecast(vehicle, rows);
-      return {
-        name: vehicle.driver_name || vehicle.plate_number || "-",
-        readyTime: forecast.predictedReadyTime,
-        returnTime: forecast.predictedReturnTime,
-        rotationMinutes: forecast.predictedReturnMinutes,
-        hasRows: rows.length > 0
-      };
-    })
-    .filter(x => x.hasRows)
-    .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
-
-  if (!timeline.length) return "";
-
-  return `
-    <div class="panel-card" style="margin-bottom:16px;">
-      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-      <div style="display:flex; flex-wrap:wrap; gap:8px;">
-        ${timeline.map(item => `
-          <div class="chip" style="padding:8px 12px;">
-            <strong>${escapeHtml(item.name)}</strong>
-            / 戻り ${escapeHtml(item.returnTime)}
-            / 次便 ${escapeHtml(item.readyTime)}
-            / 回転 ${item.rotationMinutes}分
-          </div>
-        `).join("")}
-      </div>
-    </div>
-  `;
 }
 
 function renderDailyDispatchResult() {
