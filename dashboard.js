@@ -4745,6 +4745,241 @@ function buildMonthlyDistanceMapForCurrentMonth() {
   return getVehicleMonthlyStatsMap(currentDailyReportsCache, monthKey);
 }
 
+
+function getCurrentClockMinutes() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+function formatClockTimeFromMinutesGlobal(totalMinutes) {
+  const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
+  const h = Math.floor(safe / 60) % 24;
+  const m = safe % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function getDistanceZoneInfoGlobal(distanceKm) {
+  const km = Number(distanceKm || 0);
+  if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
+  if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
+  return { key: "long", label: "長距離", speedKmh: 35 };
+}
+
+function estimateTravelMinutesByDistanceGlobal(distanceKm) {
+  const km = Math.max(0, Number(distanceKm || 0));
+  const zone = getDistanceZoneInfoGlobal(km);
+  const speed = Number(zone.speedKmh || 30);
+  if (!speed) return 0;
+  return Math.round((km / speed) * 60);
+}
+
+function calculateRouteDistanceGlobal(items) {
+  if (!items || !items.length) return 0;
+  let total = 0;
+  let currentLat = ORIGIN_LAT;
+  let currentLng = ORIGIN_LNG;
+
+  items.forEach(item => {
+    const point = getItemLatLng(item);
+    if (point) {
+      total += estimateRoadKmBetweenPoints(currentLat, currentLng, point.lat, point.lng);
+      currentLat = point.lat;
+      currentLng = point.lng;
+    } else {
+      total += Number(item.distance_km || 0);
+    }
+  });
+
+  return Number(total.toFixed(1));
+}
+
+function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
+  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+  if (!rows.length) {
+    return {
+      routeDistanceKm: 0,
+      returnDistanceKm: 0,
+      zoneLabel: "-",
+      predictedReturnTime: "-",
+      predictedReadyTime: "-",
+      predictedReturnMinutes: 0,
+      extraSharedDelayMinutes: 0,
+      stopCount: 0,
+      returnAfterLabel: "-"
+    };
+  }
+
+  const firstHour = rows.reduce((min, row) => {
+    const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
+    return Number.isFinite(val) ? Math.min(min, val) : min;
+  }, 99);
+
+  const baseHour = firstHour === 99 ? 0 : firstHour;
+  const routeDistanceKm = Number(calculateRouteDistanceGlobal(rows) || 0);
+  const lastRow = rows[rows.length - 1] || {};
+  const returnDistanceKm = Number(lastRow.distance_km || 0);
+  const primaryZone = getDistanceZoneInfoGlobal(Math.max(routeDistanceKm, returnDistanceKm));
+
+  let departDelayMinutes = 20;
+  if (baseHour === 3) departDelayMinutes = 18;
+  else if (baseHour === 4) departDelayMinutes = 12;
+  else if (baseHour >= 5) departDelayMinutes = 8;
+
+  const outboundMinutes = estimateTravelMinutesByDistanceGlobal(routeDistanceKm);
+  const returnMinutes = estimateTravelMinutesByDistanceGlobal(returnDistanceKm);
+  const dropoffMinutes = rows.length * 1;
+
+  const baseStartMinutes = Number.isFinite(lastAutoDispatchRunAtMinutes) && lastAutoDispatchRunAtMinutes !== null
+    ? lastAutoDispatchRunAtMinutes
+    : (baseHour * 60 + departDelayMinutes);
+
+  const predictedReturnMinutes = Math.round(outboundMinutes + dropoffMinutes + returnMinutes);
+  const predictedReturnAbs = baseStartMinutes + predictedReturnMinutes;
+  const predictedReadyAbs = predictedReturnAbs + 1;
+
+  let extraSharedDelayMinutes = 0;
+  if (rows.length >= 2) {
+    const firstOnly = [rows[0]];
+    const singleRouteDistanceKm = Number(calculateRouteDistanceGlobal(firstOnly) || rows[0].distance_km || 0);
+    const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
+    const singleOutbound = estimateTravelMinutesByDistanceGlobal(singleRouteDistanceKm);
+    const singleReturn = estimateTravelMinutesByDistanceGlobal(singleReturnDistanceKm);
+    const singlePredictedReturnMinutes = Math.round(singleOutbound + 1 + singleReturn);
+    extraSharedDelayMinutes = Math.max(0, predictedReturnMinutes - singlePredictedReturnMinutes);
+  }
+
+  return {
+    routeDistanceKm,
+    returnDistanceKm,
+    zoneLabel: primaryZone.label,
+    predictedReturnTime: formatClockTimeFromMinutesGlobal(predictedReturnAbs),
+    predictedReadyTime: formatClockTimeFromMinutesGlobal(predictedReadyAbs),
+    predictedReturnMinutes,
+    extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
+    stopCount: rows.length,
+    returnAfterLabel: `${predictedReturnMinutes}分後`
+  };
+}
+
+function calcVehicleDailyStatsGlobal(vehicleId, items) {
+  const rows = (items || [])
+    .filter(i => Number(i.vehicle_id) === Number(vehicleId))
+    .filter(i => normalizeStatus(i.status) !== "cancel");
+
+  if (!rows.length) {
+    return {
+      totalKm: 0,
+      sendKm: 0,
+      returnKm: 0,
+      driveMinutes: 0,
+      count: 0
+    };
+  }
+
+  const groupedByHour = new Map();
+  rows.forEach(row => {
+    const hour = Number(row.actual_hour ?? 0);
+    if (!groupedByHour.has(hour)) groupedByHour.set(hour, []);
+    groupedByHour.get(hour).push(row);
+  });
+
+  let sendKm = 0;
+  let returnKm = 0;
+  let driveMinutes = 0;
+  let count = 0;
+
+  [...groupedByHour.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([, hourRows]) => {
+      const orderedRows = moveManualLastItemsToEnd(
+        sortItemsByNearestRoute(
+          [...hourRows].sort((a, b) => Number(a.stop_order || 0) - Number(b.stop_order || 0))
+        )
+      );
+
+      if (!orderedRows.length) return;
+
+      const routeKm = Number(calculateRouteDistanceGlobal(orderedRows) || 0);
+      const lastRow = orderedRows[orderedRows.length - 1] || {};
+      const backKm = Number(lastRow.distance_km || 0);
+
+      sendKm += routeKm;
+      returnKm += backKm;
+      driveMinutes += estimateTravelMinutesByDistanceGlobal(routeKm);
+      driveMinutes += estimateTravelMinutesByDistanceGlobal(backKm);
+      driveMinutes += orderedRows.length * 1;
+      count += orderedRows.length;
+    });
+
+  const totalKm = Number((sendKm + returnKm).toFixed(1));
+
+  return {
+    totalKm,
+    sendKm: Number(sendKm.toFixed(1)),
+    returnKm: Number(returnKm.toFixed(1)),
+    driveMinutes: Math.round(driveMinutes),
+    count
+  };
+}
+
+function buildRotationTimelineHtml(vehicles, activeItems) {
+  const dailyActuals = (currentActualsCache || []).filter(
+    item => normalizeStatus(item.status) !== "cancel"
+  );
+
+  const timeline = (vehicles || [])
+    .map(vehicle => {
+      const activeRows = moveManualLastItemsToEnd(
+        sortItemsByNearestRoute(
+          (activeItems || [])
+            .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+            .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
+        )
+      );
+
+      const dailyStats = calcVehicleDailyStatsGlobal(vehicle.id, dailyActuals);
+
+      const forecast = calcVehicleRotationForecastGlobal(vehicle, activeRows);
+      const hasAnyDailyRows = dailyStats.count > 0;
+
+      return {
+        name: vehicle.driver_name || vehicle.plate_number || "-",
+        readyTime: forecast.predictedReadyTime,
+        returnAfterLabel: forecast.returnAfterLabel,
+        totalKm: dailyStats.totalKm,
+        sendKm: dailyStats.sendKm,
+        returnKm: dailyStats.returnKm,
+        driveMinutes: dailyStats.driveMinutes,
+        count: dailyStats.count,
+        hasRows: hasAnyDailyRows
+      };
+    })
+    .filter(x => x.hasRows)
+    .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
+
+  if (!timeline.length) return "";
+
+  return `
+    <div class="panel-card" style="margin-bottom:16px;">
+      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        ${timeline.map(item => `
+          <div class="chip" style="padding:8px 12px;">
+            <strong>${escapeHtml(item.name)}</strong>
+            / 戻り ${escapeHtml(item.returnAfterLabel)}
+            / 次便 ${escapeHtml(item.readyTime)}
+            / 本日距離 ${item.totalKm}km
+            (送り${item.sendKm}km / 戻り${item.returnKm}km)
+            / 本日走行 ${item.driveMinutes}分
+            / 本日 ${item.count}件
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+
 function optimizeAssignments(items, vehicles, monthlyMap) {
   const workingVehicles = vehicles.filter(v => v.status !== "maintenance");
   const manualLastVehicleId = getManualLastVehicleId();
@@ -5469,149 +5704,6 @@ async function runAutoDispatch() {
   renderDailyDispatchResult();
 }
 
-
-function getCurrentClockMinutes() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
-}
-
-function formatClockTimeFromMinutes(totalMinutes) {
-  const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
-  const h = Math.floor(safe / 60) % 24;
-  const m = safe % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function getDistanceZoneInfo(distanceKm) {
-  const km = Number(distanceKm || 0);
-  if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
-  if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
-  return { key: "long", label: "長距離", speedKmh: 35 };
-}
-
-function getExpectedDepartureDelayMinutes(baseHour) {
-  const hour = Number(baseHour || 0);
-  if (hour <= 2) return 20;
-  if (hour === 3) return 18;
-  if (hour === 4) return 12;
-  if (hour >= 5) return 8;
-  return 20;
-}
-
-function estimateTravelMinutesByDistance(distanceKm) {
-  const zone = getDistanceZoneInfo(distanceKm);
-  const km = Math.max(0, Number(distanceKm || 0));
-  const speed = Number(zone.speedKmh || 30);
-  return Math.round((km / speed) * 60);
-}
-
-function calcVehicleRotationForecast(vehicle, orderedRows) {
-  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
-  if (!rows.length) {
-    return {
-      routeDistanceKm: 0,
-      returnDistanceKm: 0,
-      zoneLabel: "-",
-      predictedReturnTime: "-",
-      predictedReadyTime: "-",
-      predictedReturnMinutes: 0,
-      extraSharedDelayMinutes: 0,
-      stopCount: 0,
-      returnAfterLabel: "-"
-    };
-  }
-
-  const firstHour = rows.reduce((min, row) => {
-    const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
-    return Number.isFinite(val) ? Math.min(min, val) : min;
-  }, 99);
-
-  const baseHour = firstHour === 99 ? 0 : firstHour;
-  const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
-  const lastRow = rows[rows.length - 1] || {};
-  const returnDistanceKm = Number(lastRow.distance_km || 0);
-  const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm));
-
-  const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
-  const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm);
-  const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm);
-  const dropoffMinutes = rows.length * 1;
-
-  const baseStartMinutes = Number.isFinite(lastAutoDispatchRunAtMinutes) && lastAutoDispatchRunAtMinutes !== null
-    ? lastAutoDispatchRunAtMinutes
-    : (baseHour * 60 + departDelayMinutes);
-
-  const predictedReturnMinutes = Math.round(outboundMinutes + dropoffMinutes + returnMinutes);
-  const predictedReturnAbs = baseStartMinutes + predictedReturnMinutes;
-  const predictedReadyAbs = predictedReturnAbs + 1;
-
-  let extraSharedDelayMinutes = 0;
-  if (rows.length >= 2) {
-    const firstOnly = [rows[0]];
-    const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
-    const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
-    const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm);
-    const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm);
-    const singleDropoff = 1;
-    const singlePredictedReturnMinutes = Math.round(singleOutbound + singleDropoff + singleReturn);
-    extraSharedDelayMinutes = Math.max(0, predictedReturnMinutes - singlePredictedReturnMinutes);
-  }
-
-  return {
-    routeDistanceKm,
-    returnDistanceKm,
-    zoneLabel: primaryZone.label,
-    predictedReturnTime: formatClockTimeFromMinutes(predictedReturnAbs),
-    predictedReadyTime: formatClockTimeFromMinutes(predictedReadyAbs),
-    predictedReturnMinutes,
-    extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
-    stopCount: rows.length,
-    returnAfterLabel: `${predictedReturnMinutes}分後`
-  };
-}
-
-function buildRotationTimelineHtml(vehicles, activeItems) {
-  const timeline = (vehicles || [])
-    .map(vehicle => {
-      const rows = moveManualLastItemsToEnd(
-        sortItemsByNearestRoute(
-          (activeItems || [])
-            .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-            .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
-        )
-      );
-      const forecast = calcVehicleRotationForecast(vehicle, rows);
-      return {
-        name: vehicle.driver_name || vehicle.plate_number || "-",
-        readyTime: forecast.predictedReadyTime,
-        returnAfterLabel: forecast.returnAfterLabel,
-        rotationMinutes: forecast.predictedReturnMinutes,
-        hasRows: rows.length > 0
-      };
-    })
-    .filter(x => x.hasRows)
-    .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
-
-  if (!timeline.length) return "";
-
-  return `
-    <div class="panel-card" style="margin-bottom:16px;">
-      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-      <div style="display:flex; flex-wrap:wrap; gap:8px;">
-        ${timeline.map(item => `
-          <div class="chip" style="padding:8px 12px;">
-            <strong>${escapeHtml(item.name)}</strong>
-            / 戻り ${escapeHtml(item.returnAfterLabel)}
-            / 次便 ${escapeHtml(item.readyTime)}
-            / 回転 ${item.rotationMinutes}分
-          </div>
-        `).join("")}
-      </div>
-    </div>
-  `;
-}
-
-
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
 
@@ -5645,7 +5737,7 @@ function renderDailyDispatchResult() {
 
         const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
         const totalDistance = calculateRouteDistance(orderedRows);
-        const forecast = calcVehicleRotationForecast(vehicle, orderedRows);
+        const forecast = calcVehicleRotationForecastGlobal(vehicle, orderedRows);
 
         const body = orderedRows.length
           ? orderedRows
