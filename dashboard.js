@@ -324,7 +324,6 @@ function isValidLatLng(lat, lng) {
 }
 
 const GOOGLE_GEOCODE_CACHE_KEY = "themis_google_geocode_cache_v1";
-let castGeocodeTimer = null;
 let lastCastGeocodeKey = "";
 let castGeocodeSeq = 0;
 let googleMapsApiPromise = null;
@@ -339,33 +338,41 @@ function normalizeGeocodeAddressKey(address) {
 function setCastGeoStatus(state = "idle", message = "") {
   if (!els.castGeoStatus) return;
   els.castGeoStatus.className = `geo-status ${state}`;
-  els.castGeoStatus.textContent = message || "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます";
+  els.castGeoStatus.textContent = message || "住所入力後 Enter で座標取得 / 未取得時は座標貼り付けから手動反映できます";
 }
 
 function scheduleCastAutoGeocode() {
-  if (castGeocodeTimer) clearTimeout(castGeocodeTimer);
   const address = String(els.castAddress?.value || "").trim();
   if (!address) {
     if (els.castLat) els.castLat.value = "";
     if (els.castLng) els.castLng.value = "";
     if (els.castLatLngText) els.castLatLngText.value = "";
     lastCastGeocodeKey = "";
-    setCastGeoStatus("idle", "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます");
+    castGeocodeSeq++;
+    setCastGeoStatus("idle", "住所入力後 Enter で座標取得 / 未取得時は座標貼り付けから手動反映できます");
     return;
   }
+  setCastGeoStatus("idle", "住所入力後 Enter で座標取得");
+}
+
+async function triggerCastAddressGeocodeNow() {
+  const address = String(els.castAddress?.value || "").trim();
+  if (!address) {
+    setCastGeoStatus("idle", "住所を入力してください");
+    return null;
+  }
+  const runSeq = ++castGeocodeSeq;
+  const currentKey = normalizeGeocodeAddressKey(address);
   setCastGeoStatus("loading", "取得中…");
-  castGeocodeTimer = setTimeout(async () => {
-    const runSeq = ++castGeocodeSeq;
-    const currentKey = normalizeGeocodeAddressKey(address);
-    const result = await fillCastLatLngFromAddress({ silent: true, force: currentKey !== lastCastGeocodeKey });
-    if (runSeq !== castGeocodeSeq) return;
-    if (result) {
-      const sourceText = result.source === "cache" ? "キャッシュから取得" : result.source === "existing" ? "入力済み座標" : "Google Geocoding";
-      setCastGeoStatus("success", `✔ 座標取得済 (${sourceText})`);
-    } else {
-      setCastGeoStatus("error", "座標を自動取得できませんでした。座標貼り付けで手動入力してください");
-    }
-  }, 650);
+  const result = await fillCastLatLngFromAddress({ silent: true, force: currentKey !== lastCastGeocodeKey });
+  if (runSeq !== castGeocodeSeq) return result;
+  if (result) {
+    const sourceText = result.source === "cache" ? "キャッシュから取得" : result.source === "existing" ? "入力済み座標" : "Google Geocoding";
+    setCastGeoStatus("success", `✔ 座標取得済 (${sourceText})`);
+  } else {
+    setCastGeoStatus("error", "座標を自動取得できませんでした。住所を確認して Enter で再試行するか、座標貼り付けで手動入力してください");
+  }
+  return result;
 }
 
 function loadGeocodeCache() {
@@ -462,34 +469,46 @@ async function geocodeAddressGoogle(address) {
 
   await loadGoogleMapsApi();
 
-  const result = await new Promise((resolve, reject) => {
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({
-      address: normalizedAddress,
-      region: "JP",
-      componentRestrictions: { country: "JP" }
-    }, (results, status) => {
-      if (status === "OK") {
-        const first = Array.isArray(results) ? results[0] : null;
-        if (!first?.geometry?.location) {
+  async function runOnce() {
+    return await new Promise((resolve, reject) => {
+      const geocoder = new google.maps.Geocoder();
+      geocoder.geocode({
+        address: normalizedAddress,
+        region: "JP",
+        componentRestrictions: { country: "JP" }
+      }, (results, status) => {
+        if (status === "OK") {
+          const first = Array.isArray(results) ? results[0] : null;
+          if (!first?.geometry?.location) {
+            resolve(null);
+            return;
+          }
+          const loc = first.geometry.location;
+          resolve({
+            lat: Number(loc.lat()),
+            lng: Number(loc.lng()),
+            source: "api"
+          });
+          return;
+        }
+        if (status === "ZERO_RESULTS") {
           resolve(null);
           return;
         }
-        const loc = first.geometry.location;
-        resolve({
-          lat: Number(loc.lat()),
-          lng: Number(loc.lng()),
-          source: "api"
-        });
-        return;
-      }
-      if (status === "ZERO_RESULTS") {
-        resolve(null);
-        return;
-      }
-      reject(new Error(`Google geocode error: ${status}`));
+        reject(new Error(`Google geocode error: ${status}`));
+      });
     });
-  });
+  }
+
+  let result = null;
+  try {
+    result = await runOnce();
+  } catch (error) {
+    const transient = /OVER_QUERY_LIMIT|UNKNOWN_ERROR|ERROR/.test(String(error?.message || ""));
+    if (!transient) throw error;
+    await new Promise(r => setTimeout(r, 700));
+    result = await runOnce();
+  }
 
   if (!result || !isValidLatLng(result.lat, result.lng)) return null;
 
@@ -5940,6 +5959,11 @@ function setupEvents() {
   els.saveCastBtn?.addEventListener("click", saveCast);
   els.guessAreaBtn?.addEventListener("click", guessCastArea);
   els.castAddress?.addEventListener("input", scheduleCastAutoGeocode);
+  els.castAddress?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    triggerCastAddressGeocodeNow();
+  });
   els.castLatLngText?.addEventListener("change", () => {
     const hasText = String(els.castLatLngText?.value || "").trim();
     if (!hasText) return;
