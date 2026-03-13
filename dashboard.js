@@ -1168,6 +1168,45 @@ function normalizeAreaLabel(area) {
   return value;
 }
 
+function getAreaDisplayGroup(area) {
+  const a = normalizeAreaLabel(area);
+
+  if (!a || a === "無し") return "その他";
+
+  if (
+    a.includes("松戸") || a.includes("新松戸") || a.includes("馬橋") ||
+    a.includes("八柱") || a.includes("北松戸") || a.includes("小金") ||
+    a.includes("常盤平") || a.includes("みのり台")
+  ) return "松戸方面";
+
+  if (a.includes("柏")) return "柏方面";
+
+  if (
+    a.includes("我孫子") || a.includes("取手") || a.includes("藤代") ||
+    a.includes("守谷") || a.includes("牛久") || a.includes("つくば")
+  ) return "我孫子・取手方面";
+
+  if (
+    a.includes("葛飾") || a.includes("足立") || a.includes("江戸川") ||
+    a.includes("墨田") || a.includes("江東") || a.includes("荒川") ||
+    a.includes("台東")
+  ) return "東京東方面";
+
+  if (
+    a.includes("市川") || a.includes("船橋") || a.includes("鎌ヶ谷") ||
+    a.includes("鎌ケ谷") || a.includes("千葉")
+  ) return "市川・船橋方面";
+
+  if (
+    a.includes("三郷") || a.includes("八潮") || a.includes("草加") ||
+    a.includes("吉川") || a.includes("越谷")
+  ) return "埼玉方面";
+
+  if (a.includes("流山") || a.includes("野田") || a.includes("柏の葉")) return "流山・野田方面";
+
+  return "その他";
+}
+
 const AREA_CANONICAL_PATTERNS = [
   ["松戸近郊", ["松戸近郊", "松戸方面", "松戸"]],
   ["葛飾方面", ["葛飾方面", "葛飾区", "葛飾"]],
@@ -3897,7 +3936,7 @@ function renderPlansTimeAreaMatrix() {
   const hours = [0, 1, 2, 3, 4, 5];
   const areas = [
     ...new Set(
-      currentPlansCache.map(x => normalizeAreaLabel(x.planned_area || "無し"))
+      currentPlansCache.map(x => getAreaDisplayGroup(normalizeAreaLabel(x.planned_area || "無し")))
     )
   ];
 
@@ -3925,7 +3964,7 @@ function renderPlansTimeAreaMatrix() {
       const rows = currentPlansCache.filter(
         plan =>
           Number(plan.plan_hour ?? 0) === hour &&
-          normalizeAreaLabel(plan.planned_area || "無し") === area
+          getAreaDisplayGroup(normalizeAreaLabel(plan.planned_area || "無し")) === area
       );
 
       if (!rows.length) {
@@ -4430,7 +4469,11 @@ function renderActualTimeAreaMatrix() {
   if (!els.actualTimeAreaMatrix) return;
 
   const hours = [0, 1, 2, 3, 4, 5];
-  const areas = [...new Set(currentActualsCache.map(x => normalizeAreaLabel(x.destination_area || "無し")))];
+  const areas = [
+    ...new Set(
+      currentActualsCache.map(x => getAreaDisplayGroup(normalizeAreaLabel(x.destination_area || "無し")))
+    )
+  ];
 
   if (!areas.length) {
     els.actualTimeAreaMatrix.innerHTML = `<div class="muted" style="padding:14px;">一覧がありません</div>`;
@@ -4455,7 +4498,7 @@ function renderActualTimeAreaMatrix() {
       const rows = currentActualsCache.filter(
         x =>
           Number(x.actual_hour ?? 0) === hour &&
-          normalizeAreaLabel(x.destination_area || "無し") === area
+          getAreaDisplayGroup(normalizeAreaLabel(x.destination_area || "無し")) === area
       );
 
       if (!rows.length) {
@@ -4862,10 +4905,7 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
 }
 
 function calcVehicleDailyStatsGlobal(vehicleId, items) {
-  const rows = (items || [])
-    .filter(i => Number(i.vehicle_id) === Number(vehicleId))
-    .filter(i => normalizeStatus(i.status) !== "cancel");
-
+  const rows = (items || []).filter(i => Number(i.vehicle_id) === Number(vehicleId));
   if (!rows.length) {
     return {
       totalKm: 0,
@@ -4876,82 +4916,53 @@ function calcVehicleDailyStatsGlobal(vehicleId, items) {
     };
   }
 
-  const groupedByHour = new Map();
-  rows.forEach(row => {
-    const hour = Number(row.actual_hour ?? 0);
-    if (!groupedByHour.has(hour)) groupedByHour.set(hour, []);
-    groupedByHour.get(hour).push(row);
-  });
+  const orderedRows = moveManualLastItemsToEnd(
+    sortItemsByNearestRoute(
+      [...rows].sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
+    )
+  );
 
-  let sendKm = 0;
-  let returnKm = 0;
-  let driveMinutes = 0;
-  let count = 0;
-
-  [...groupedByHour.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .forEach(([, hourRows]) => {
-      const orderedRows = moveManualLastItemsToEnd(
-        sortItemsByNearestRoute(
-          [...hourRows].sort((a, b) => Number(a.stop_order || 0) - Number(b.stop_order || 0))
-        )
-      );
-
-      if (!orderedRows.length) return;
-
-      const routeKm = Number(calculateRouteDistanceGlobal(orderedRows) || 0);
-      const lastRow = orderedRows[orderedRows.length - 1] || {};
-      const backKm = Number(lastRow.distance_km || 0);
-
-      sendKm += routeKm;
-      returnKm += backKm;
-      driveMinutes += estimateTravelMinutesByDistanceGlobal(routeKm);
-      driveMinutes += estimateTravelMinutesByDistanceGlobal(backKm);
-      driveMinutes += orderedRows.length * 1;
-      count += orderedRows.length;
-    });
-
+  const sendKm = Number(calculateRouteDistanceGlobal(orderedRows) || 0);
+  const lastRow = orderedRows[orderedRows.length - 1] || {};
+  const returnKm = Number(lastRow.distance_km || 0);
   const totalKm = Number((sendKm + returnKm).toFixed(1));
+
+  let driveMinutes =
+    estimateTravelMinutesByDistanceGlobal(sendKm) +
+    estimateTravelMinutesByDistanceGlobal(returnKm) +
+    orderedRows.length * 1;
 
   return {
     totalKm,
     sendKm: Number(sendKm.toFixed(1)),
     returnKm: Number(returnKm.toFixed(1)),
     driveMinutes: Math.round(driveMinutes),
-    count
+    count: orderedRows.length
   };
 }
 
 function buildRotationTimelineHtml(vehicles, activeItems) {
-  const dailyActuals = (currentActualsCache || []).filter(
-    item => normalizeStatus(item.status) !== "cancel"
-  );
-
   const timeline = (vehicles || [])
     .map(vehicle => {
-      const activeRows = moveManualLastItemsToEnd(
+      const rows = moveManualLastItemsToEnd(
         sortItemsByNearestRoute(
           (activeItems || [])
             .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
             .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
         )
       );
-
-      const dailyStats = calcVehicleDailyStatsGlobal(vehicle.id, dailyActuals);
-
-      const forecast = calcVehicleRotationForecastGlobal(vehicle, activeRows);
-      const hasAnyDailyRows = dailyStats.count > 0;
-
+      const forecast = calcVehicleRotationForecastGlobal(vehicle, rows);
+      const stats = calcVehicleDailyStatsGlobal(vehicle.id, activeItems);
       return {
         name: vehicle.driver_name || vehicle.plate_number || "-",
         readyTime: forecast.predictedReadyTime,
         returnAfterLabel: forecast.returnAfterLabel,
-        totalKm: dailyStats.totalKm,
-        sendKm: dailyStats.sendKm,
-        returnKm: dailyStats.returnKm,
-        driveMinutes: dailyStats.driveMinutes,
-        count: dailyStats.count,
-        hasRows: hasAnyDailyRows
+        totalKm: stats.totalKm,
+        sendKm: stats.sendKm,
+        returnKm: stats.returnKm,
+        driveMinutes: stats.driveMinutes,
+        count: stats.count,
+        hasRows: rows.length > 0
       };
     })
     .filter(x => x.hasRows)
