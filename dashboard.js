@@ -324,6 +324,7 @@ function isValidLatLng(lat, lng) {
 }
 
 const GOOGLE_GEOCODE_CACHE_KEY = "themis_google_geocode_cache_v1";
+const GOOGLE_ROUTE_DISTANCE_CACHE_KEY = "themis_google_route_distance_cache_v1";
 let lastCastGeocodeKey = "";
 let castGeocodeSeq = 0;
 let googleMapsApiPromise = null;
@@ -387,6 +388,130 @@ function saveGeocodeCache(cache) {
   try {
     localStorage.setItem(GOOGLE_GEOCODE_CACHE_KEY, JSON.stringify(cache || {}));
   } catch (_) {}
+}
+
+
+function loadRouteDistanceCache() {
+  try {
+    return JSON.parse(localStorage.getItem(GOOGLE_ROUTE_DISTANCE_CACHE_KEY) || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveRouteDistanceCache(cache) {
+  try {
+    localStorage.setItem(GOOGLE_ROUTE_DISTANCE_CACHE_KEY, JSON.stringify(cache || {}));
+  } catch (_) {}
+}
+
+function makeRouteDistanceCacheKey(address, lat, lng) {
+  const latNum = toNullableNumber(lat);
+  const lngNum = toNullableNumber(lng);
+  if (isValidLatLng(latNum, lngNum)) return `latlng:${latNum},${lngNum}`;
+  return `addr:${normalizeGeocodeAddressKey(address)}`;
+}
+
+async function getGoogleDrivingDistanceKmFromOrigin(address, lat, lng) {
+  const cacheKey = makeRouteDistanceCacheKey(address, lat, lng);
+  if (!cacheKey || cacheKey === 'addr:') return null;
+
+  const cache = loadRouteDistanceCache();
+  const cached = cache[cacheKey];
+  if (Number.isFinite(Number(cached))) return Number(cached);
+
+  await loadGoogleMapsApi();
+  if (!window.google?.maps?.DirectionsService) return null;
+
+  const destinationLat = toNullableNumber(lat);
+  const destinationLng = toNullableNumber(lng);
+  const destination = isValidLatLng(destinationLat, destinationLng)
+    ? { lat: destinationLat, lng: destinationLng }
+    : String(address || '').trim();
+
+  if (!destination) return null;
+
+  const runOnce = () => new Promise((resolve, reject) => {
+    const service = new google.maps.DirectionsService();
+    service.route({
+      origin: { lat: ORIGIN_LAT, lng: ORIGIN_LNG },
+      destination,
+      travelMode: google.maps.TravelMode.DRIVING,
+      region: 'JP'
+    }, (result, status) => {
+      if (status === 'OK') {
+        const leg = result?.routes?.[0]?.legs?.[0];
+        const meters = Number(leg?.distance?.value || 0);
+        if (meters > 0) {
+          resolve(Number((meters / 1000).toFixed(1)));
+          return;
+        }
+        resolve(null);
+        return;
+      }
+      if (status === 'ZERO_RESULTS' || status === 'NOT_FOUND') {
+        resolve(null);
+        return;
+      }
+      reject(new Error(`Google directions error: ${status}`));
+    });
+  });
+
+  let km = null;
+  try {
+    km = await runOnce();
+  } catch (error) {
+    const transient = /UNKNOWN_ERROR|ERROR|OVER_QUERY_LIMIT/.test(String(error?.message || ""));
+    if (!transient) throw error;
+    await new Promise(r => setTimeout(r, 700));
+    km = await runOnce();
+  }
+
+  if (Number.isFinite(Number(km)) && Number(km) > 0) {
+    cache[cacheKey] = Number(km);
+    saveRouteDistanceCache(cache);
+    return Number(km);
+  }
+
+  return null;
+}
+
+async function resolveDistanceKmFromOrigin(address, lat, lng) {
+  const latNum = toNullableNumber(lat);
+  const lngNum = toNullableNumber(lng);
+
+  try {
+    const routeKm = await getGoogleDrivingDistanceKmFromOrigin(address, latNum, lngNum);
+    if (Number.isFinite(Number(routeKm)) && Number(routeKm) > 0) return Number(routeKm);
+  } catch (error) {
+    console.warn('resolveDistanceKmFromOrigin fallback:', error);
+  }
+
+  if (isValidLatLng(latNum, lngNum)) {
+    return estimateRoadKmFromStation(latNum, lngNum);
+  }
+  return null;
+}
+
+async function ensureCastDistanceAutoFilled(lat, lng, address, force = false) {
+  if (!els.castDistanceKm) return null;
+  const current = toNullableNumber(els.castDistanceKm.value);
+  if (current !== null && !force) return current;
+  const autoKm = await resolveDistanceKmFromOrigin(address, lat, lng);
+  if (autoKm !== null) els.castDistanceKm.value = String(autoKm);
+  return autoKm;
+}
+
+async function resolveDistanceKmForCastRecord(cast, overrideAddress = '') {
+  let distance = toNullableNumber(cast?.distance_km);
+  if (distance !== null) return distance;
+
+  const lat = toNullableNumber(cast?.latitude);
+  const lng = toNullableNumber(cast?.longitude);
+  const address = String(overrideAddress || cast?.address || '').trim();
+
+  if (!address && !isValidLatLng(lat, lng)) return null;
+  return await resolveDistanceKmFromOrigin(address, lat, lng);
 }
 
 function loadGoogleMapsApi() {
@@ -547,7 +672,8 @@ async function fillCastLatLngFromAddress(options = {}) {
       els.castArea.value = normalizeAreaLabel(guessArea(result.lat, result.lng, address));
     }
     if (els.castDistanceKm && !String(els.castDistanceKm.value || "").trim()) {
-      els.castDistanceKm.value = String(estimateRoadKmFromStation(result.lat, result.lng));
+      const autoKm = await resolveDistanceKmFromOrigin(address, result.lat, result.lng);
+      if (autoKm !== null) els.castDistanceKm.value = String(autoKm);
     }
 
     lastCastGeocodeKey = currentKey;
@@ -1483,10 +1609,14 @@ function getLastTripHomePriorityWeight(clusterArea, homeArea, isLastRun, isDefau
   return weight * 0.45;
 }
 
-function openGoogleMap(address) {
-  if (!address) return;
+function openGoogleMap(address, lat = null, lng = null) {
   const origin = encodeURIComponent(ORIGIN_LABEL);
-  const dest = encodeURIComponent(address);
+  const latNum = toNullableNumber(lat);
+  const lngNum = toNullableNumber(lng);
+  let dest = "";
+  if (isValidLatLng(latNum, lngNum)) dest = encodeURIComponent(`${latNum},${lngNum}`);
+  else dest = encodeURIComponent(String(address || "").trim());
+  if (!dest) return;
   window.open(
     `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=driving`,
     "_blank"
@@ -2007,7 +2137,7 @@ function resetCastForm() {
   if (els.castLat) els.castLat.value = "";
   if (els.castLng) els.castLng.value = "";
   lastCastGeocodeKey = "";
-  setCastGeoStatus("idle", "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます");
+  setCastGeoStatus("idle", "住所入力後 Enter で座標取得 / 未取得時は座標貼り付けから手動反映できます");
   if (els.cancelEditBtn) els.cancelEditBtn.classList.add("hidden");
 }
 
@@ -2031,7 +2161,7 @@ function fillCastForm(cast) {
   if (cast.latitude != null && cast.longitude != null) {
     setCastGeoStatus("success", "✔ 座標取得済");
   } else {
-    setCastGeoStatus("idle", "住所入力で自動取得 / 未取得時は座標貼り付けから手動反映できます");
+    setCastGeoStatus("idle", "住所入力後 Enter で座標取得 / 未取得時は座標貼り付けから手動反映できます");
   }
   if (els.cancelEditBtn) els.cancelEditBtn.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2076,9 +2206,7 @@ async function saveCast() {
 
   const manualArea = els.castArea?.value.trim() || "";
   const autoArea = guessArea(lat, lng, address);
-  const autoDistance = isValidLatLng(lat, lng)
-    ? estimateRoadKmFromStation(lat, lng)
-    : null;
+  const autoDistance = await resolveDistanceKmFromOrigin(address, lat, lng);
 
   const payload = {
     name,
@@ -3215,21 +3343,14 @@ function clearActualCastDerivedFields() {
   if (els.actualDistanceKm) els.actualDistanceKm.value = "";
 }
 
-function syncPlanFieldsFromCastInput(forceFill = false) {
+async function syncPlanFieldsFromCastInput(forceFill = false) {
   const cast = findCastByInputValue(els.planCastSelect?.value || "");
   if (!cast) {
     clearPlanCastDerivedFields();
     return null;
   }
 
-  let distance = toNullableNumber(cast.distance_km);
-  if (distance === null) {
-    const lat = toNullableNumber(cast.latitude);
-    const lng = toNullableNumber(cast.longitude);
-    if (isValidLatLng(lat, lng)) {
-      distance = estimateRoadKmFromStation(lat, lng);
-    }
-  }
+  let distance = await resolveDistanceKmForCastRecord(cast);
 
   if (els.planAddress) els.planAddress.value = cast.address || "";
   if (els.planArea) {
@@ -3247,21 +3368,14 @@ function syncPlanFieldsFromCastInput(forceFill = false) {
   return cast;
 }
 
-function syncActualFieldsFromCastInput(forceFill = false) {
+async function syncActualFieldsFromCastInput(forceFill = false) {
   const cast = findCastByInputValue(els.castSelect?.value || "");
   if (!cast) {
     clearActualCastDerivedFields();
     return null;
   }
 
-  let distance = toNullableNumber(cast.distance_km);
-  if (distance === null) {
-    const lat = toNullableNumber(cast.latitude);
-    const lng = toNullableNumber(cast.longitude);
-    if (isValidLatLng(lat, lng)) {
-      distance = estimateRoadKmFromStation(lat, lng);
-    }
-  }
+  let distance = await resolveDistanceKmForCastRecord(cast);
 
   if (els.actualAddress) els.actualAddress.value = cast.address || "";
   if (els.actualArea) {
@@ -3298,7 +3412,7 @@ function fillPlanForm(plan) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function fillPlanFormFromSelectedCast() {
+async function fillPlanFormFromSelectedCast() {
   const cast = findCastByInputValue(els.planCastSelect?.value || "");
   if (!cast) return;
 
@@ -3318,14 +3432,7 @@ function fillPlanFormFromSelectedCast() {
   }
 
   if (els.planDistanceKm && !els.planDistanceKm.value.trim()) {
-    let distance = toNullableNumber(cast.distance_km);
-    if (distance === null) {
-      const lat = toNullableNumber(cast.latitude);
-      const lng = toNullableNumber(cast.longitude);
-      if (isValidLatLng(lat, lng)) {
-        distance = estimateRoadKmFromStation(lat, lng);
-      }
-    }
+    const distance = await resolveDistanceKmForCastRecord(cast);
     els.planDistanceKm.value = distance ?? "";
   }
 }
@@ -3657,7 +3764,11 @@ async function savePlan() {
   const planDate = els.planDate?.value || todayStr();
   const hour = Number(els.planHour?.value || 0);
   const address = els.planAddress?.value.trim() || "";
-  const distanceKm = toNullableNumber(els.planDistanceKm?.value);
+  let distanceKm = toNullableNumber(els.planDistanceKm?.value);
+  if (distanceKm === null) {
+    distanceKm = await resolveDistanceKmForCastRecord(cast, address);
+    if (distanceKm !== null && els.planDistanceKm) els.planDistanceKm.value = String(distanceKm);
+  }
   const area = els.planArea?.value.trim() || "";
   const note = els.planNote?.value.trim() || "";
 
@@ -4055,7 +4166,11 @@ async function saveActual() {
   const hour = Number(els.actualHour?.value || 0);
   const address = els.actualAddress?.value.trim() || "";
   const area = normalizeAreaLabel(els.actualArea?.value.trim() || "無し");
-  const distanceKm = toNullableNumber(els.actualDistanceKm?.value);
+  let distanceKm = toNullableNumber(els.actualDistanceKm?.value);
+  if (distanceKm === null) {
+    distanceKm = await resolveDistanceKmForCastRecord(cast, address);
+    if (distanceKm !== null && els.actualDistanceKm) els.actualDistanceKm.value = String(distanceKm);
+  }
   const status = els.actualStatus?.value || "pending";
   const note = els.actualNote?.value.trim() || "";
 
@@ -5958,7 +6073,16 @@ function setupEvents() {
 
   els.saveCastBtn?.addEventListener("click", saveCast);
   els.guessAreaBtn?.addEventListener("click", guessCastArea);
-  els.castAddress?.addEventListener("input", scheduleCastAutoGeocode);
+  els.castAddress?.addEventListener("input", () => {
+    const nextKey = normalizeGeocodeAddressKey(els.castAddress?.value || "");
+    if (nextKey && nextKey !== lastCastGeocodeKey) {
+      if (els.castLat) els.castLat.value = "";
+      if (els.castLng) els.castLng.value = "";
+      if (els.castLatLngText) els.castLatLngText.value = "";
+      if (els.castDistanceKm) els.castDistanceKm.value = "";
+    }
+    scheduleCastAutoGeocode();
+  });
   els.castAddress?.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -5969,7 +6093,7 @@ function setupEvents() {
     if (!hasText) return;
     applyCastLatLng();
   });
-  els.openGoogleMapBtn?.addEventListener("click", () => openGoogleMap(els.castAddress?.value || ""));
+  els.openGoogleMapBtn?.addEventListener("click", () => openGoogleMap(els.castAddress?.value || "", els.castLat?.value, els.castLng?.value));
   els.cancelEditBtn?.addEventListener("click", resetCastForm);
   els.importCsvBtn?.addEventListener("click", () => els.csvFileInput?.click());
   els.exportCsvBtn?.addEventListener("click", exportCastsCsv);
