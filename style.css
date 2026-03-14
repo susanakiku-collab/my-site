@@ -594,6 +594,19 @@ textarea{
   margin-bottom:10px;
 }
 
+.grouped-area-heading{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:10px;
+}
+
+.grouped-area-sub{
+  font-size:12px;
+  color:#a7b3c7;
+}
+
 .grouped-plan-list,
 .grouped-actual-list{
   display:grid;
