@@ -4888,6 +4888,115 @@ function getCurrentClockMinutes() {
   return now.getHours() * 60 + now.getMinutes();
 }
 
+
+const AREA_AVERAGE_SPEED_KMH = {
+  "松戸近郊": 33,
+  "柏方面": 33,
+  "柏の葉方面": 34,
+  "流山方面": 33,
+  "野田方面": 34,
+  "我孫子方面": 36,
+  "取手方面": 39,
+  "藤代方面": 39,
+  "守谷方面": 39,
+  "牛久方面": 39,
+  "葛飾方面": 27,
+  "足立方面": 27,
+  "江戸川方面": 27,
+  "墨田方面": 27,
+  "江東方面": 27,
+  "荒川方面": 27,
+  "台東方面": 27,
+  "市川方面": 31,
+  "船橋方面": 31,
+  "鎌ヶ谷方面": 31,
+  "三郷方面": 34,
+  "八潮方面": 34,
+  "草加方面": 34,
+  "吉川方面": 34,
+  "越谷方面": 34,
+  "千葉方面": 31
+};
+
+function normalizeAreaSpeedLookupInput(input) {
+  if (Array.isArray(input)) return getRepresentativeAreaFromRows(input);
+  if (input && typeof input === "object") {
+    return normalizeAreaLabel(
+      input.destination_area ||
+      input.planned_area ||
+      input.cluster_area ||
+      input.area ||
+      input.home_area ||
+      input.vehicle_area ||
+      ""
+    );
+  }
+  return normalizeAreaLabel(input || "");
+}
+
+function getRepresentativeAreaFromRows(rows) {
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!list.length) return "";
+
+  const counts = new Map();
+  list.forEach(row => {
+    const area = normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.cluster_area || row?.casts?.area || "");
+    if (!area || area === "無し") return;
+    counts.set(area, Number(counts.get(area) || 0) + 1);
+  });
+
+  if (!counts.size) {
+    return normalizeAreaLabel(
+      list[list.length - 1]?.destination_area ||
+      list[list.length - 1]?.planned_area ||
+      list[list.length - 1]?.cluster_area ||
+      list[list.length - 1]?.casts?.area ||
+      ""
+    );
+  }
+
+  const sorted = [...counts.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return a[0].localeCompare(b[0], "ja");
+  });
+
+  return normalizeAreaLabel(sorted[0]?.[0] || "");
+}
+
+function getAreaAverageSpeedKmh(areaInput, distanceKm = 0) {
+  const rawArea = normalizeAreaSpeedLookupInput(areaInput);
+  const canonical = getCanonicalArea(rawArea);
+
+  if (AREA_AVERAGE_SPEED_KMH[canonical]) {
+    return Number(AREA_AVERAGE_SPEED_KMH[canonical]);
+  }
+
+  if (AREA_AVERAGE_SPEED_KMH[rawArea]) {
+    return Number(AREA_AVERAGE_SPEED_KMH[rawArea]);
+  }
+
+  if (canonical && /方面$/.test(canonical)) {
+    if (/取手|藤代|守谷|牛久/.test(canonical)) return 39;
+    if (/吉川|三郷|八潮|草加|越谷/.test(canonical)) return 34;
+    if (/市川|船橋|鎌ヶ谷|鎌ケ谷|千葉/.test(canonical)) return 31;
+    if (/葛飾|足立|江戸川|墨田|江東|荒川|台東/.test(canonical)) return 27;
+    if (/我孫子/.test(canonical)) return 36;
+    if (/柏|流山|野田|松戸/.test(canonical)) return 33;
+  }
+
+  const km = Number(distanceKm || 0);
+  if (km <= 10) return 30;
+  if (km <= 25) return 33;
+  return 36;
+}
+
+function estimateTravelMinutesByAreaSpeed(distanceKm, areaInput) {
+  const km = Math.max(0, Number(distanceKm || 0));
+  const speed = getAreaAverageSpeedKmh(areaInput, km);
+  if (!speed) return 0;
+  return Math.round((km / speed) * 60);
+}
+
 function formatClockTimeFromMinutesGlobal(totalMinutes) {
   const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
   const h = Math.floor(safe / 60) % 24;
@@ -4895,19 +5004,19 @@ function formatClockTimeFromMinutesGlobal(totalMinutes) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function getDistanceZoneInfoGlobal(distanceKm) {
+function getDistanceZoneInfoGlobal(distanceKm, areaInput = "") {
   const km = Number(distanceKm || 0);
-  if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
-  if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
-  return { key: "long", label: "長距離", speedKmh: 35 };
+  const speedKmh = getAreaAverageSpeedKmh(areaInput, km);
+  const canonical = getCanonicalArea(normalizeAreaSpeedLookupInput(areaInput));
+  return {
+    key: canonical || (km <= 10 ? "short" : km <= 25 ? "middle" : "long"),
+    label: canonical || "-",
+    speedKmh
+  };
 }
 
-function estimateTravelMinutesByDistanceGlobal(distanceKm) {
-  const km = Math.max(0, Number(distanceKm || 0));
-  const zone = getDistanceZoneInfoGlobal(km);
-  const speed = Number(zone.speedKmh || 30);
-  if (!speed) return 0;
-  return Math.round((km / speed) * 60);
+function estimateTravelMinutesByDistanceGlobal(distanceKm, areaInput = "") {
+  return estimateTravelMinutesByAreaSpeed(distanceKm, areaInput);
 }
 
 function calculateRouteDistanceGlobal(items) {
@@ -4955,15 +5064,17 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
   const routeDistanceKm = Number(calculateRouteDistanceGlobal(rows) || 0);
   const lastRow = rows[rows.length - 1] || {};
   const returnDistanceKm = Number(lastRow.distance_km || 0);
-  const primaryZone = getDistanceZoneInfoGlobal(Math.max(routeDistanceKm, returnDistanceKm));
+    const representativeArea = getRepresentativeAreaFromRows(rows);
+  const returnArea = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || representativeArea || "");
+  const primaryZone = getDistanceZoneInfoGlobal(Math.max(routeDistanceKm, returnDistanceKm), representativeArea);
 
   let departDelayMinutes = 20;
   if (baseHour === 3) departDelayMinutes = 18;
   else if (baseHour === 4) departDelayMinutes = 12;
   else if (baseHour >= 5) departDelayMinutes = 8;
 
-  const outboundMinutes = estimateTravelMinutesByDistanceGlobal(routeDistanceKm);
-  const returnMinutes = estimateTravelMinutesByDistanceGlobal(returnDistanceKm);
+  const outboundMinutes = estimateTravelMinutesByDistanceGlobal(routeDistanceKm, representativeArea);
+  const returnMinutes = estimateTravelMinutesByDistanceGlobal(returnDistanceKm, returnArea || representativeArea);
   const dropoffMinutes = rows.length * 1;
 
   const baseStartMinutes = Number.isFinite(lastAutoDispatchRunAtMinutes) && lastAutoDispatchRunAtMinutes !== null
@@ -4979,8 +5090,9 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
     const firstOnly = [rows[0]];
     const singleRouteDistanceKm = Number(calculateRouteDistanceGlobal(firstOnly) || rows[0].distance_km || 0);
     const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
-    const singleOutbound = estimateTravelMinutesByDistanceGlobal(singleRouteDistanceKm);
-    const singleReturn = estimateTravelMinutesByDistanceGlobal(singleReturnDistanceKm);
+    const singleArea = normalizeAreaLabel(rows[0]?.destination_area || rows[0]?.casts?.area || representativeArea || "");
+    const singleOutbound = estimateTravelMinutesByDistanceGlobal(singleRouteDistanceKm, singleArea);
+    const singleReturn = estimateTravelMinutesByDistanceGlobal(singleReturnDistanceKm, singleArea);
     const singlePredictedReturnMinutes = Math.round(singleOutbound + 1 + singleReturn);
     extraSharedDelayMinutes = Math.max(0, predictedReturnMinutes - singlePredictedReturnMinutes);
   }
@@ -5021,9 +5133,12 @@ function calcVehicleDailyStatsGlobal(vehicleId, items) {
   const returnKm = Number(lastRow.distance_km || 0);
   const totalKm = Number((sendKm + returnKm).toFixed(1));
 
+  const representativeArea = getRepresentativeAreaFromRows(orderedRows);
+  const returnArea = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || representativeArea || "");
+
   let driveMinutes =
-    estimateTravelMinutesByDistanceGlobal(sendKm) +
-    estimateTravelMinutesByDistanceGlobal(returnKm) +
+    estimateTravelMinutesByDistanceGlobal(sendKm, representativeArea) +
+    estimateTravelMinutesByDistanceGlobal(returnKm, returnArea || representativeArea) +
     orderedRows.length * 1;
 
   return {
@@ -5114,22 +5229,18 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     return 8;
   }
 
-  function estimateTravelMinutesByDistance(distanceKm) {
-    const km = Math.max(0, Number(distanceKm || 0));
-    const zone = getDistanceZoneForAi(km);
-    const speed = getZoneSpeedKmh(zone);
-    if (!speed) return 0;
-    return Math.round((km / speed) * 60);
+  function estimateTravelMinutesByDistance(distanceKm, areaInput = "") {
+    return estimateTravelMinutesByAreaSpeed(distanceKm, areaInput);
   }
 
   function estimateDropoffMinutes(stopCount) {
     return Math.max(1, Number(stopCount || 1)) * 1;
   }
 
-  function estimateRotationReadyMinutes(hour, distanceKm, stopCount) {
-    const travelOut = estimateTravelMinutesByDistance(distanceKm);
+  function estimateRotationReadyMinutes(hour, distanceKm, stopCount, areaInput = "") {
+    const travelOut = estimateTravelMinutesByDistance(distanceKm, areaInput);
     const dropoff = estimateDropoffMinutes(stopCount);
-    const returnTrip = estimateTravelMinutesByDistance(distanceKm);
+    const returnTrip = estimateTravelMinutesByDistance(distanceKm, areaInput);
     return getBaseDispatchDelayMinutes(hour) + travelOut + dropoff + returnTrip;
   }
 
@@ -5151,8 +5262,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     return Math.max(0, Math.round(raw));
   }
 
-  function getRotationPredictionScore(hour, distanceKm, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount) {
-    const predictedReadyMinutes = estimateRotationReadyMinutes(hour, distanceKm, stopCount);
+  function getRotationPredictionScore(hour, distanceKm, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount, areaInput = "") {
+    const predictedReadyMinutes = estimateRotationReadyMinutes(hour, distanceKm, stopCount, areaInput);
     const extraDelay = estimateRideShareExtraDelay(
       distanceKm,
       stopCount,
@@ -5182,7 +5293,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     };
   }
 
-  function getNormalRunReturnPenalty(hour, addedDistance, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount) {
+  function getNormalRunReturnPenalty(hour, addedDistance, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount, areaInput = "") {
     const rotation = getRotationPredictionScore(
       hour,
       addedDistance,
@@ -5190,7 +5301,8 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
       sameHourLoad,
       routeFlowScore,
       routeContinuityPenalty,
-      idleVehicleCount
+      idleVehicleCount,
+      areaInput
     );
     return rotation.score;
   }
@@ -5202,11 +5314,15 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   }
 
-  function getDistanceZoneInfo(distanceKm) {
+  function getDistanceZoneInfo(distanceKm, areaInput = "") {
     const km = Number(distanceKm || 0);
-    if (km <= 10) return { key: "short", label: "近距離", speedKmh: 25 };
-    if (km <= 25) return { key: "middle", label: "中距離", speedKmh: 30 };
-    return { key: "long", label: "長距離", speedKmh: 35 };
+    const speedKmh = getAreaAverageSpeedKmh(areaInput, km);
+    const canonical = getCanonicalArea(normalizeAreaSpeedLookupInput(areaInput));
+    return {
+      key: canonical || (km <= 10 ? "short" : km <= 25 ? "middle" : "long"),
+      label: canonical || "-",
+      speedKmh
+    };
   }
 
   function getExpectedDepartureDelayMinutes(baseHour) {
@@ -5243,11 +5359,13 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
     const lastRow = rows[rows.length - 1] || {};
     const returnDistanceKm = Number(lastRow.distance_km || 0);
-    const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm));
+        const representativeArea = getRepresentativeAreaFromRows(rows);
+    const returnArea = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || representativeArea || "");
+    const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm), representativeArea);
   
     const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
-    const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm);
-    const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm);
+    const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm, representativeArea);
+    const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm, returnArea || representativeArea);
     const dropoffMinutes = rows.length * 1;
   
     const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
@@ -5259,8 +5377,9 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
       const firstOnly = [rows[0]];
       const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
       const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
-      const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm);
-      const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm);
+      const singleArea = normalizeAreaLabel(rows[0]?.destination_area || rows[0]?.casts?.area || representativeArea || "");
+      const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm, singleArea);
+      const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm, singleArea);
       const singleDropoff = 1;
       const singlePredictedReturnAbs = predictedDepartureAbs + singleOutbound + singleDropoff + singleReturn;
       extraSharedDelayMinutes = Math.max(0, predictedReturnAbs - singlePredictedReturnAbs);
@@ -5950,7 +6069,7 @@ function getVehiclePersistentDailyStats(vehicleId, orderedRows) {
     const reportedDistance = Number(Number(reportedRow.distance_km || 0).toFixed(1));
     const jobCount = actualRows.length || rows.length || 0;
     const driveMinutes = Math.round(
-      estimateTravelMinutesByDistanceGlobal(reportedDistance) + jobCount
+      estimateTravelMinutesByDistanceGlobal(reportedDistance, getRepresentativeAreaFromRows(baseRows)) + jobCount
     );
 
     return {
@@ -5979,8 +6098,8 @@ function getVehiclePersistentDailyStats(vehicleId, orderedRows) {
   const returnKm = Number(lastRow.distance_km || 0);
   const totalKm = Number((sendKm + returnKm).toFixed(1));
   const driveMinutes = Math.round(
-    estimateTravelMinutesByDistanceGlobal(sendKm) +
-      estimateTravelMinutesByDistanceGlobal(returnKm) +
+    estimateTravelMinutesByDistanceGlobal(sendKm, getRepresentativeAreaFromRows(baseRows)) +
+      estimateTravelMinutesByDistanceGlobal(returnKm, normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || getRepresentativeAreaFromRows(baseRows) || "")) +
       baseRows.length
   );
 
@@ -6002,7 +6121,7 @@ function getVehicleDailySummary(vehicle, orderedRows) {
     ? Number(summary.sendKm || 0)
     : Number(summary.totalKm || 0);
   const sendOnlyMinutes = Math.round(
-    estimateTravelMinutesByDistanceGlobal(Number(summary.sendKm || 0)) + Number(summary.jobCount || 0)
+    estimateTravelMinutesByDistanceGlobal(Number(summary.sendKm || 0), getRepresentativeAreaFromRows(orderedRows)) + Number(summary.jobCount || 0)
   );
   const displayDriveMinutes = (!summary.hasFixedReport && isLastTripDriver)
     ? sendOnlyMinutes
