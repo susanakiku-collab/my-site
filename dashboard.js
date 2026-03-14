@@ -5,7 +5,6 @@ const {
   ORIGIN_LAT,
   ORIGIN_LNG
 } = window.APP_CONFIG;
-const AI_SERVER = "https://render-server-8fog.onrender.com";
 
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
@@ -5637,128 +5636,6 @@ async function applyAutoDispatchAssignments(assignments) {
   }
 }
 
-
-
-async function callAI(prompt) {
-  try {
-    const res = await fetch(`${AI_SERVER}/api/ai`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ prompt })
-    });
-
-    const data = await res.json();
-    return data;
-
-  } catch (err) {
-    console.error("AI call error:", err);
-    return null;
-  }
-}
-
-function buildAIDispatchPrompt(assignments, items, vehicles) {
-  const itemMap = new Map(items.map(item => [Number(item.id), item]));
-  const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
-
-  const payload = assignments.map(a => {
-    const item = itemMap.get(Number(a.item_id));
-    const vehicle = vehicleMap.get(Number(a.vehicle_id));
-
-    return {
-      item_id: Number(a.item_id),
-      actual_hour: Number(a.actual_hour || 0),
-      cast_name: item?.casts?.name || "",
-      area: normalizeAreaLabel(item?.destination_area || item?.cluster_area || "無し"),
-      distance_km: Number(item?.distance_km || a.distance_km || 0),
-      vehicle_id: Number(a.vehicle_id),
-      driver_name: vehicle?.driver_name || a.driver_name || "",
-      vehicle_area: normalizeAreaLabel(vehicle?.vehicle_area || ""),
-      home_area: normalizeAreaLabel(vehicle?.home_area || "")
-    };
-  });
-
-  return `
-あなたは深夜送迎の配車最適化AIです。
-以下の仮配車を見て、必要があれば改善してください。
-
-目的:
-1. 同方面をなるべくまとめる
-2. ラスト便はドライバー帰宅方向を優先
-3. 車両ごとの距離バランスをなるべく均等にする
-4. 無理な逆方向配車を避ける
-5. 既存の item_id は絶対に消さない
-6. 存在しない vehicle_id を使わない
-
-返答ルール:
-- JSONのみ返す
-- 形式は {"assignments":[{"item_id":1,"vehicle_id":2,"actual_hour":0}]}
-- 修正不要でも assignments をそのまま返す
-
-仮配車:
-${JSON.stringify(payload, null, 2)}
-  `.trim();
-}
-
-function normalizeAIAssignments(aiResult, baseAssignments, vehicles) {
-  const validVehicleIds = new Set(vehicles.map(v => Number(v.id)));
-  const baseMap = new Map(baseAssignments.map(a => [Number(a.item_id), a]));
-  const raw = aiResult?.text || aiResult?.result || aiResult;
-
-  let parsed = null;
-
-  try {
-    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-  } catch (e) {
-    console.warn("AI JSON parse failed:", e);
-    return baseAssignments;
-  }
-
-  const aiAssignments = Array.isArray(parsed?.assignments) ? parsed.assignments : null;
-  if (!aiAssignments?.length) return baseAssignments;
-
-  const next = baseAssignments.map(a => ({ ...a }));
-
-  aiAssignments.forEach(row => {
-    const itemId = Number(row.item_id);
-    const vehicleId = Number(row.vehicle_id);
-    const hour = Number(row.actual_hour);
-
-    if (!baseMap.has(itemId)) return;
-    if (!validVehicleIds.has(vehicleId)) return;
-
-    const idx = next.findIndex(x => Number(x.item_id) === itemId);
-    if (idx < 0) return;
-
-    next[idx].vehicle_id = vehicleId;
-    if (Number.isFinite(hour)) next[idx].actual_hour = hour;
-  });
-
-  const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
-  next.forEach(a => {
-    const v = vehicleMap.get(Number(a.vehicle_id));
-    a.driver_name = v?.driver_name || "";
-  });
-
-  return next;
-}
-
-async function tryAIOptimizeAssignments(assignments, items, vehicles) {
-  try {
-    const prompt = buildAIDispatchPrompt(assignments, items, vehicles);
-    const aiResult = await callAI(prompt);
-    if (!aiResult?.ok && !aiResult?.text && !aiResult?.result) {
-      return assignments;
-    }
-    return normalizeAIAssignments(aiResult, assignments, vehicles);
-  } catch (err) {
-    console.error("AI optimize error:", err);
-    return assignments;
-  }
-}
-
-
 async function runAutoDispatch() {
   const selectedVehicles = getSelectedVehiclesForToday();
   if (!selectedVehicles.length) {
@@ -5782,10 +5659,6 @@ async function runAutoDispatch() {
     assignments = buildFallbackAssignments(activeItems, selectedVehicles);
   }
 
-  if (assignments.length) {
-    assignments = await tryAIOptimizeAssignments(assignments, activeItems, selectedVehicles);
-  }
-
   assignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
 
   if (!assignments.length) {
@@ -5807,6 +5680,78 @@ async function runAutoDispatch() {
   renderDailyDispatchResult();
 }
 
+
+
+function getVehicleRotationForecastSafe(vehicle, orderedRows) {
+  try {
+    if (typeof calcVehicleRotationForecast === "function") {
+      return calcVehicleRotationForecast(vehicle, orderedRows);
+    }
+  } catch (e) {
+    console.warn("calcVehicleRotationForecast fallback:", e);
+  }
+  try {
+    if (typeof calcVehicleRotationForecastGlobal === "function") {
+      return calcVehicleRotationForecastGlobal(vehicle, orderedRows);
+    }
+  } catch (e) {
+    console.warn("calcVehicleRotationForecastGlobal fallback:", e);
+  }
+  return {
+    routeDistanceKm: 0,
+    returnDistanceKm: 0,
+    zoneLabel: "-",
+    predictedDepartureTime: "-",
+    predictedReturnTime: "-",
+    predictedReadyTime: "-",
+    predictedReturnMinutes: 0,
+    extraSharedDelayMinutes: 0,
+    stopCount: Array.isArray(orderedRows) ? orderedRows.length : 0,
+    returnAfterLabel: "-"
+  };
+}
+
+function safeBuildRotationTimelineHtml(vehicles, activeItems) {
+  try {
+    if (typeof buildRotationTimelineHtml === "function") {
+      return buildRotationTimelineHtml(vehicles, activeItems);
+    }
+  } catch (e) {
+    console.warn("buildRotationTimelineHtml fallback:", e);
+  }
+  const list = (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
+    const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
+      item => Number(item.vehicle_id) === Number(vehicle.id)
+    );
+    const forecast = getVehicleRotationForecastSafe(vehicle, rows);
+    return {
+      name: vehicle?.driver_name || vehicle?.plate_number || "-",
+      readyTime: forecast.predictedReadyTime || "-",
+      returnTime: forecast.predictedReturnTime || "-",
+      rotationMinutes: Number(forecast.predictedReturnMinutes || 0),
+      hasRows: rows.length > 0
+    };
+  }).filter(x => x.hasRows).sort((a, b) => (a.readyTime || "").localeCompare(b.readyTime || ""));
+
+  if (!list.length) return "";
+
+  return `
+    <div class="panel-card" style="margin-bottom:16px;">
+      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        ${list.map(item => `
+          <div class="chip" style="padding:8px 12px;">
+            <strong>${escapeHtml(item.name)}</strong>
+            / 戻り ${escapeHtml(item.returnTime)}
+            / 次便 ${escapeHtml(item.readyTime)}
+            / 回転 ${item.rotationMinutes}分
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
 
@@ -5821,7 +5766,7 @@ function renderDailyDispatchResult() {
   );
 
   try {
-    const timelineHtml = buildRotationTimelineHtml(vehicles, activeItems);
+    const timelineHtml = safeBuildRotationTimelineHtml(vehicles, activeItems);
     const cardsHtml = vehicles
       .map(vehicle => {
         const rows = activeItems
@@ -5840,7 +5785,7 @@ function renderDailyDispatchResult() {
 
         const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
         const totalDistance = calculateRouteDistance(orderedRows);
-        const forecast = calcVehicleRotationForecastGlobal(vehicle, orderedRows);
+        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
 
         const body = orderedRows.length
           ? orderedRows
