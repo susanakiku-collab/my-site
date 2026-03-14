@@ -209,7 +209,9 @@ function renderManualLastVehicleInfo() {
   const text = state?.vehicle_id
     ? `ラスト便車両: ${state.driver_name || "-"} / 帰宅:${normalizeAreaLabel(state.home_area || "無し")}`
     : "ラスト便車両: なし";
-  if (els.manualLastVehicleInfo) els.manualLastVehicleInfo.textContent = text;
+  const checkedNames = getDriverLastTripCheckedNames();
+  const extra = checkedNames.length ? ` / ラスト便チェック: ${checkedNames.join("・")}` : "";
+  if (els.manualLastVehicleInfo) els.manualLastVehicleInfo.textContent = text + extra;
 }
 
 function setManualLastVehicle(vehicleId) {
@@ -234,6 +236,58 @@ function isManualLastVehicle(vehicleId, dateStr = getCurrentDispatchDateStr()) {
   return Number(vehicleId) === Number(getManualLastVehicleId(dateStr));
 }
 
+function getDriverLastTripStorageKey(dateStr = getCurrentDispatchDateStr()) {
+  return `THEMIS_DRIVER_LAST_TRIP_FLAGS_${dateStr}`;
+}
+
+function getDriverLastTripState(dateStr = getCurrentDispatchDateStr()) {
+  try {
+    const raw = window.localStorage.getItem(getDriverLastTripStorageKey(dateStr));
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error(error);
+    return {};
+  }
+}
+
+function saveDriverLastTripState(state, dateStr = getCurrentDispatchDateStr()) {
+  try {
+    window.localStorage.setItem(
+      getDriverLastTripStorageKey(dateStr),
+      JSON.stringify(state || {})
+    );
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function isDriverLastTripChecked(vehicleId, dateStr = getCurrentDispatchDateStr()) {
+  const state = getDriverLastTripState(dateStr);
+  return Boolean(state[String(Number(vehicleId || 0))]);
+}
+
+function hasAnyDriverLastTripChecked(dateStr = getCurrentDispatchDateStr()) {
+  const state = getDriverLastTripState(dateStr);
+  return Object.values(state).some(Boolean);
+}
+
+function setDriverLastTripChecked(vehicleId, checked, dateStr = getCurrentDispatchDateStr()) {
+  const key = String(Number(vehicleId || 0));
+  const state = getDriverLastTripState(dateStr);
+
+  if (checked) state[key] = true;
+  else delete state[key];
+
+  saveDriverLastTripState(state, dateStr);
+}
+
+function getDriverLastTripCheckedNames(dateStr = getCurrentDispatchDateStr()) {
+  const state = getDriverLastTripState(dateStr);
+  return allVehiclesCache
+    .filter(vehicle => Boolean(state[String(Number(vehicle.id || 0))]))
+    .map(vehicle => vehicle.driver_name || vehicle.plate_number || "-");
+}
 
 
 function isManualLastTripItem() {
@@ -4579,22 +4633,47 @@ function renderDailyVehicleChecklist() {
        ${escapeHtml(vehicle.driver_name || "-")}
       （${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))} / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))} / 定員${vehicle.seat_capacity ?? "-"}）
      </div>
-      <input class="vehicle-check-input" type="checkbox" data-id="${vehicle.id}" ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""} />
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+        <label style="display:inline-flex; align-items:center; gap:6px; color:#e8eef9; font-size:13px;">
+          <input class="vehicle-check-input" type="checkbox" data-id="${vehicle.id}" ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? "checked" : ""} />
+          出勤
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:6px; color:#ffdf8c; font-size:13px; font-weight:700;">
+          <input class="driver-last-trip-input" type="checkbox" data-id="${vehicle.id}" ${isDriverLastTripChecked(vehicle.id) ? "checked" : ""} />
+          ラスト便
+        </label>
+      </div>
     `;
     els.dailyVehicleChecklist.appendChild(row);
   });
 
   els.dailyVehicleChecklist.querySelectorAll(".vehicle-check-input").forEach(input => {
-  input.addEventListener("change", () => {
-    const id = Number(input.dataset.id);
+    input.addEventListener("change", () => {
+      const id = Number(input.dataset.id);
 
-    if (input.checked) activeVehicleIdsForToday.add(id);
-    else activeVehicleIdsForToday.delete(id);
+      if (input.checked) activeVehicleIdsForToday.add(id);
+      else activeVehicleIdsForToday.delete(id);
 
-    renderDailyMileageInputs();   // ←追加①
-    renderDailyDispatchResult();
+      renderDailyMileageInputs();
+      renderDailyDispatchResult();
+      renderDailyVehicleChecklist();
+    });
   });
-});
+
+  els.dailyVehicleChecklist.querySelectorAll(".driver-last-trip-input").forEach(input => {
+    input.addEventListener("change", () => {
+      const id = Number(input.dataset.id);
+      setDriverLastTripChecked(id, input.checked);
+
+      if (input.checked && !activeVehicleIdsForToday.has(id)) {
+        activeVehicleIdsForToday.add(id);
+      }
+
+      renderDailyMileageInputs();
+      renderDailyDispatchResult();
+      renderDailyVehicleChecklist();
+    });
+  });
 }
 
 function getSelectedVehiclesForToday() {
@@ -5427,6 +5506,17 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
         );
         score -= homePriorityWeight;
 
+        const driverLastTripChecked = isDriverLastTripChecked(vehicle.id);
+        if (driverLastTripChecked && (isLastRun || isDefaultLastHourCluster)) {
+          score -= 220;
+          score -= Math.max(0, homePriorityWeight) * 0.65;
+          if (strictHomeScore >= 78) score -= 120;
+          else if (strictHomeScore >= 52) score -= 60;
+          if (hardReverse) score += isLastRun ? 260 : 140;
+        } else if (!driverLastTripChecked && hasAnyDriverLastTripChecked() && (isLastRun || isDefaultLastHourCluster)) {
+          score += 35;
+        }
+
         if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
           score += isLastRun ? 80 : 28;
         }
@@ -5796,7 +5886,6 @@ function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
           ${timeline.map(item => `
             <div class="chip" style="padding:8px 12px;">
               <strong>${escapeHtml(item.name)}</strong>
-              ${item.lineId ? `/ LINE ${escapeHtml(item.lineId)}` : ""}
               / 戻り ${escapeHtml(item.returnAfterLabel)}
               / 次便可能 ${escapeHtml(item.nextRunTime)}
               / 累計 ${Number(item.totalKm || 0).toFixed(1)}km
@@ -5906,12 +5995,24 @@ function getVehiclePersistentDailyStats(vehicleId, orderedRows) {
 }
 
 function getVehicleDailySummary(vehicle, orderedRows) {
-  const summary = getVehiclePersistentDailyStats(Number(vehicle?.id || 0), orderedRows);
+  const vehicleId = Number(vehicle?.id || 0);
+  const summary = getVehiclePersistentDailyStats(vehicleId, orderedRows);
+  const isLastTripDriver = isDriverLastTripChecked(vehicleId);
+  const displayTotalKm = (!summary.hasFixedReport && isLastTripDriver)
+    ? Number(summary.sendKm || 0)
+    : Number(summary.totalKm || 0);
+  const sendOnlyMinutes = Math.round(
+    estimateTravelMinutesByDistanceGlobal(Number(summary.sendKm || 0)) + Number(summary.jobCount || 0)
+  );
+  const displayDriveMinutes = (!summary.hasFixedReport && isLastTripDriver)
+    ? sendOnlyMinutes
+    : Math.round(Number(summary.driveMinutes || 0));
+
   return {
     sendKm: Number(summary.sendKm || 0),
     returnKm: Number(summary.returnKm || 0),
-    totalKm: Number(summary.totalKm || 0),
-    driveMinutes: Math.round(Number(summary.driveMinutes || 0)),
+    totalKm: Number(displayTotalKm || 0),
+    driveMinutes: Number(displayDriveMinutes || 0),
     jobCount: Number(summary.jobCount || 0),
     hasFixedReport: Boolean(summary.hasFixedReport)
   };
@@ -5937,7 +6038,7 @@ function getVehicleCardSortValue(vehicle, orderedRows, monthlyMap) {
 }
 
 function buildVehicleLineLabel(vehicle) {
-  return vehicle?.line_id ? `LINE ${vehicle.line_id}` : "";
+  return "";
 }
 
 function buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap) {
@@ -5988,7 +6089,8 @@ function buildLineResultText() {
     const estimatedRoundTripKm = `${Number(summary.totalKm || 0).toFixed(1)}km`;
     const estimatedRoundTripTime = formatMinutesAsJa(summary.driveMinutes);
 
-    lines.push(`${lineId} ${driverName} ${areaLabel} ${estimatedRoundTripKm} ${estimatedRoundTripTime}`);
+    const lastTripTag = isDriverLastTripChecked(vehicle.id) ? " 【ラスト便】" : "";
+    lines.push(`${lineId} ${driverName}${lastTripTag} ${areaLabel} ${estimatedRoundTripKm} ${estimatedRoundTripTime}`);
 
     orderedRows.forEach(row => {
       const mapUrl = buildDispatchItemMapUrl(row) || buildMapUrlFromAddressOrLatLng(
@@ -6249,12 +6351,13 @@ function renderDailyDispatchResult() {
                 <h4>
                   ${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}
                   ${isManualLastVehicle(vehicle.id) ? `<span class="badge-status assigned" style="margin-left:8px;">手動ラスト便車両</span>` : ""}
+                  ${isDriverLastTripChecked(vehicle.id) ? `<span class="badge-status assigned" style="margin-left:8px;">ラスト便チェック</span>` : ""}
                 </h4>
                 <div class="vehicle-result-meta">
                   ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}
                   / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
                   / 定員${vehicle.seat_capacity ?? "-"}
-                  ${lineLabel ? `/ ${escapeHtml(lineLabel)}` : ""}
+                  ${isDriverLastTripChecked(vehicle.id) ? `/ ラスト便対象` : ""}
                 </div>
               </div>
               <div class="vehicle-result-badges">
