@@ -5,7 +5,7 @@ const {
   ORIGIN_LAT,
   ORIGIN_LNG
 } = window.APP_CONFIG;
-const AI_SERVER = "https://render-server-8fog.onrender.com";
+
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
@@ -5192,7 +5192,6 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
     };
   }
 
-
   function buildRotationTimelineHtml(vehicles, activeItems) {
     const timeline = vehicles
       .map(vehicle => {
@@ -5203,30 +5202,20 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
               .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
           )
         );
-
-        const forecast =
-          typeof getVehicleRotationForecastSafe === "function"
-            ? getVehicleRotationForecastSafe(vehicle, rows)
-            : (typeof calcVehicleRotationForecastGlobal === "function"
-                ? calcVehicleRotationForecastGlobal(vehicle, rows)
-                : calcVehicleRotationForecast(vehicle, rows));
-
-        const cumulativeKm = Number((Number(forecast.routeDistanceKm || 0) + Number(forecast.returnDistanceKm || 0)).toFixed(1));
-
+        const forecast = calcVehicleRotationForecast(vehicle, rows);
         return {
           name: vehicle.driver_name || vehicle.plate_number || "-",
-          readyTime: forecast.predictedReadyTime || "-",
-          returnAfterLabel: forecast.returnAfterLabel || "-",
-          cumulativeKm,
-          stopCount: Number(forecast.stopCount || rows.length || 0),
+          readyTime: forecast.predictedReadyTime,
+          returnTime: forecast.predictedReturnTime,
+          rotationMinutes: forecast.predictedReturnMinutes,
           hasRows: rows.length > 0
         };
       })
       .filter(x => x.hasRows)
-      .sort((a, b) => String(a.readyTime || "").localeCompare(String(b.readyTime || "")));
-
+      .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
+  
     if (!timeline.length) return "";
-
+  
     return `
       <div class="panel-card" style="margin-bottom:16px;">
         <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
@@ -5234,17 +5223,15 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
           ${timeline.map(item => `
             <div class="chip" style="padding:8px 12px;">
               <strong>${escapeHtml(item.name)}</strong>
-              / 戻り ${escapeHtml(item.returnAfterLabel)}
+              / 戻り ${escapeHtml(item.returnTime)}
               / 次便 ${escapeHtml(item.readyTime)}
-              / 累計 ${item.cumulativeKm.toFixed(1)}km
-              / ${item.stopCount}件
+              / 回転 ${item.rotationMinutes}分
             </div>
           `).join("")}
         </div>
       </div>
     `;
   }
-
 
   function isDirectionSplitPair(baseArea, compareArea) {
     const a = normalizeAreaLabel(baseArea);
@@ -5696,21 +5683,27 @@ async function runAutoDispatch() {
 
 function getVehicleRotationForecastSafe(vehicle, orderedRows) {
   try {
-    if (typeof calcVehicleRotationForecast === "function") {
-      return calcVehicleRotationForecast(vehicle, orderedRows);
-    }
-  } catch (e) {
-    console.warn("calcVehicleRotationForecast fallback:", e);
-  }
-  try {
     if (typeof calcVehicleRotationForecastGlobal === "function") {
       return calcVehicleRotationForecastGlobal(vehicle, orderedRows);
     }
   } catch (e) {
     console.warn("calcVehicleRotationForecastGlobal fallback:", e);
   }
+
+  try {
+    if (typeof calcVehicleRotationForecast === "function") {
+      return calcVehicleRotationForecast(vehicle, orderedRows);
+    }
+  } catch (e) {
+    console.warn("calcVehicleRotationForecast fallback:", e);
+  }
+
+  const totalDistance = Array.isArray(orderedRows)
+    ? orderedRows.reduce((sum, row) => sum + Number(row?.distance_km || 0), 0)
+    : 0;
+
   return {
-    routeDistanceKm: 0,
+    routeDistanceKm: totalDistance,
     returnDistanceKm: 0,
     zoneLabel: "-",
     predictedDepartureTime: "-",
@@ -5718,49 +5711,74 @@ function getVehicleRotationForecastSafe(vehicle, orderedRows) {
     predictedReadyTime: "-",
     predictedReturnMinutes: 0,
     extraSharedDelayMinutes: 0,
+    returnAfterLabel: "0分後",
     stopCount: Array.isArray(orderedRows) ? orderedRows.length : 0,
-    returnAfterLabel: "-"
+    totalKm: totalDistance,
+    dailyDistanceKm: totalDistance,
+    jobCount: Array.isArray(orderedRows) ? orderedRows.length : 0,
+    count: Array.isArray(orderedRows) ? orderedRows.length : 0
   };
 }
 
-function safeBuildRotationTimelineHtml(vehicles, activeItems) {
+var buildRotationTimelineHtml = function(vehicles, activeItems) {
   try {
-    if (typeof buildRotationTimelineHtml === "function") {
-      return buildRotationTimelineHtml(vehicles, activeItems);
-    }
-  } catch (e) {
-    console.warn("buildRotationTimelineHtml fallback:", e);
-  }
-  const list = (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
-    const rows = (Array.isArray(activeItems) ? activeItems : []).filter(item => Number(item.vehicle_id) === Number(vehicle.id));
-    const forecast = getVehicleRotationForecastSafe(vehicle, rows);
-    return {
-      name: vehicle?.driver_name || vehicle?.plate_number || "-",
-      readyTime: forecast.predictedReadyTime || "-",
-      returnAfterLabel: forecast.returnAfterLabel || "-",
-      cumulativeKm: Number((Number(forecast.routeDistanceKm || 0) + Number(forecast.returnDistanceKm || 0)).toFixed(1)),
-      stopCount: Number(forecast.stopCount || rows.length || 0),
-      hasRows: rows.length > 0
-    };
-  }).filter(x => x.hasRows).sort((a,b)=>(a.readyTime||"").localeCompare(b.readyTime||""));
-  if (!list.length) return "";
-  return `
-    <div class="panel-card" style="margin-bottom:16px;">
-      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-      <div style="display:flex; flex-wrap:wrap; gap:8px;">
-        ${list.map(item => `
-          <div class="chip" style="padding:8px 12px;">
-            <strong>${escapeHtml(item.name)}</strong>
-            / 戻り ${escapeHtml(item.returnAfterLabel || "-")}
-            / 次便 ${escapeHtml(item.readyTime)}
-            / 累計 ${Number(item.cumulativeKm || 0).toFixed(1)}km
-            / ${item.stopCount || 0}件
-          </div>
-        `).join("")}
+    const list = (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
+      const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
+        item => Number(item.vehicle_id) === Number(vehicle.id)
+      );
+
+      if (!rows.length) return null;
+
+      const orderedRows = typeof moveManualLastItemsToEnd === "function" && typeof sortItemsByNearestRoute === "function"
+        ? moveManualLastItemsToEnd(sortItemsByNearestRoute(rows))
+        : rows;
+
+      const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+
+      const totalKm = Number(
+        forecast?.totalKm ??
+        forecast?.dailyDistanceKm ??
+        ((Number(forecast?.routeDistanceKm || 0) + Number(forecast?.returnDistanceKm || 0)))
+      );
+
+      const totalJobs = Number(
+        forecast?.jobCount ??
+        forecast?.count ??
+        orderedRows.length
+      );
+
+      return {
+        name: vehicle?.driver_name || vehicle?.plate_number || "車両",
+        returnAfterLabel: forecast?.returnAfterLabel || `${Number(forecast?.predictedReturnMinutes || 0)}分後`,
+        nextRunTime: forecast?.predictedReadyTime || "-",
+        totalKm,
+        totalJobs
+      };
+    }).filter(Boolean);
+
+    if (!list.length) return "";
+
+    return `
+      <div class="panel-card" style="margin-bottom:16px;">
+        <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          ${list.map(item => `
+            <div class="chip" style="padding:8px 12px;">
+              <strong>${escapeHtml(item.name)}</strong>
+              / 戻り${escapeHtml(item.returnAfterLabel)}
+              / 次便${escapeHtml(item.nextRunTime)}
+              / 累計${Number(item.totalKm || 0).toFixed(1)}km
+              / ${Number(item.totalJobs || 0)}件
+            </div>
+          `).join("")}
+        </div>
       </div>
-    </div>
-  `;
-}
+    `;
+  } catch (e) {
+    console.error("buildRotationTimelineHtml error:", e);
+    return "";
+  }
+};
 
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
@@ -5776,7 +5794,7 @@ function renderDailyDispatchResult() {
   );
 
   try {
-    const timelineHtml = safeBuildRotationTimelineHtml(vehicles, activeItems);
+    const timelineHtml = buildRotationTimelineHtml(vehicles, activeItems);
     const cardsHtml = vehicles
       .map(vehicle => {
         const rows = activeItems
@@ -7165,21 +7183,3 @@ runAutoDispatch = async function() {
   return result;
 };
 /* ===== THEMIS v3.7 配車AI強化版 patch end ===== */
-async function callAI(prompt) {
-  try {
-    const res = await fetch(`${AI_SERVER}/api/ai`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ prompt })
-    });
-
-    const data = await res.json();
-    return data;
-
-  } catch (err) {
-    console.error("AI call error:", err);
-    return null;
-  }
-}
