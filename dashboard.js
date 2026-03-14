@@ -5,7 +5,7 @@ const {
   ORIGIN_LAT,
   ORIGIN_LNG
 } = window.APP_CONFIG;
-const AI_SERVER = "https://render-server-8fog.onrender.com";
+
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
@@ -5659,6 +5659,11 @@ async function runAutoDispatch() {
     assignments = buildFallbackAssignments(activeItems, selectedVehicles);
   }
 
+  // AIで微調整
+  if (assignments.length) {
+    assignments = await tryAIOptimizeAssignments(assignments, activeItems, selectedVehicles);
+  }
+
   assignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
 
   if (!assignments.length) {
@@ -5680,73 +5685,6 @@ async function runAutoDispatch() {
   renderDailyDispatchResult();
 }
 
-
-function getVehicleRotationForecastSafe(vehicle, orderedRows) {
-  try {
-    if (typeof calcVehicleRotationForecast === "function") {
-      return calcVehicleRotationForecast(vehicle, orderedRows);
-    }
-  } catch (e) {
-    console.warn("calcVehicleRotationForecast fallback:", e);
-  }
-  try {
-    if (typeof calcVehicleRotationForecastGlobal === "function") {
-      return calcVehicleRotationForecastGlobal(vehicle, orderedRows);
-    }
-  } catch (e) {
-    console.warn("calcVehicleRotationForecastGlobal fallback:", e);
-  }
-  return {
-    routeDistanceKm: 0,
-    returnDistanceKm: 0,
-    zoneLabel: "-",
-    predictedDepartureTime: "-",
-    predictedReturnTime: "-",
-    predictedReadyTime: "-",
-    predictedReturnMinutes: 0,
-    extraSharedDelayMinutes: 0,
-    stopCount: Array.isArray(orderedRows) ? orderedRows.length : 0,
-    returnAfterLabel: "-"
-  };
-}
-
-function safeBuildRotationTimelineHtml(vehicles, activeItems) {
-  try {
-    if (typeof buildRotationTimelineHtml === "function") {
-      return buildRotationTimelineHtml(vehicles, activeItems);
-    }
-  } catch (e) {
-    console.warn("buildRotationTimelineHtml fallback:", e);
-  }
-  const list = (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
-    const rows = (Array.isArray(activeItems) ? activeItems : []).filter(item => Number(item.vehicle_id) === Number(vehicle.id));
-    const forecast = getVehicleRotationForecastSafe(vehicle, rows);
-    return {
-      name: vehicle?.driver_name || vehicle?.plate_number || "-",
-      readyTime: forecast.predictedReadyTime || "-",
-      returnTime: forecast.predictedReturnTime || "-",
-      rotationMinutes: Number(forecast.predictedReturnMinutes || 0),
-      hasRows: rows.length > 0
-    };
-  }).filter(x => x.hasRows).sort((a,b)=>(a.readyTime||"").localeCompare(b.readyTime||""));
-  if (!list.length) return "";
-  return `
-    <div class="panel-card" style="margin-bottom:16px;">
-      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-      <div style="display:flex; flex-wrap:wrap; gap:8px;">
-        ${list.map(item => `
-          <div class="chip" style="padding:8px 12px;">
-            <strong>${escapeHtml(item.name)}</strong>
-            / 戻り ${escapeHtml(item.returnTime)}
-            / 次便 ${escapeHtml(item.readyTime)}
-            / 回転 ${item.rotationMinutes}分
-          </div>
-        `).join("")}
-      </div>
-    </div>
-  `;
-}
-
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
 
@@ -5761,7 +5699,7 @@ function renderDailyDispatchResult() {
   );
 
   try {
-    const timelineHtml = safeBuildRotationTimelineHtml(vehicles, activeItems);
+    const timelineHtml = buildRotationTimelineHtml(vehicles, activeItems);
     const cardsHtml = vehicles
       .map(vehicle => {
         const rows = activeItems
@@ -5780,7 +5718,7 @@ function renderDailyDispatchResult() {
 
         const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
         const totalDistance = calculateRouteDistance(orderedRows);
-        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+        const forecast = calcVehicleRotationForecastGlobal(vehicle, orderedRows);
 
         const body = orderedRows.length
           ? orderedRows
@@ -7150,21 +7088,3 @@ runAutoDispatch = async function() {
   return result;
 };
 /* ===== THEMIS v3.7 配車AI強化版 patch end ===== */
-async function callAI(prompt) {
-  try {
-    const res = await fetch(`${AI_SERVER}/api/ai`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ prompt })
-    });
-
-    const data = await res.json();
-    return data;
-
-  } catch (err) {
-    console.error("AI call error:", err);
-    return null;
-  }
-}
