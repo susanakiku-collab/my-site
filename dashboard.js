@@ -4268,6 +4268,14 @@ async function saveActual() {
 
   resetActualForm();
   await loadActualsByDate(dateStr);
+  if (!editingActualId) {
+    try {
+      await assignUnassignedActualsForToday();
+      await loadActualsByDate(dateStr);
+    } catch (assignError) {
+      console.error("assignUnassignedActualsForToday error:", assignError);
+    }
+  }
   await loadPlansByDate(els.planDate?.value || dateStr);
 }
 
@@ -5224,7 +5232,7 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
             <div class="chip" style="padding:8px 12px;">
               <strong>${escapeHtml(item.name)}</strong>
               / 戻り ${escapeHtml(item.returnTime)}
-              / 次便 ${escapeHtml(item.readyTime)}
+              / 次便可能 ${escapeHtml(item.readyTime)}
               / 回転 ${item.rotationMinutes}分
             </div>
           `).join("")}
@@ -5636,6 +5644,36 @@ async function applyAutoDispatchAssignments(assignments) {
   }
 }
 
+async function assignUnassignedActualsForToday() {
+  const selectedVehicles = getSelectedVehiclesForToday();
+  if (!selectedVehicles.length) return;
+
+  const unassignedItems = currentActualsCache.filter(item => {
+    const status = normalizeStatus(item.status);
+    if (status === "cancel") return false;
+    if (Number(item.vehicle_id || 0) > 0) return false;
+    return true;
+  });
+
+  if (!unassignedItems.length) return;
+
+  const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
+  let assignments = optimizeAssignments(unassignedItems, selectedVehicles, monthlyMap);
+  assignments = optimizeAssignmentsByRouteFlow(assignments, unassignedItems, selectedVehicles);
+
+  if (!assignments.length) {
+    assignments = buildFallbackAssignments(unassignedItems, selectedVehicles);
+  }
+
+  assignments = optimizeAssignmentsByDistanceBalance(assignments, unassignedItems, selectedVehicles, monthlyMap);
+  assignments = applyLastTripDistanceCorrectionToAssignments(assignments, unassignedItems, selectedVehicles, monthlyMap);
+  assignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
+
+  if (!assignments.length) return;
+
+  await applyAutoDispatchAssignments(assignments);
+}
+
 async function runAutoDispatch() {
   const selectedVehicles = getSelectedVehiclesForToday();
   if (!selectedVehicles.length) {
@@ -5760,7 +5798,7 @@ function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
               <strong>${escapeHtml(item.name)}</strong>
               ${item.lineId ? `/ LINE ${escapeHtml(item.lineId)}` : ""}
               / 戻り ${escapeHtml(item.returnAfterLabel)}
-              / 次便 ${escapeHtml(item.nextRunTime)}
+              / 次便可能 ${escapeHtml(item.nextRunTime)}
               / 累計 ${Number(item.totalKm || 0).toFixed(1)}km
               / ${Number(item.totalJobs || 0)}件
             </div>
@@ -5934,48 +5972,40 @@ function buildLineResultText() {
   const lines = [];
 
   cards.forEach(({ vehicle, orderedRows }) => {
-    const lineLabel = buildVehicleLineLabel(vehicle);
+    if (!orderedRows.length) return;
+
     const summary = getVehicleDailySummary(vehicle, orderedRows);
-    const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+    const uniqueAreas = [...new Set(
+      orderedRows
+        .map(row => normalizeAreaLabel(row.destination_area || row.casts?.area || "無し"))
+        .filter(Boolean)
+    )];
+    const areaLabel = uniqueAreas.length
+      ? uniqueAreas.join("・")
+      : normalizeAreaLabel(vehicle.vehicle_area || "無し");
+    const lineId = String(vehicle?.line_id || "").trim() || "LINE未設定";
+    const driverName = vehicle?.driver_name || vehicle?.plate_number || "-";
+    const estimatedRoundTripKm = `${Number(summary.totalKm || 0).toFixed(1)}km`;
+    const estimatedRoundTripTime = formatMinutesAsJa(summary.driveMinutes);
 
-    const headerParts = [
-      vehicle.driver_name || vehicle.plate_number || "-",
-      lineLabel,
-      isManualLastVehicle(vehicle.id) ? "手動ラスト便車両" : "",
-      `累計 ${summary.totalKm.toFixed(1)}km`,
-      `累計 ${formatMinutesAsJa(summary.driveMinutes)}`,
-      `累計 ${summary.jobCount}件`
-    ].filter(Boolean);
+    lines.push(`${lineId} ${driverName} ${areaLabel} ${estimatedRoundTripKm} ${estimatedRoundTripTime}`);
 
-    lines.push(headerParts.join(" / "));
-
-    if (!orderedRows.length) {
-      lines.push("送りなし");
-      lines.push("");
-      return;
-    }
-
-    orderedRows.forEach((row, index) => {
-      const mapUrl = buildDispatchItemMapUrl(row);
-      const lastTag = isManualLastTripItem(row) ? " / ラスト便" : "";
-      lines.push(
-        `・${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} / ${normalizeAreaLabel(
-          row.destination_area || "-"
-        )} / ${Number(row.distance_km || 0).toFixed(1)}km / ${index + 1}件目${lastTag}`
+    orderedRows.forEach(row => {
+      const mapUrl = buildDispatchItemMapUrl(row) || buildMapUrlFromAddressOrLatLng(
+        row?.destination_address || row?.casts?.address || "",
+        row?.casts?.latitude,
+        row?.casts?.longitude
       );
-      if (mapUrl) lines.push(`  MAP: ${mapUrl}`);
+      const castName = row?.casts?.name || "-";
+      lines.push(`${castName}：${mapUrl || "地図URLなし"}`);
     });
 
-    lines.push(
-      `戻り ${forecast.returnAfterLabel} / 次便可能 ${forecast.predictedReadyTime} / ゾーン ${forecast.zoneLabel} / 累計距離 ${summary.totalKm.toFixed(
-        1
-      )}km / 累計時間 ${formatMinutesAsJa(summary.driveMinutes)} / 累計件数 ${summary.jobCount}件`
-    );
     lines.push("");
   });
 
   return lines.join("\n").trim();
 }
+
 
 function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, monthlyMap) {
   const working = assignments.map(a => ({ ...a }));
@@ -6239,7 +6269,6 @@ function renderDailyDispatchResult() {
               <div class="dispatch-meta" style="margin-top:10px; font-size:12px; color:#9aa3b2; line-height:1.8;">
                 戻り ${escapeHtml(forecast.returnAfterLabel)}
                 / 次便可能 ${escapeHtml(forecast.predictedReadyTime)}
-                / ゾーン ${escapeHtml(forecast.zoneLabel)}
                 / 累計距離 ${summary.totalKm.toFixed(1)}km
                 / 累計時間 ${escapeHtml(formatMinutesAsJa(summary.driveMinutes))}
                 / 累計件数 ${summary.jobCount}件
