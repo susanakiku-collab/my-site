@@ -5,7 +5,7 @@ const {
   ORIGIN_LAT,
   ORIGIN_LNG
 } = window.APP_CONFIG;
-const AI_SERVER = "https://render-server-8f0g.onrender.com";
+const AI_SERVER = "https://render-server-8fog.onrender.com";
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
