@@ -5,7 +5,7 @@ const {
   ORIGIN_LAT,
   ORIGIN_LNG
 } = window.APP_CONFIG;
-
+const AI_SERVER = "https://render-server-8f0g.onrender.com";
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
@@ -7150,3 +7150,21 @@ runAutoDispatch = async function() {
   return result;
 };
 /* ===== THEMIS v3.7 配車AI強化版 patch end ===== */
+async function callAI(prompt) {
+  try {
+    const res = await fetch(`${AI_SERVER}/api/ai`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ prompt })
+    });
+
+    const data = await res.json();
+    return data;
+
+  } catch (err) {
+    console.error("AI call error:", err);
+    return null;
+  }
+}
