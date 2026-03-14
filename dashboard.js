@@ -5659,6 +5659,8 @@ async function runAutoDispatch() {
     assignments = buildFallbackAssignments(activeItems, selectedVehicles);
   }
 
+  assignments = optimizeAssignmentsByDistanceBalance(assignments, activeItems, selectedVehicles, monthlyMap);
+  assignments = applyLastTripDistanceCorrectionToAssignments(assignments, activeItems, selectedVehicles, monthlyMap);
   assignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
 
   if (!assignments.length) {
@@ -5721,14 +5723,6 @@ function getVehicleRotationForecastSafe(vehicle, orderedRows) {
 
 function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
   try {
-    if (typeof buildRotationTimelineHtml === "function") {
-      return buildRotationTimelineHtml(vehicles, activeItems);
-    }
-  } catch (e) {
-    console.warn("buildRotationTimelineHtml fallback:", e);
-  }
-
-  try {
     const timeline = (Array.isArray(vehicles) ? vehicles : [])
       .map(vehicle => {
         const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
@@ -5742,24 +5736,15 @@ function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
           : rows;
 
         const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-        const totalKm = Number(
-          forecast?.totalKm ??
-          forecast?.dailyDistanceKm ??
-          (Number(forecast?.routeDistanceKm || 0) + Number(forecast?.returnDistanceKm || 0))
-        );
-
-        const totalJobs = Number(
-          forecast?.jobCount ??
-          forecast?.count ??
-          orderedRows.length
-        );
+        const summary = getVehicleDailySummary(vehicle, orderedRows);
 
         return {
           name: vehicle?.driver_name || vehicle?.plate_number || "-",
+          lineId: vehicle?.line_id || "",
           returnAfterLabel: forecast?.returnAfterLabel || `${Number(forecast?.predictedReturnMinutes || 0)}分後`,
           nextRunTime: forecast?.predictedReadyTime || "-",
-          totalKm,
-          totalJobs
+          totalKm: summary.totalKm,
+          totalJobs: summary.jobCount
         };
       })
       .filter(Boolean);
@@ -5773,9 +5758,10 @@ function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
           ${timeline.map(item => `
             <div class="chip" style="padding:8px 12px;">
               <strong>${escapeHtml(item.name)}</strong>
-              / 戻り${escapeHtml(item.returnAfterLabel)}
-              / 次便${escapeHtml(item.nextRunTime)}
-              / 累計${Number(item.totalKm || 0).toFixed(1)}km
+              ${item.lineId ? `/ LINE ${escapeHtml(item.lineId)}` : ""}
+              / 戻り ${escapeHtml(item.returnAfterLabel)}
+              / 次便 ${escapeHtml(item.nextRunTime)}
+              / 累計 ${Number(item.totalKm || 0).toFixed(1)}km
               / ${Number(item.totalJobs || 0)}件
             </div>
           `).join("")}
@@ -5788,6 +5774,380 @@ function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
   }
 }
 
+
+
+function formatMinutesAsJa(totalMinutes) {
+  const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
+  const hours = Math.floor(safe / 60);
+  const minutes = safe % 60;
+  if (hours <= 0) return `${minutes}分`;
+  if (minutes === 0) return `${hours}時間`;
+  return `${hours}時間${minutes}分`;
+}
+
+function getVehiclePersistentDailyStats(vehicleId, orderedRows) {
+  const numericVehicleId = Number(vehicleId || 0);
+  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+  const reportDate = els.dispatchDate?.value || els.actualDate?.value || todayStr();
+
+  const reportedRow = Array.isArray(currentDailyReportsCache)
+    ? currentDailyReportsCache.find(
+        row =>
+          String(row.report_date || "") === String(reportDate || "") &&
+          Number(row.vehicle_id || 0) === numericVehicleId
+      )
+    : null;
+
+  const actualRows = Array.isArray(currentActualsCache)
+    ? currentActualsCache.filter(
+        item =>
+          Number(item?.vehicle_id || 0) === numericVehicleId &&
+          normalizeStatus(item?.status) !== "cancel"
+      )
+    : [];
+
+  const baseRows = actualRows.length
+    ? moveManualLastItemsToEnd(
+        sortItemsByNearestRoute(
+          [...actualRows].sort((a, b) => {
+            const ah = Number(a?.actual_hour ?? a?.plan_hour ?? 0);
+            const bh = Number(b?.actual_hour ?? b?.plan_hour ?? 0);
+            if (ah !== bh) return ah - bh;
+            return Number(a?.stop_order || 0) - Number(b?.stop_order || 0);
+          })
+        )
+      )
+    : rows;
+
+  if (reportedRow && Number.isFinite(Number(reportedRow.distance_km))) {
+    const reportedDistance = Number(Number(reportedRow.distance_km || 0).toFixed(1));
+    const jobCount = actualRows.length || rows.length || 0;
+    const driveMinutes = Math.round(
+      estimateTravelMinutesByDistanceGlobal(reportedDistance) + jobCount
+    );
+
+    return {
+      sendKm: reportedDistance,
+      returnKm: 0,
+      totalKm: reportedDistance,
+      driveMinutes,
+      jobCount,
+      hasFixedReport: true
+    };
+  }
+
+  if (!baseRows.length) {
+    return {
+      sendKm: 0,
+      returnKm: 0,
+      totalKm: 0,
+      driveMinutes: 0,
+      jobCount: 0,
+      hasFixedReport: false
+    };
+  }
+
+  const sendKm = Number(calculateRouteDistanceGlobal(baseRows) || 0);
+  const lastRow = baseRows[baseRows.length - 1] || {};
+  const returnKm = Number(lastRow.distance_km || 0);
+  const totalKm = Number((sendKm + returnKm).toFixed(1));
+  const driveMinutes = Math.round(
+    estimateTravelMinutesByDistanceGlobal(sendKm) +
+      estimateTravelMinutesByDistanceGlobal(returnKm) +
+      baseRows.length
+  );
+
+  return {
+    sendKm: Number(sendKm.toFixed(1)),
+    returnKm: Number(returnKm.toFixed(1)),
+    totalKm,
+    driveMinutes,
+    jobCount: baseRows.length,
+    hasFixedReport: false
+  };
+}
+
+function getVehicleDailySummary(vehicle, orderedRows) {
+  const summary = getVehiclePersistentDailyStats(Number(vehicle?.id || 0), orderedRows);
+  return {
+    sendKm: Number(summary.sendKm || 0),
+    returnKm: Number(summary.returnKm || 0),
+    totalKm: Number(summary.totalKm || 0),
+    driveMinutes: Math.round(Number(summary.driveMinutes || 0)),
+    jobCount: Number(summary.jobCount || 0),
+    hasFixedReport: Boolean(summary.hasFixedReport)
+  };
+}
+
+function getVehicleProjectedMonthlyDistance(vehicleId, monthlyMap, orderedRows) {
+  const currentMonth = monthlyMap?.get(Number(vehicleId)) || { totalDistance: 0 };
+  const todaySummary = getVehicleDailySummary({ id: vehicleId }, orderedRows);
+  if (todaySummary.hasFixedReport) {
+    return Number(Number(currentMonth.totalDistance || 0).toFixed(1));
+  }
+  return Number(Number(currentMonth.totalDistance || 0) + Number(todaySummary.totalKm || 0));
+}
+
+function getVehicleCardSortValue(vehicle, orderedRows, monthlyMap) {
+  const hasRows = Array.isArray(orderedRows) && orderedRows.length > 0;
+  const maxHour = hasRows
+    ? Math.max(...orderedRows.map(row => Number(row.actual_hour ?? 0)))
+    : -1;
+  const manualPriority = isManualLastVehicle(vehicle?.id) ? -1000 : 0;
+  const projectedMonthly = getVehicleProjectedMonthlyDistance(vehicle?.id, monthlyMap, orderedRows);
+  return manualPriority + maxHour * 100000 + projectedMonthly;
+}
+
+function buildVehicleLineLabel(vehicle) {
+  return vehicle?.line_id ? `LINE ${vehicle.line_id}` : "";
+}
+
+function buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap) {
+  return vehicles.map(vehicle => {
+    const rows = activeItems
+      .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
+      .sort((a, b) => {
+        const ah = Number(a.actual_hour ?? 0);
+        const bh = Number(b.actual_hour ?? 0);
+        if (ah !== bh) return ah - bh;
+
+        const aa = normalizeAreaLabel(a.destination_area || "");
+        const ba = normalizeAreaLabel(b.destination_area || "");
+        if (aa !== ba) return aa.localeCompare(ba, "ja");
+
+        return Number(a.stop_order || 0) - Number(b.stop_order || 0);
+      });
+
+    const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
+    return { vehicle, rows, orderedRows };
+  });
+}
+
+function buildLineResultText() {
+  const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
+  const vehicles = getSelectedVehiclesForToday();
+  const activeItems = currentActualsCache.filter(
+    x => normalizeStatus(x.status) !== "done" && normalizeStatus(x.status) !== "cancel"
+  );
+
+  const cards = buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap);
+  const lines = [];
+
+  cards.forEach(({ vehicle, orderedRows }) => {
+    const lineLabel = buildVehicleLineLabel(vehicle);
+    const summary = getVehicleDailySummary(vehicle, orderedRows);
+    const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+
+    const headerParts = [
+      vehicle.driver_name || vehicle.plate_number || "-",
+      lineLabel,
+      isManualLastVehicle(vehicle.id) ? "手動ラスト便車両" : "",
+      `累計 ${summary.totalKm.toFixed(1)}km`,
+      `累計 ${formatMinutesAsJa(summary.driveMinutes)}`,
+      `累計 ${summary.jobCount}件`
+    ].filter(Boolean);
+
+    lines.push(headerParts.join(" / "));
+
+    if (!orderedRows.length) {
+      lines.push("送りなし");
+      lines.push("");
+      return;
+    }
+
+    orderedRows.forEach((row, index) => {
+      const mapUrl = buildDispatchItemMapUrl(row);
+      const lastTag = isManualLastTripItem(row) ? " / ラスト便" : "";
+      lines.push(
+        `・${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} / ${normalizeAreaLabel(
+          row.destination_area || "-"
+        )} / ${Number(row.distance_km || 0).toFixed(1)}km / ${index + 1}件目${lastTag}`
+      );
+      if (mapUrl) lines.push(`  MAP: ${mapUrl}`);
+    });
+
+    lines.push(
+      `戻り ${forecast.returnAfterLabel} / 次便可能 ${forecast.predictedReadyTime} / ゾーン ${forecast.zoneLabel} / 累計距離 ${summary.totalKm.toFixed(
+        1
+      )}km / 累計時間 ${formatMinutesAsJa(summary.driveMinutes)} / 累計件数 ${summary.jobCount}件`
+    );
+    lines.push("");
+  });
+
+  return lines.join("\n").trim();
+}
+
+function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, monthlyMap) {
+  const working = assignments.map(a => ({ ...a }));
+  if (!working.length || !vehicles.length) return working;
+
+  const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
+  const hourLoads = new Map();
+  const assignedDistance = new Map();
+
+  const getDistanceForAssignment = assignment => {
+    const item = itemMap.get(Number(assignment.item_id));
+    return Number(item?.distance_km ?? assignment?.distance_km ?? 0);
+  };
+
+  const rebuild = () => {
+    hourLoads.clear();
+    assignedDistance.clear();
+
+    working.forEach(a => {
+      const hourKey = `${Number(a.vehicle_id)}__${Number(a.actual_hour ?? 0)}`;
+      hourLoads.set(hourKey, Number(hourLoads.get(hourKey) || 0) + 1);
+      assignedDistance.set(
+        Number(a.vehicle_id),
+        Number(assignedDistance.get(Number(a.vehicle_id)) || 0) + getDistanceForAssignment(a)
+      );
+    });
+  };
+
+  const getProjectedDistance = vehicleId => {
+    const monthly = monthlyMap?.get(Number(vehicleId)) || { totalDistance: 0 };
+    return Number(monthly.totalDistance || 0) + Number(assignedDistance.get(Number(vehicleId)) || 0);
+  };
+
+  rebuild();
+
+  for (const assignment of working) {
+    const currentVehicleId = Number(assignment.vehicle_id);
+    const currentProjected = getProjectedDistance(currentVehicleId);
+    const item = itemMap.get(Number(assignment.item_id));
+    if (!item) continue;
+
+    const area = normalizeAreaLabel(item.destination_area || item.cluster_area || "無し");
+    const dist = Number(item.distance_km || assignment.distance_km || 0);
+    const currentVehicle = vehicles.find(v => Number(v.id) === currentVehicleId);
+    const currentCompat =
+      getStrictHomeCompatibilityScore(area, currentVehicle?.home_area || "") * 1.4 +
+      Math.max(0, getDirectionAffinityScore(area, currentVehicle?.home_area || "")) * 0.7 +
+      getAreaAffinityScore(area, currentVehicle?.home_area || "");
+
+    let bestMove = null;
+
+    for (const vehicle of vehicles) {
+      const vehicleId = Number(vehicle.id);
+      if (vehicleId === currentVehicleId) continue;
+
+      const hourKey = `${vehicleId}__${Number(assignment.actual_hour ?? 0)}`;
+      const seatCapacity = Number(vehicle.seat_capacity || 4);
+      const hourLoad = Number(hourLoads.get(hourKey) || 0);
+      if (hourLoad >= seatCapacity) continue;
+
+      const candidateProjected = getProjectedDistance(vehicleId);
+      const projectedGapImprove = currentProjected - candidateProjected;
+      if (projectedGapImprove < 10) continue;
+
+      const compat =
+        getStrictHomeCompatibilityScore(area, vehicle.home_area || "") * 1.4 +
+        Math.max(0, getDirectionAffinityScore(area, vehicle.home_area || "")) * 0.7 +
+        getAreaAffinityScore(area, vehicle.home_area || "");
+      if (isHardReverseForHome(area, vehicle.home_area || "")) continue;
+
+      const score = projectedGapImprove * 2.2 + (compat - currentCompat) * 1.1 - dist * 0.12;
+      if (!bestMove || score > bestMove.score) {
+        bestMove = { vehicle, score };
+      }
+    }
+
+    if (bestMove && bestMove.score >= 28) {
+      assignment.vehicle_id = bestMove.vehicle.id;
+      assignment.driver_name = bestMove.vehicle.driver_name || "";
+      rebuild();
+    }
+  }
+
+  return working;
+}
+
+function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicles, monthlyMap) {
+  const working = assignments.map(a => ({ ...a }));
+  if (!working.length || !vehicles.length) return working;
+
+  const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
+  const dateStr = els.actualDate?.value || todayStr();
+  const defaultLastHour = getDefaultLastHour(dateStr);
+  const targetHour = working.some(a => Number(a.actual_hour ?? 0) === Number(defaultLastHour))
+    ? Number(defaultLastHour)
+    : Math.max(...working.map(a => Number(a.actual_hour ?? 0)));
+
+  const targetRows = working.filter(a => Number(a.actual_hour ?? 0) === Number(targetHour));
+  if (!targetRows.length) return working;
+
+  const manualVehicleId = getManualLastVehicleId();
+  const projectedDistanceByVehicle = new Map();
+
+  working.forEach(a => {
+    const item = itemMap.get(Number(a.item_id));
+    projectedDistanceByVehicle.set(
+      Number(a.vehicle_id),
+      Number(projectedDistanceByVehicle.get(Number(a.vehicle_id)) || 0) +
+        Number(item?.distance_km ?? a.distance_km ?? 0)
+    );
+  });
+
+  const evaluate = (vehicle, item) => {
+    const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || "無し");
+    const itemDistance = Number(item?.distance_km || 0);
+    const strict = getStrictHomeCompatibilityScore(area, vehicle?.home_area || "");
+    const direction = Math.max(0, getDirectionAffinityScore(area, vehicle?.home_area || ""));
+    const affinity = getAreaAffinityScore(area, vehicle?.home_area || "");
+    const vehicleMatch = getVehicleAreaMatchScore(vehicle, area);
+    const projectedMonthly =
+      Number(monthlyMap?.get(Number(vehicle?.id))?.totalDistance || 0) +
+      Number(projectedDistanceByVehicle.get(Number(vehicle?.id)) || 0);
+    const hardReverse = isHardReverseForHome(area, vehicle?.home_area || "");
+
+    let score =
+      strict * 8 +
+      direction * 4 +
+      affinity * 3 +
+      vehicleMatch * 0.6 +
+      itemDistance * (strict >= 78 ? 1.4 : strict >= 52 ? 0.8 : 0.2);
+
+    score -= projectedMonthly * 0.12;
+    if (hardReverse) score -= 9999;
+    if (Number(vehicle?.id) === Number(manualVehicleId) && strict >= 52 && !hardReverse) score += 110;
+    return score;
+  };
+
+  for (const target of targetRows) {
+    const item = itemMap.get(Number(target.item_id));
+    if (!item) continue;
+
+    const currentVehicle = vehicles.find(v => Number(v.id) === Number(target.vehicle_id));
+    const currentScore = evaluate(currentVehicle, item);
+    let best = { vehicle: currentVehicle, score: currentScore };
+
+    for (const vehicle of vehicles) {
+      const seatCapacity = Number(vehicle.seat_capacity || 4);
+      const load = working.filter(
+        a =>
+          Number(a.vehicle_id) === Number(vehicle.id) &&
+          Number(a.actual_hour ?? 0) === Number(targetHour) &&
+          Number(a.item_id) !== Number(target.item_id)
+      ).length;
+      if (load >= seatCapacity) continue;
+
+      const score = evaluate(vehicle, item);
+      if (score > best.score) best = { vehicle, score };
+    }
+
+    if (
+      best.vehicle &&
+      Number(best.vehicle.id) !== Number(target.vehicle_id) &&
+      best.score >= currentScore + 24
+    ) {
+      target.vehicle_id = best.vehicle.id;
+      target.driver_name = best.vehicle.driver_name || "";
+      target.manual_last_vehicle = Number(best.vehicle.id) === Number(manualVehicleId);
+    }
+  }
+
+  return working;
+}
 
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
@@ -5803,26 +6163,16 @@ function renderDailyDispatchResult() {
   );
 
   try {
+    const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
     const timelineHtml = buildRotationTimelineHtmlSafe(vehicles, activeItems);
-    const cardsHtml = vehicles
-      .map(vehicle => {
-        const rows = activeItems
-          .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-          .sort((a, b) => {
-            const ah = Number(a.actual_hour ?? 0);
-            const bh = Number(b.actual_hour ?? 0);
-            if (ah !== bh) return ah - bh;
+    const cards = buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap);
 
-            const aa = normalizeAreaLabel(a.destination_area || "");
-            const ba = normalizeAreaLabel(b.destination_area || "");
-            if (aa !== ba) return aa.localeCompare(ba, "ja");
-
-            return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-          });
-
-        const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
-        const totalDistance = calculateRouteDistance(orderedRows);
+    const cardsHtml = cards
+      .map(({ vehicle, rows, orderedRows }) => {
+        const summary = getVehicleDailySummary(vehicle, orderedRows);
         const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+        const lineLabel = buildVehicleLineLabel(vehicle);
+        const projectedMonthly = getVehicleProjectedMonthlyDistance(vehicle.id, monthlyMap, orderedRows);
 
         const body = orderedRows.length
           ? orderedRows
@@ -5866,17 +6216,22 @@ function renderDailyDispatchResult() {
           <div class="vehicle-result-card">
             <div class="vehicle-result-head">
               <div class="vehicle-result-title">
-                <h4>${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</h4>
+                <h4>
+                  ${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}
+                  ${isManualLastVehicle(vehicle.id) ? `<span class="badge-status assigned" style="margin-left:8px;">手動ラスト便車両</span>` : ""}
+                </h4>
                 <div class="vehicle-result-meta">
                   ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}
                   / 帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}
                   / 定員${vehicle.seat_capacity ?? "-"}
+                  ${lineLabel ? `/ ${escapeHtml(lineLabel)}` : ""}
                 </div>
               </div>
               <div class="vehicle-result-badges">
                 <span class="metric-badge">人数 ${rows.length}</span>
-                <span class="metric-badge">距離 ${totalDistance.toFixed(1)}km</span>
-                ${orderedRows.length ? `<span class="metric-badge">⟳戻り ${escapeHtml(forecast.returnAfterLabel)}</span>` : ""}
+                <span class="metric-badge">累計距離 ${summary.totalKm.toFixed(1)}km</span>
+                <span class="metric-badge">累計時間 ${escapeHtml(formatMinutesAsJa(summary.driveMinutes))}</span>
+                <span class="metric-badge">累計件数 ${summary.jobCount}件</span>
               </div>
             </div>
             <div class="vehicle-result-body">${body}</div>
@@ -5884,11 +6239,21 @@ function renderDailyDispatchResult() {
               <div class="dispatch-meta" style="margin-top:10px; font-size:12px; color:#9aa3b2; line-height:1.8;">
                 戻り ${escapeHtml(forecast.returnAfterLabel)}
                 / 次便可能 ${escapeHtml(forecast.predictedReadyTime)}
-                / 回転時間 ${forecast.predictedReturnMinutes}分
                 / ゾーン ${escapeHtml(forecast.zoneLabel)}
+                / 累計距離 ${summary.totalKm.toFixed(1)}km
+                / 累計時間 ${escapeHtml(formatMinutesAsJa(summary.driveMinutes))}
+                / 累計件数 ${summary.jobCount}件
+                / 月間見込 ${projectedMonthly.toFixed(1)}km
                 ${forecast.extraSharedDelayMinutes > 0 ? `/ 同乗追加遅延 ${forecast.extraSharedDelayMinutes}分` : ""}
               </div>
-            ` : ""}
+            ` : `
+              <div class="dispatch-meta" style="margin-top:10px; font-size:12px; color:#9aa3b2; line-height:1.8;">
+                累計距離 ${summary.totalKm.toFixed(1)}km
+                / 累計時間 ${escapeHtml(formatMinutesAsJa(summary.driveMinutes))}
+                / 累計件数 ${summary.jobCount}件
+                / 月間見込 ${projectedMonthly.toFixed(1)}km
+              </div>
+            `}
           </div>
         `;
       })
@@ -5927,58 +6292,7 @@ function renderDailyDispatchResult() {
 }
 
 function buildCopyResultText() {
-  const vehicles = getSelectedVehiclesForToday();
-  const activeItems = currentActualsCache.filter(
-    x => normalizeStatus(x.status) !== "done" && normalizeStatus(x.status) !== "cancel"
-  );
-
-  const lines = [];
-
-  vehicles.forEach(vehicle => {
-    const rows = moveManualLastItemsToEnd(
-      activeItems
-        .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-        .sort((a, b) => {
-          const ah = Number(a.actual_hour || 0);
-          const bh = Number(b.actual_hour || 0);
-          if (ah !== bh) return ah - bh;
-
-          const aa = normalizeAreaLabel(a.destination_area || "");
-          const ba = normalizeAreaLabel(b.destination_area || "");
-          if (aa !== ba) return aa.localeCompare(ba, "ja");
-
-          return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-        })
-    );
-
-    const vehicleLabel = `${vehicle.line_id ? vehicle.line_id + " " : ""}${vehicle.driver_name || vehicle.plate_number || ""}`;
-    const header = isManualLastVehicle(vehicle.id)
-      ? `${vehicleLabel}【ラスト便車両】`
-      : vehicleLabel;
-
-    lines.push(header);
-
-    if (!rows.length) {
-      lines.push("送りなし");
-    } else {
-      rows.forEach(row => {
-        const mapUrl = buildDispatchItemMapUrl(row);
-        const lastTag = isManualLastTripItem(row) || (isManualLastVehicle(vehicle.id) && rows[rows.length - 1]?.id === row.id)
-          ? " / ラスト便"
-          : "";
-        lines.push(
-          `・${getHourLabel(row.actual_hour)} ${row.casts?.name || "-"} / ${normalizeAreaLabel(row.destination_area || "-")} / ${Number(row.distance_km || 0).toFixed(1)}km${lastTag}`
-        );
-        if (mapUrl) {
-          lines.push(`  MAP: ${mapUrl}`);
-        }
-      });
-    }
-
-    lines.push("");
-  });
-
-  return lines.join("\n").trim();
+  return buildLineResultText();
 }
 
 async function copyDispatchResult() {
