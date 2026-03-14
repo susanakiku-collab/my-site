@@ -1207,6 +1207,51 @@ function getAreaDisplayGroup(area) {
   return "その他";
 }
 
+
+function getGroupedAreaHeaderHtml(area) {
+  const detailArea = normalizeAreaLabel(area || "無し");
+  const displayGroup = getAreaDisplayGroup(detailArea);
+
+  if (!detailArea || detailArea === "無し") {
+    return `<span class="group-main">${escapeHtml(displayGroup)}</span>`;
+  }
+
+  if (displayGroup === detailArea) {
+    return `<span class="group-main">${escapeHtml(displayGroup)}</span>`;
+  }
+
+  return `
+    <div class="group-area-stack">
+      <span class="group-main">${escapeHtml(displayGroup)}</span>
+      <span class="group-sub">${escapeHtml(detailArea)}</span>
+    </div>
+  `;
+}
+
+function getGroupedAreasByDisplay(items, areaGetter) {
+  const ordered = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    const detailArea = normalizeAreaLabel(areaGetter(item));
+    const key = `${getAreaDisplayGroup(detailArea)}__${detailArea}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push({
+      displayGroup: getAreaDisplayGroup(detailArea),
+      detailArea
+    });
+  }
+
+  ordered.sort((a, b) => {
+    const groupCompare = a.displayGroup.localeCompare(b.displayGroup, "ja");
+    if (groupCompare !== 0) return groupCompare;
+    return a.detailArea.localeCompare(b.detailArea, "ja");
+  });
+
+  return ordered;
+}
+
 const AREA_CANONICAL_PATTERNS = [
   ["松戸近郊", ["松戸近郊", "松戸方面", "松戸"]],
   ["葛飾方面", ["葛飾方面", "葛飾区", "葛飾"]],
@@ -1663,6 +1708,9 @@ function openGoogleMap(address, lat = null, lng = null) {
   );
 }
 
+
+
+
 function buildMapUrlFromAddressOrLatLng(address, lat, lng) {
   const numLat = toNullableNumber(lat);
   const numLng = toNullableNumber(lng);
@@ -1702,47 +1750,6 @@ function buildMapLinkHtml({ name, address, lat, lng, className = "map-name-link"
   if (!mapUrl) return safeName;
 
   return `<a href="${mapUrl}" target="_blank" rel="noopener noreferrer" class="${className}">${safeName} 📍</a>`;
-}
-
-function buildMapUrlFromAddressOrLatLng(address, lat, lng) {
-  const numLat = toNullableNumber(lat);
-  const numLng = toNullableNumber(lng);
-
-  if (isValidLatLng(numLat, numLng)) {
-    return `https://www.google.com/maps/search/?api=1&query=${numLat},${numLng}`;
-  }
-
-  const safeAddress = String(address || "").trim();
-  if (safeAddress) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(safeAddress)}`;
-  }
-
-  return "";
-}
-
-function buildMapLinkHtml({ name, address, lat, lng, className = "map-name-link" }) {
-  const safeName = escapeHtml(name || "-");
-  const mapUrl = buildMapUrlFromAddressOrLatLng(address, lat, lng);
-
-  if (!mapUrl) return safeName;
-
-  return `<a href="${mapUrl}" target="_blank" rel="noopener noreferrer" class="${className}">${safeName} 📍</a>`;
-}
-
-function buildCastMapUrl(cast) {
-  const lat = toNullableNumber(cast?.latitude);
-  const lng = toNullableNumber(cast?.longitude);
-
-  if (isValidLatLng(lat, lng)) {
-    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-  }
-
-  const address = String(cast?.address || "").trim();
-  if (address) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
-  }
-
-  return "";
 }
 
 function downloadTextFile(filename, text, mimeType = "text/plain;charset=utf-8") {
@@ -3873,17 +3880,17 @@ function renderPlanGroupedTable() {
 
   hours.forEach(hour => {
     const hourItems = currentPlansCache.filter(x => Number(x.plan_hour) === hour);
-    const areas = [...new Set(hourItems.map(x => normalizeAreaLabel(x.planned_area || "無し")))];
+    const groupedAreas = getGroupedAreasByDisplay(hourItems, x => x.planned_area || "無し");
 
     html += `<div class="grouped-section">`;
     html += `<div class="grouped-hour-title">${getHourLabel(hour)}</div>`;
 
-    areas.forEach(area => {
+    groupedAreas.forEach(({ detailArea }) => {
       const areaItems = hourItems.filter(
-        x => normalizeAreaLabel(x.planned_area || "無し") === area
+        x => normalizeAreaLabel(x.planned_area || "無し") === detailArea
       );
 
-      html += `<div class="grouped-area-title">${escapeHtml(area)}</div>`;
+      html += `<div class="grouped-area-title">${getGroupedAreaHeaderHtml(detailArea)}</div>`;
 
       areaItems.forEach(plan => {
         html += `
@@ -4398,16 +4405,16 @@ function renderActualTable() {
 
   hours.forEach(hour => {
     const hourItems = currentActualsCache.filter(x => Number(x.actual_hour ?? 0) === hour);
-    const areas = [...new Set(hourItems.map(x => normalizeAreaLabel(x.destination_area || "無し")))];
+    const groupedAreas = getGroupedAreasByDisplay(hourItems, x => x.destination_area || "無し");
 
     html += `<div class="grouped-section">`;
     html += `<div class="grouped-hour-title">${getHourLabel(hour)}</div>`;
 
-    areas.forEach(area => {
-      html += `<div class="grouped-area-title">${escapeHtml(area)}</div>`;
+    groupedAreas.forEach(({ detailArea }) => {
+      html += `<div class="grouped-area-title">${getGroupedAreaHeaderHtml(detailArea)}</div>`;
 
       hourItems
-        .filter(item => normalizeAreaLabel(item.destination_area || "無し") === area)
+        .filter(item => normalizeAreaLabel(item.destination_area || "無し") === detailArea)
         .forEach(item => {
           html += `
             <div class="grouped-row">
@@ -4441,14 +4448,6 @@ function renderActualTable() {
   html += `</div>`;
   els.actualTableWrap.innerHTML = html;
 
-  els.actualTableWrap.querySelectorAll(".actual-done-btn").forEach(btn => {
-    btn.addEventListener("click", async () => updateActualStatus(Number(btn.dataset.id), "done"));
-  });
-
-  els.actualTableWrap.querySelectorAll(".actual-cancel-btn").forEach(btn => {
-    btn.addEventListener("click", async () => updateActualStatus(Number(btn.dataset.id), "cancel"));
-  });
-
   els.actualTableWrap.querySelectorAll(".actual-edit-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const item = currentActualsCache.find(x => Number(x.id) === Number(btn.dataset.id));
@@ -4462,6 +4461,14 @@ function renderActualTable() {
 
   els.actualTableWrap.querySelectorAll(".actual-delete-btn").forEach(btn => {
     btn.addEventListener("click", async () => deleteActual(Number(btn.dataset.id)));
+  });
+
+  els.actualTableWrap.querySelectorAll(".actual-done-btn").forEach(btn => {
+    btn.addEventListener("click", async () => updateActualStatus(Number(btn.dataset.id), "done"));
+  });
+
+  els.actualTableWrap.querySelectorAll(".actual-cancel-btn").forEach(btn => {
+    btn.addEventListener("click", async () => updateActualStatus(Number(btn.dataset.id), "cancel"));
   });
 }
 
@@ -4940,56 +4947,6 @@ function calcVehicleDailyStatsGlobal(vehicleId, items) {
     count: orderedRows.length
   };
 }
-
-function buildRotationTimelineHtml(vehicles, activeItems) {
-  const timeline = (vehicles || [])
-    .map(vehicle => {
-      const rows = moveManualLastItemsToEnd(
-        sortItemsByNearestRoute(
-          (activeItems || [])
-            .filter(item => Number(item.vehicle_id) === Number(vehicle.id))
-            .sort((a, b) => Number(a.actual_hour ?? 0) - Number(b.actual_hour ?? 0))
-        )
-      );
-      const forecast = calcVehicleRotationForecastGlobal(vehicle, rows);
-      const stats = calcVehicleDailyStatsGlobal(vehicle.id, activeItems);
-      return {
-        name: vehicle.driver_name || vehicle.plate_number || "-",
-        readyTime: forecast.predictedReadyTime,
-        returnAfterLabel: forecast.returnAfterLabel,
-        totalKm: stats.totalKm,
-        sendKm: stats.sendKm,
-        returnKm: stats.returnKm,
-        driveMinutes: stats.driveMinutes,
-        count: stats.count,
-        hasRows: rows.length > 0
-      };
-    })
-    .filter(x => x.hasRows)
-    .sort((a, b) => a.readyTime.localeCompare(b.readyTime));
-
-  if (!timeline.length) return "";
-
-  return `
-    <div class="panel-card" style="margin-bottom:16px;">
-      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-      <div style="display:flex; flex-wrap:wrap; gap:8px;">
-        ${timeline.map(item => `
-          <div class="chip" style="padding:8px 12px;">
-            <strong>${escapeHtml(item.name)}</strong>
-            / 戻り ${escapeHtml(item.returnAfterLabel)}
-            / 次便 ${escapeHtml(item.readyTime)}
-            / 本日距離 ${item.totalKm}km
-            (送り${item.sendKm}km / 戻り${item.returnKm}km)
-            / 本日走行 ${item.driveMinutes}分
-            / 本日 ${item.count}件
-          </div>
-        `).join("")}
-      </div>
-    </div>
-  `;
-}
-
 
 function optimizeAssignments(items, vehicles, monthlyMap) {
   const workingVehicles = vehicles.filter(v => v.status !== "maintenance");
@@ -5655,6 +5612,30 @@ function optimizeAssignments(items, vehicles, monthlyMap) {
   return assignments;
 }
 
+async function applyAutoDispatchAssignments(assignments) {
+  const groupedOrderMap = new Map();
+
+  for (const a of assignments) {
+    const key = `${a.vehicle_id}_${a.actual_hour}`;
+    const nextOrder = (groupedOrderMap.get(key) || 0) + 1;
+    groupedOrderMap.set(key, nextOrder);
+
+    const { error } = await supabaseClient
+      .from("dispatch_items")
+      .update({
+        vehicle_id: a.vehicle_id,
+        driver_name: a.driver_name,
+        stop_order: nextOrder,
+        status: "pending"
+      })
+      .eq("id", a.item_id);
+
+    if (error) {
+      throw error;
+    }
+  }
+}
+
 async function runAutoDispatch() {
   const selectedVehicles = getSelectedVehiclesForToday();
   if (!selectedVehicles.length) {
@@ -5685,34 +5666,85 @@ async function runAutoDispatch() {
     return;
   }
 
-  const groupedOrderMap = new Map();
-
-  for (const a of assignments) {
-    const key = `${a.vehicle_id}_${a.actual_hour}`;
-    const nextOrder = (groupedOrderMap.get(key) || 0) + 1;
-    groupedOrderMap.set(key, nextOrder);
-
-    const { error } = await supabaseClient
-      .from("dispatch_items")
-      .update({
-        vehicle_id: a.vehicle_id,
-        driver_name: a.driver_name,
-        stop_order: nextOrder,
-        status: "pending"
-      })
-      .eq("id", a.item_id);
-
-    if (error) {
-      console.error(error);
-      alert(`配車更新エラー: ${error.message}`);
-      return;
-    }
+  try {
+    await applyAutoDispatchAssignments(assignments);
+  } catch (error) {
+    console.error(error);
+    alert(`配車更新エラー: ${error.message}`);
+    return;
   }
 
   await addHistory(currentDispatchId, null, "auto_dispatch", "自動配車を実行");
   await loadActualsByDate(els.actualDate?.value || todayStr());
   await loadPlansByDate(els.planDate?.value || todayStr());
   renderDailyDispatchResult();
+}
+
+
+function getVehicleRotationForecastSafe(vehicle, orderedRows) {
+  try {
+    if (typeof calcVehicleRotationForecast === "function") {
+      return calcVehicleRotationForecast(vehicle, orderedRows);
+    }
+  } catch (e) {
+    console.warn("calcVehicleRotationForecast fallback:", e);
+  }
+  try {
+    if (typeof calcVehicleRotationForecastGlobal === "function") {
+      return calcVehicleRotationForecastGlobal(vehicle, orderedRows);
+    }
+  } catch (e) {
+    console.warn("calcVehicleRotationForecastGlobal fallback:", e);
+  }
+  return {
+    routeDistanceKm: 0,
+    returnDistanceKm: 0,
+    zoneLabel: "-",
+    predictedDepartureTime: "-",
+    predictedReturnTime: "-",
+    predictedReadyTime: "-",
+    predictedReturnMinutes: 0,
+    extraSharedDelayMinutes: 0,
+    stopCount: Array.isArray(orderedRows) ? orderedRows.length : 0,
+    returnAfterLabel: "-"
+  };
+}
+
+function safeBuildRotationTimelineHtml(vehicles, activeItems) {
+  try {
+    if (typeof buildRotationTimelineHtml === "function") {
+      return buildRotationTimelineHtml(vehicles, activeItems);
+    }
+  } catch (e) {
+    console.warn("buildRotationTimelineHtml fallback:", e);
+  }
+  const list = (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
+    const rows = (Array.isArray(activeItems) ? activeItems : []).filter(item => Number(item.vehicle_id) === Number(vehicle.id));
+    const forecast = getVehicleRotationForecastSafe(vehicle, rows);
+    return {
+      name: vehicle?.driver_name || vehicle?.plate_number || "-",
+      readyTime: forecast.predictedReadyTime || "-",
+      returnTime: forecast.predictedReturnTime || "-",
+      rotationMinutes: Number(forecast.predictedReturnMinutes || 0),
+      hasRows: rows.length > 0
+    };
+  }).filter(x => x.hasRows).sort((a,b)=>(a.readyTime||"").localeCompare(b.readyTime||""));
+  if (!list.length) return "";
+  return `
+    <div class="panel-card" style="margin-bottom:16px;">
+      <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        ${list.map(item => `
+          <div class="chip" style="padding:8px 12px;">
+            <strong>${escapeHtml(item.name)}</strong>
+            / 戻り ${escapeHtml(item.returnTime)}
+            / 次便 ${escapeHtml(item.readyTime)}
+            / 回転 ${item.rotationMinutes}分
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function renderDailyDispatchResult() {
@@ -5729,7 +5761,7 @@ function renderDailyDispatchResult() {
   );
 
   try {
-    const timelineHtml = buildRotationTimelineHtml(vehicles, activeItems);
+    const timelineHtml = safeBuildRotationTimelineHtml(vehicles, activeItems);
     const cardsHtml = vehicles
       .map(vehicle => {
         const rows = activeItems
@@ -5748,7 +5780,7 @@ function renderDailyDispatchResult() {
 
         const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
         const totalDistance = calculateRouteDistance(orderedRows);
-        const forecast = calcVehicleRotationForecastGlobal(vehicle, orderedRows);
+        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
 
         const body = orderedRows.length
           ? orderedRows
