@@ -60,6 +60,8 @@ const els = {
 
   castName: document.getElementById("castName"),
   castDistanceKm: document.getElementById("castDistanceKm"),
+  castTravelMinutes: document.getElementById("castTravelMinutes"),
+  fetchCastTravelMinutesBtn: document.getElementById("fetchCastTravelMinutesBtn"),
   castAddress: document.getElementById("castAddress"),
   castArea: document.getElementById("castArea"),
   castMemo: document.getElementById("castMemo"),
@@ -460,6 +462,153 @@ function saveRouteDistanceCache(cache) {
   } catch (_) {}
 }
 
+const GOOGLE_ROUTE_DURATION_CACHE_KEY = "themis_google_route_duration_cache_v1";
+
+function loadRouteDurationCache() {
+  try {
+    return JSON.parse(localStorage.getItem(GOOGLE_ROUTE_DURATION_CACHE_KEY) || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveRouteDurationCache(cache) {
+  try {
+    localStorage.setItem(GOOGLE_ROUTE_DURATION_CACHE_KEY, JSON.stringify(cache || {}));
+  } catch (_) {}
+}
+
+function ensureCastTravelMinutesUi() {
+  if (document.getElementById("castTravelMinutes")) {
+    els.castTravelMinutes = document.getElementById("castTravelMinutes");
+    els.fetchCastTravelMinutesBtn = document.getElementById("fetchCastTravelMinutesBtn");
+    return;
+  }
+
+  const distanceField = els.castDistanceKm?.closest?.(".field");
+  if (distanceField?.parentElement) {
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+    wrap.innerHTML = `
+      <label for="castTravelMinutes">片道予想時間(分)</label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input id="castTravelMinutes" type="number" min="0" step="1" placeholder="例：35" />
+        <button id="fetchCastTravelMinutesBtn" type="button" class="btn ghost" style="white-space:nowrap;">時間取得</button>
+      </div>
+    `;
+    distanceField.insertAdjacentElement("afterend", wrap);
+  }
+
+  els.castTravelMinutes = document.getElementById("castTravelMinutes");
+  els.fetchCastTravelMinutesBtn = document.getElementById("fetchCastTravelMinutesBtn");
+}
+
+function getStoredTravelMinutes(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+function getCastTravelMinutesValue(castLike) {
+  if (!castLike) return 0;
+  return getStoredTravelMinutes(castLike.travel_minutes || castLike.travelMinutes);
+}
+
+async function getGoogleDrivingDurationMinutesFromOrigin(address, lat, lng) {
+  const cacheKey = makeRouteDistanceCacheKey(address, lat, lng);
+  if (!cacheKey || cacheKey === 'addr:') return null;
+
+  const cache = loadRouteDurationCache();
+  const cached = cache[cacheKey];
+  if (Number.isFinite(Number(cached))) return Math.round(Number(cached));
+
+  await loadGoogleMapsApi();
+  if (!window.google?.maps?.DirectionsService) return null;
+
+  const destinationLat = toNullableNumber(lat);
+  const destinationLng = toNullableNumber(lng);
+  const destination = isValidLatLng(destinationLat, destinationLng)
+    ? { lat: destinationLat, lng: destinationLng }
+    : String(address || '').trim();
+
+  if (!destination) return null;
+
+  const runOnce = () => new Promise((resolve, reject) => {
+    const service = new google.maps.DirectionsService();
+    service.route({
+      origin: { lat: ORIGIN_LAT, lng: ORIGIN_LNG },
+      destination,
+      travelMode: google.maps.TravelMode.DRIVING,
+      region: 'JP'
+    }, (result, status) => {
+      if (status === 'OK') {
+        const leg = result?.routes?.[0]?.legs?.[0];
+        const seconds = Number(leg?.duration?.value || 0);
+        if (seconds > 0) {
+          resolve(Math.max(1, Math.round(seconds / 60)));
+          return;
+        }
+        resolve(null);
+        return;
+      }
+      if (status === 'ZERO_RESULTS' || status === 'NOT_FOUND' || status === 'REQUEST_DENIED' || status === 'INVALID_REQUEST') {
+        resolve(null);
+        return;
+      }
+      reject(new Error(`Google directions error: ${status}`));
+    });
+  });
+
+  let mins = null;
+  try {
+    mins = await runOnce();
+  } catch (error) {
+    const transient = /UNKNOWN_ERROR|ERROR|OVER_QUERY_LIMIT/.test(String(error?.message || ""));
+    if (!transient) throw error;
+    await new Promise(r => setTimeout(r, 700));
+    mins = await runOnce();
+  }
+
+  if (Number.isFinite(Number(mins)) && Number(mins) > 0) {
+    cache[cacheKey] = Math.round(Number(mins));
+    saveRouteDurationCache(cache);
+    return Math.round(Number(mins));
+  }
+
+  return null;
+}
+
+async function fetchCastTravelMinutesManually() {
+  ensureCastTravelMinutesUi();
+  const current = getStoredTravelMinutes(els.castTravelMinutes?.value);
+  if (current > 0) {
+    return;
+  }
+
+  const address = String(els.castAddress?.value || "").trim();
+  if (!address) {
+    return;
+  }
+
+  let lat = toNullableNumber(els.castLat?.value);
+  let lng = toNullableNumber(els.castLng?.value);
+  if (!isValidLatLng(lat, lng)) {
+    const geocoded = await fillCastLatLngFromAddress({ silent: true });
+    lat = geocoded?.lat ?? toNullableNumber(els.castLat?.value);
+    lng = geocoded?.lng ?? toNullableNumber(els.castLng?.value);
+  }
+
+  try {
+    const mins = await getGoogleDrivingDurationMinutesFromOrigin(address, lat, lng);
+    if (!Number.isFinite(Number(mins)) || Number(mins) <= 0) {
+      console.warn('fetchCastTravelMinutesManually skipped: duration unavailable');
+      return;
+    }
+    if (els.castTravelMinutes) els.castTravelMinutes.value = String(Math.round(Number(mins)));
+  } catch (error) {
+    console.warn('fetchCastTravelMinutesManually skipped:', error?.message || error);
+  }
+}
+
 function makeRouteDistanceCacheKey(address, lat, lng) {
   const latNum = toNullableNumber(lat);
   const lngNum = toNullableNumber(lng);
@@ -504,7 +653,7 @@ async function getGoogleDrivingDistanceKmFromOrigin(address, lat, lng) {
         resolve(null);
         return;
       }
-      if (status === 'ZERO_RESULTS' || status === 'NOT_FOUND') {
+      if (status === 'ZERO_RESULTS' || status === 'NOT_FOUND' || status === 'REQUEST_DENIED' || status === 'INVALID_REQUEST') {
         resolve(null);
         return;
       }
@@ -1895,6 +2044,13 @@ function normalizeCsvHeader(header) {
     距離: "distance_km",
     想定距離: "distance_km",
 
+    travel_minutes: "travel_minutes",
+    travel_time: "travel_minutes",
+    片道予想時間: "travel_minutes",
+    "片道予想時間(分)": "travel_minutes",
+    予想時間: "travel_minutes",
+    時間: "travel_minutes",
+
     plate_number: "plate_number",
     vehicle_id: "plate_number",
     車両id: "plate_number",
@@ -2231,6 +2387,7 @@ function resetCastForm() {
   if (els.castName) els.castName.value = "";
   if (els.castDistanceKm) els.castDistanceKm.value = "";
   if (els.castAddress) els.castAddress.value = "";
+  if (els.castTravelMinutes) els.castTravelMinutes.value = "";
   if (els.castArea) els.castArea.value = "";
   if (els.castMemo) els.castMemo.value = "";
   if (els.castLatLngText) els.castLatLngText.value = "";
@@ -2247,6 +2404,7 @@ function fillCastForm(cast) {
   if (els.castName) els.castName.value = cast.name || "";
   if (els.castDistanceKm) els.castDistanceKm.value = cast.distance_km ?? "";
   if (els.castAddress) els.castAddress.value = cast.address || "";
+  if (els.castTravelMinutes) els.castTravelMinutes.value = cast.travel_minutes ?? "";
   if (els.castArea) els.castArea.value = normalizeAreaLabel(cast.area || "");
   if (els.castMemo) els.castMemo.value = cast.memo || "";
   if (els.castPhone) els.castPhone.value = cast.phone || "";
@@ -2315,6 +2473,7 @@ async function saveCast() {
     address,
     area: normalizeAreaLabel(manualArea || autoArea || ""),
     distance_km: toNullableNumber(els.castDistanceKm?.value) ?? autoDistance,
+    travel_minutes: getStoredTravelMinutes(els.castTravelMinutes?.value) || null,
     latitude: lat,
     longitude: lng,
     memo: els.castMemo?.value.trim() || "",
@@ -2388,13 +2547,28 @@ function renderCastsTable() {
 
   els.castsTableBody.innerHTML = "";
 
+  const castsTable = els.castsTableBody.closest("table");
+  const castsHeaderRow = castsTable?.querySelector("thead tr");
+  if (castsHeaderRow) {
+    castsHeaderRow.innerHTML = `
+      <th>氏名</th>
+      <th>住所</th>
+      <th>方面</th>
+      <th>想定距離(km)</th>
+      <th>片道予想時間(分)</th>
+      <th>メモ</th>
+      <th>操作</th>
+    `;
+  }
+
   if (!allCastsCache.length) {
-    els.castsTableBody.innerHTML = `<tr><td colspan="6" class="muted">キャストがありません</td></tr>`;
+    els.castsTableBody.innerHTML = `<tr><td colspan="7" class="muted">キャストがありません</td></tr>`;
     return;
   }
 
   allCastsCache.forEach(cast => {
   const tr = document.createElement("tr");
+  const travelMinutes = getStoredTravelMinutes(cast.travel_minutes);
   tr.innerHTML = `
   <td>
     ${
@@ -2406,6 +2580,7 @@ function renderCastsTable() {
   <td>${escapeHtml(cast.address || "")}</td>
   <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
   <td>${cast.distance_km ?? ""}</td>
+  <td>${travelMinutes ?? ""}</td>
   <td>${escapeHtml(cast.memo || "")}</td>
   <td class="actions-cell">
     <button class="btn ghost cast-edit-btn" data-id="${cast.id}">編集</button>
@@ -2439,6 +2614,7 @@ function exportCastsCsv() {
     "address",
     "area",
     "distance_km",
+    "travel_minutes",
     "latitude",
     "longitude",
     "memo"
@@ -2450,6 +2626,7 @@ function exportCastsCsv() {
     cast.address || "",
     normalizeAreaLabel(cast.area || ""),
     cast.distance_km ?? "",
+    getStoredTravelMinutes(cast.travel_minutes) ?? "",
     cast.latitude ?? "",
     cast.longitude ?? "",
     cast.memo || ""
@@ -2509,6 +2686,7 @@ async function importCastCsvFile() {
         distance_km:
           toNullableNumber(row.distance_km) ??
           (isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null),
+        travel_minutes: getStoredTravelMinutes(row.travel_minutes) || null,
         latitude: lat,
         longitude: lng,
         memo: String(row.memo || "").trim(),
@@ -2616,6 +2794,7 @@ function renderCastSearchResults() {
           <th>住所</th>
           <th>方面</th>
           <th>想定距離(km)</th>
+          <th>片道予想時間(分)</th>
           <th>電話</th>
           <th>メモ</th>
           <th>操作</th>
@@ -2637,6 +2816,7 @@ function renderCastSearchResults() {
         <td>${escapeHtml(cast.address || "")}</td>
         <td>${escapeHtml(normalizeAreaLabel(cast.area || ""))}</td>
         <td>${cast.distance_km ?? ""}</td>
+        <td>${getStoredTravelMinutes(cast.travel_minutes) ?? ""}</td>
         <td>${escapeHtml(cast.phone || "")}</td>
         <td>${escapeHtml(cast.memo || "")}</td>
         <td class="actions-cell">
@@ -3550,6 +3730,7 @@ async function loadPlansByDate(dateStr) {
         address,
         area,
         distance_km,
+        travel_minutes,
         latitude,
         longitude
       )
@@ -4233,6 +4414,7 @@ async function loadActualsByDate(dateStr) {
         address,
         area,
         distance_km,
+        travel_minutes,
         latitude,
         longitude
       )
@@ -4997,6 +5179,51 @@ function estimateTravelMinutesByAreaSpeed(distanceKm, areaInput) {
   return Math.round((km / speed) * 60);
 }
 
+function estimateFallbackTravelMinutes(distanceKm, areaInput = "") {
+  return estimateTravelMinutesByAreaSpeed(distanceKm, areaInput);
+}
+
+function getRowOneWayTravelMinutes(row, fallbackDistanceKm = null, fallbackArea = "") {
+  const stored = getCastTravelMinutesValue(row?.casts || row);
+  if (stored > 0) return stored;
+
+  const km = Number(fallbackDistanceKm ?? row?.distance_km ?? row?.casts?.distance_km ?? 0);
+  const area = fallbackArea || normalizeAreaLabel(row?.destination_area || row?.casts?.area || "");
+  return estimateFallbackTravelMinutes(km, area);
+}
+
+function getRowsOutboundMinutes(rows) {
+  const ordered = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!ordered.length) return 0;
+  const representativeArea = getRepresentativeAreaFromRows(ordered);
+  const routeDistanceKm = Number(calculateRouteDistanceGlobal(ordered) || 0);
+  const lastRow = ordered[ordered.length - 1] || {};
+  const storedLast = getCastTravelMinutesValue(lastRow?.casts || lastRow);
+  if (storedLast > 0) return storedLast;
+  return estimateFallbackTravelMinutes(routeDistanceKm, representativeArea);
+}
+
+function getRowsReturnMinutes(rows) {
+  const ordered = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!ordered.length) return 0;
+  const lastRow = ordered[ordered.length - 1] || {};
+  const area = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || getRepresentativeAreaFromRows(ordered) || "");
+  return getRowOneWayTravelMinutes(lastRow, lastRow.distance_km || 0, area);
+}
+
+function getRowsTravelTimeSummary(rows) {
+  const ordered = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!ordered.length) {
+    return { outboundMinutes: 0, returnMinutes: 0, totalMinutes: 0, sendOnlyMinutes: 0, stopCount: 0 };
+  }
+  const outboundMinutes = Math.round(getRowsOutboundMinutes(ordered));
+  const returnMinutes = Math.round(getRowsReturnMinutes(ordered));
+  const stopCount = ordered.length;
+  const sendOnlyMinutes = Math.round(outboundMinutes + stopCount);
+  const totalMinutes = Math.round(outboundMinutes + returnMinutes + stopCount);
+  return { outboundMinutes, returnMinutes, totalMinutes, sendOnlyMinutes, stopCount };
+}
+
 function formatClockTimeFromMinutesGlobal(totalMinutes) {
   const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
   const h = Math.floor(safe / 60) % 24;
@@ -5067,14 +5294,15 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
     const representativeArea = getRepresentativeAreaFromRows(rows);
   const returnArea = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || representativeArea || "");
   const primaryZone = getDistanceZoneInfoGlobal(Math.max(routeDistanceKm, returnDistanceKm), representativeArea);
+  const timeSummary = getRowsTravelTimeSummary(rows);
 
   let departDelayMinutes = 20;
   if (baseHour === 3) departDelayMinutes = 18;
   else if (baseHour === 4) departDelayMinutes = 12;
   else if (baseHour >= 5) departDelayMinutes = 8;
 
-  const outboundMinutes = estimateTravelMinutesByDistanceGlobal(routeDistanceKm, representativeArea);
-  const returnMinutes = estimateTravelMinutesByDistanceGlobal(returnDistanceKm, returnArea || representativeArea);
+  const outboundMinutes = timeSummary.outboundMinutes;
+  const returnMinutes = timeSummary.returnMinutes;
   const dropoffMinutes = rows.length * 1;
 
   const baseStartMinutes = Number.isFinite(lastAutoDispatchRunAtMinutes) && lastAutoDispatchRunAtMinutes !== null
@@ -5091,8 +5319,8 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
     const singleRouteDistanceKm = Number(calculateRouteDistanceGlobal(firstOnly) || rows[0].distance_km || 0);
     const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
     const singleArea = normalizeAreaLabel(rows[0]?.destination_area || rows[0]?.casts?.area || representativeArea || "");
-    const singleOutbound = estimateTravelMinutesByDistanceGlobal(singleRouteDistanceKm, singleArea);
-    const singleReturn = estimateTravelMinutesByDistanceGlobal(singleReturnDistanceKm, singleArea);
+    const singleOutbound = getRowOneWayTravelMinutes(rows[0], singleRouteDistanceKm, singleArea);
+    const singleReturn = getRowOneWayTravelMinutes(rows[0], singleReturnDistanceKm, singleArea);
     const singlePredictedReturnMinutes = Math.round(singleOutbound + 1 + singleReturn);
     extraSharedDelayMinutes = Math.max(0, predictedReturnMinutes - singlePredictedReturnMinutes);
   }
@@ -5132,20 +5360,13 @@ function calcVehicleDailyStatsGlobal(vehicleId, items) {
   const lastRow = orderedRows[orderedRows.length - 1] || {};
   const returnKm = Number(lastRow.distance_km || 0);
   const totalKm = Number((sendKm + returnKm).toFixed(1));
-
-  const representativeArea = getRepresentativeAreaFromRows(orderedRows);
-  const returnArea = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || representativeArea || "");
-
-  let driveMinutes =
-    estimateTravelMinutesByDistanceGlobal(sendKm, representativeArea) +
-    estimateTravelMinutesByDistanceGlobal(returnKm, returnArea || representativeArea) +
-    orderedRows.length * 1;
+  const timeSummary = getRowsTravelTimeSummary(orderedRows);
 
   return {
     totalKm,
     sendKm: Number(sendKm.toFixed(1)),
     returnKm: Number(returnKm.toFixed(1)),
-    driveMinutes: Math.round(driveMinutes),
+    driveMinutes: Math.round(timeSummary.totalMinutes),
     count: orderedRows.length
   };
 }
@@ -6069,7 +6290,8 @@ function getVehiclePersistentDailyStats(vehicleId, orderedRows) {
     const reportedDistance = Number(Number(reportedRow.distance_km || 0).toFixed(1));
     const jobCount = actualRows.length || rows.length || 0;
     const driveMinutes = Math.round(
-      estimateTravelMinutesByDistanceGlobal(reportedDistance, getRepresentativeAreaFromRows(baseRows)) + jobCount
+      getStoredTravelMinutes(baseRows[baseRows.length - 1]?.casts?.travel_minutes) ||
+      estimateFallbackTravelMinutes(reportedDistance, getRepresentativeAreaFromRows(baseRows)) + jobCount
     );
 
     return {
@@ -6097,11 +6319,7 @@ function getVehiclePersistentDailyStats(vehicleId, orderedRows) {
   const lastRow = baseRows[baseRows.length - 1] || {};
   const returnKm = Number(lastRow.distance_km || 0);
   const totalKm = Number((sendKm + returnKm).toFixed(1));
-  const driveMinutes = Math.round(
-    estimateTravelMinutesByDistanceGlobal(sendKm, getRepresentativeAreaFromRows(baseRows)) +
-      estimateTravelMinutesByDistanceGlobal(returnKm, normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || getRepresentativeAreaFromRows(baseRows) || "")) +
-      baseRows.length
-  );
+  const driveMinutes = Math.round(getRowsTravelTimeSummary(baseRows).totalMinutes);
 
   return {
     sendKm: Number(sendKm.toFixed(1)),
@@ -6120,9 +6338,7 @@ function getVehicleDailySummary(vehicle, orderedRows) {
   const displayTotalKm = (!summary.hasFixedReport && isLastTripDriver)
     ? Number(summary.sendKm || 0)
     : Number(summary.totalKm || 0);
-  const sendOnlyMinutes = Math.round(
-    estimateTravelMinutesByDistanceGlobal(Number(summary.sendKm || 0), getRepresentativeAreaFromRows(orderedRows)) + Number(summary.jobCount || 0)
-  );
+  const sendOnlyMinutes = Math.round(getRowsTravelTimeSummary(orderedRows).sendOnlyMinutes);
   const displayDriveMinutes = (!summary.hasFixedReport && isLastTripDriver)
     ? sendOnlyMinutes
     : Math.round(Number(summary.driveMinutes || 0));
@@ -7375,6 +7591,7 @@ function setupEvents() {
   els.resetCastsBtn?.addEventListener("click", resetAllCastsDanger);
   els.resetVehiclesBtn?.addEventListener("click", resetAllVehiclesDanger);
 
+  ensureCastTravelMinutesUi();
   els.saveCastBtn?.addEventListener("click", saveCast);
   els.guessAreaBtn?.addEventListener("click", guessCastArea);
   els.castAddress?.addEventListener("input", () => {
@@ -7398,6 +7615,7 @@ function setupEvents() {
     applyCastLatLng();
   });
   els.openGoogleMapBtn?.addEventListener("click", () => openGoogleMap(els.castAddress?.value || "", els.castLat?.value, els.castLng?.value));
+  els.fetchCastTravelMinutesBtn?.addEventListener("click", fetchCastTravelMinutesManually);
   els.cancelEditBtn?.addEventListener("click", resetCastForm);
   els.importCsvBtn?.addEventListener("click", () => els.csvFileInput?.click());
   els.exportCsvBtn?.addEventListener("click", exportCastsCsv);
@@ -7469,6 +7687,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const ok = await ensureAuth();
     if (!ok) return;
 
+    ensureCastTravelMinutesUi();
     setupTabs();
     setupEvents();
 
