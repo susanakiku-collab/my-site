@@ -5689,7 +5689,6 @@ function getVehicleRotationForecastSafe(vehicle, orderedRows) {
   } catch (e) {
     console.warn("calcVehicleRotationForecastGlobal fallback:", e);
   }
-
   try {
     if (typeof calcVehicleRotationForecast === "function") {
       return calcVehicleRotationForecast(vehicle, orderedRows);
@@ -5720,49 +5719,58 @@ function getVehicleRotationForecastSafe(vehicle, orderedRows) {
   };
 }
 
-var buildRotationTimelineHtml = function(vehicles, activeItems) {
+function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
   try {
-    const list = (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
-      const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
-        item => Number(item.vehicle_id) === Number(vehicle.id)
-      );
+    if (typeof buildRotationTimelineHtml === "function") {
+      return buildRotationTimelineHtml(vehicles, activeItems);
+    }
+  } catch (e) {
+    console.warn("buildRotationTimelineHtml fallback:", e);
+  }
 
-      if (!rows.length) return null;
+  try {
+    const timeline = (Array.isArray(vehicles) ? vehicles : [])
+      .map(vehicle => {
+        const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
+          item => Number(item.vehicle_id) === Number(vehicle.id)
+        );
 
-      const orderedRows = typeof moveManualLastItemsToEnd === "function" && typeof sortItemsByNearestRoute === "function"
-        ? moveManualLastItemsToEnd(sortItemsByNearestRoute(rows))
-        : rows;
+        if (!rows.length) return null;
 
-      const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+        const orderedRows = (typeof moveManualLastItemsToEnd === "function" && typeof sortItemsByNearestRoute === "function")
+          ? moveManualLastItemsToEnd(sortItemsByNearestRoute(rows))
+          : rows;
 
-      const totalKm = Number(
-        forecast?.totalKm ??
-        forecast?.dailyDistanceKm ??
-        ((Number(forecast?.routeDistanceKm || 0) + Number(forecast?.returnDistanceKm || 0)))
-      );
+        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
+        const totalKm = Number(
+          forecast?.totalKm ??
+          forecast?.dailyDistanceKm ??
+          (Number(forecast?.routeDistanceKm || 0) + Number(forecast?.returnDistanceKm || 0))
+        );
 
-      const totalJobs = Number(
-        forecast?.jobCount ??
-        forecast?.count ??
-        orderedRows.length
-      );
+        const totalJobs = Number(
+          forecast?.jobCount ??
+          forecast?.count ??
+          orderedRows.length
+        );
 
-      return {
-        name: vehicle?.driver_name || vehicle?.plate_number || "車両",
-        returnAfterLabel: forecast?.returnAfterLabel || `${Number(forecast?.predictedReturnMinutes || 0)}分後`,
-        nextRunTime: forecast?.predictedReadyTime || "-",
-        totalKm,
-        totalJobs
-      };
-    }).filter(Boolean);
+        return {
+          name: vehicle?.driver_name || vehicle?.plate_number || "-",
+          returnAfterLabel: forecast?.returnAfterLabel || `${Number(forecast?.predictedReturnMinutes || 0)}分後`,
+          nextRunTime: forecast?.predictedReadyTime || "-",
+          totalKm,
+          totalJobs
+        };
+      })
+      .filter(Boolean);
 
-    if (!list.length) return "";
+    if (!timeline.length) return "";
 
     return `
       <div class="panel-card" style="margin-bottom:16px;">
         <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
         <div style="display:flex; flex-wrap:wrap; gap:8px;">
-          ${list.map(item => `
+          ${timeline.map(item => `
             <div class="chip" style="padding:8px 12px;">
               <strong>${escapeHtml(item.name)}</strong>
               / 戻り${escapeHtml(item.returnAfterLabel)}
@@ -5775,10 +5783,11 @@ var buildRotationTimelineHtml = function(vehicles, activeItems) {
       </div>
     `;
   } catch (e) {
-    console.error("buildRotationTimelineHtml error:", e);
+    console.error("buildRotationTimelineHtmlSafe error:", e);
     return "";
   }
-};
+}
+
 
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
@@ -5794,7 +5803,7 @@ function renderDailyDispatchResult() {
   );
 
   try {
-    const timelineHtml = buildRotationTimelineHtml(vehicles, activeItems);
+    const timelineHtml = buildRotationTimelineHtmlSafe(vehicles, activeItems);
     const cardsHtml = vehicles
       .map(vehicle => {
         const rows = activeItems
