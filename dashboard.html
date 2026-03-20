@@ -14,7 +14,7 @@
         <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
         <p class="app-subtitle">AI Route & Dispatch System</p>
         <div class="app-version">
-        THEMIS AI Dispatch v5.2 Beta<br>
+        THEMIS AI Dispatch v6.9.12 beta<br>
         Build 2026
         </div>
       </div>
@@ -63,12 +63,12 @@
           <section class="panel-card">
             <h2>システム概要</h2>
             <ul class="memo-list">
-              <li>THEMISを起点とした送迎配車AIシステム</li>
-              <li>キャスト住所から緯度経度を取得して距離計算</li>
-              <li>住所から方面を自動判定（手動修正可）</li>
-              <li>空き車両がある場合は分散優先</li>
-              <li>ルートが自然につながる場合のみ同乗</li>
-              <li>ラスト便はドライバー帰宅方向を優先</li>
+              <li>・</li>
+              <li>・</li>
+              <li>・</li>
+              <li>・</li>
+              <li>・</li>
+              <li>・</li>
               <li>GoogleMapでルート確認可能</li>
             </ul>
           </section>
@@ -79,10 +79,10 @@
               <li>住所入力 → Enterで座標取得</li>
               <li>同一住所はジオコードキャッシュ</li>
               <li>距離はTHEMIS起点で自動計算</li>
-              <li>車両距離バランスAIを使用</li>
+              <li>・</li>
               <li>完了キャストは次回配車から除外</li>
               <li>配車後の車両変更可能</li>
-              <li>CSV / Excel出力対応</li>
+              <li>CSV出力対応</li>
             </ul>
           </section>
         </div>
@@ -159,21 +159,24 @@
             <input id="csvFileInput" type="file" accept=".csv,text/csv" class="hidden" />
           </div>
 
-          <div class="table-wrap">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>氏名</th>
-                  <th>住所</th>
-                  <th>方面</th>
-                  <th>想定距離(km)</th>
-                  <th>メモ</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="castsTableBody"></tbody>
-            </table>
-          </div>
+          <details class="list-toggle-block cast-list-toggle">
+            <summary>キャスト一覧を表示</summary>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>氏名</th>
+                    <th>住所</th>
+                    <th>方面</th>
+                    <th>想定距離(km)</th>
+                    <th>メモ</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="castsTableBody"></tbody>
+              </table>
+            </div>
+          </details>
         </section>
       </section>
 
@@ -323,7 +326,7 @@
               <label>&nbsp;</label>
               <div class="action-row">
                 <button id="previewMileageReportBtn" class="btn ghost">一覧表示</button>
-                <button id="exportMileageReportBtn" class="btn primary">Excel出力</button>
+                <button id="exportMileageReportBtn" class="btn primary">CVSエクスポート</button>
               </div>
             </div>
           </div>
@@ -352,10 +355,64 @@
     </div>
 
     <div class="daily-vehicles-block">
-      <h3>本日使用する車両（出勤車）</h3>
+      <h3>本日使用する車両（可能車両）</h3>
       <div id="dailyVehicleChecklist" class="vehicle-checklist"></div>
       <div id="manualLastVehicleInfo" class="muted" style="margin-top:10px;">ラスト便車両: なし</div>
     </div>
+
+    <div class="daily-hybrid-panel">
+      <div class="hybrid-grid hybrid-grid-stack">
+        <details class="hybrid-toggle-card">
+          <summary class="hybrid-toggle-summary">
+            <div class="hybrid-toggle-title-wrap">
+              <span class="hybrid-toggle-icon">📍</span>
+              <div>
+                <div class="hybrid-toggle-title">運用基準</div>
+                <div class="hybrid-toggle-sub">必要なときだけ開く</div>
+              </div>
+            </div>
+            <span class="chip subtle">現実</span>
+          </summary>
+          <section class="hybrid-card hybrid-card-inner">
+            <div id="operationContextSummary" class="hybrid-summary-grid"></div>
+            <div id="operationDiagnosis" class="hybrid-diagnosis muted">診断を計算中です…</div>
+          </section>
+        </details>
+
+        <details class="hybrid-toggle-card">
+          <summary class="hybrid-toggle-summary">
+            <div class="hybrid-toggle-title-wrap">
+              <span class="hybrid-toggle-icon">🎯</span>
+              <div>
+                <div class="hybrid-toggle-title">試算対象</div>
+                <div class="hybrid-toggle-sub">必要なときだけ開く</div>
+              </div>
+            </div>
+            <span class="chip subtle">試算</span>
+          </summary>
+          <section class="hybrid-card hybrid-card-inner">
+            <div class="hybrid-sim-controls">
+              <div class="field compact">
+                <label for="simulationSlotSelect">対象便</label>
+                <select id="simulationSlotSelect"></select>
+              </div>
+              <label class="sim-toggle-row">
+                <input id="simulationIncludePlanInflow" type="checkbox" />
+                <span>前便未処理予定を流入</span>
+              </label>
+              <div class="action-row">
+                <button id="runSimulationBtn" class="btn ghost">試算</button>
+                <button id="runSimulationDispatchBtn" class="btn primary">自動配車を試す</button>
+              </div>
+            </div>
+            <div id="simulationDiagnosis" class="hybrid-diagnosis muted">試算対象便を選択してください</div>
+            <div id="simulationPreview" class="simulation-preview muted">まだ試算していません</div>
+          </section>
+        </details>
+      </div>
+    </div>
+
+    <div class="divider"></div>
 
     <div class="divider"></div>
 
@@ -371,13 +428,13 @@
 
     <div class="divider"></div>
 
-    <div class="daily-vehicles-block">
-      <h3>車両別 日次走行距離入力</h3>
+    <details class="daily-vehicles-block">
+      <summary style="cursor:pointer;font-weight:700;margin-bottom:8px;">車両別 日次走行距離入力（業務終了時）</summary>
       <div id="dailyMileageInputs" class="daily-mileage-list"></div>
       <div class="action-row">
         <button id="saveDailyMileageBtn" class="btn primary">日次走行距離を保存</button>
       </div>
-    </div>
+    </details>
   </section>
 </section>
 
@@ -447,12 +504,15 @@
             <button id="cancelPlanEditBtn" class="btn ghost">入力リセット</button>
           </div>
 
-          <div id="plansGroupedTable" class="table-wrap"></div>
+          <h3>時間帯 × 方面 一覧</h3>
+          <div id="plansTimeAreaMatrix" class="table-wrap"></div>
 
           <div class="divider"></div>
 
-          <h3>時間帯 × 方面 一覧</h3>
-          <div id="plansTimeAreaMatrix" class="table-wrap"></div>
+          <details class="list-toggle-block">
+            <summary>時間帯別の一覧を表示</summary>
+            <div id="plansGroupedTable" class="table-wrap"></div>
+          </details>
         </section>
       </section>
 
@@ -536,12 +596,15 @@
             <button id="cancelActualEditBtn" class="btn ghost">入力リセット</button>
           </div>
 
-          <div id="actualTableWrap" class="table-wrap"></div>
+          <h3>時間帯 × 方面 一覧</h3>
+          <div id="actualTimeAreaMatrix" class="table-wrap"></div>
 
           <div class="divider"></div>
 
-          <h3>時間帯 × 方面 一覧</h3>
-          <div id="actualTimeAreaMatrix" class="table-wrap"></div>
+          <details class="list-toggle-block">
+            <summary>時間帯別の一覧を表示</summary>
+            <div id="actualTableWrap" class="table-wrap"></div>
+          </details>
         </section>
       </section>
 
