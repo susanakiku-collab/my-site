@@ -6,6 +6,7 @@
   <title>THEMIS AI Dispatch</title>
   <link rel="stylesheet" href="style.css?v=ui-tidy-v1" />
   <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 </head>
 <body>
   <div class="app-shell">
@@ -14,7 +15,7 @@
         <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
         <p class="app-subtitle">AI Route & Dispatch System</p>
         <div class="app-version">
-        THEMIS AI Dispatch v6.1 beta<br>
+        THEMIS AI Dispatch v6.9.12 beta<br>
         Build 2026
         </div>
       </div>
@@ -63,12 +64,12 @@
           <section class="panel-card">
             <h2>システム概要</h2>
             <ul class="memo-list">
-              <li>・</li>
-              <li>・</li>
-              <li>・</li>
-              <li>・</li>
-              <li>・</li>
-              <li>・</li>
+              <li>キャスト・車両マスタを事前登録</li>
+              <li>予定表で送迎計画を作成</li>
+              <li>当日運用で自動配車・手動調整</li>
+              <li>実際の送りで実績管理</li>
+              <li>月間走行距離・出勤日数を集計</li>
+              <li>LINE連携でドライバーへ通知</li>
               <li>GoogleMapでルート確認可能</li>
             </ul>
           </section>
@@ -79,7 +80,7 @@
               <li>住所入力 → Enterで座標取得</li>
               <li>同一住所はジオコードキャッシュ</li>
               <li>距離はTHEMIS起点で自動計算</li>
-              <li>・</li>
+              <li>シミュレーションで便別試算可能</li>
               <li>完了キャストは次回配車から除外</li>
               <li>配車後の車両変更可能</li>
               <li>CSV出力対応</li>
@@ -326,7 +327,7 @@
               <label>&nbsp;</label>
               <div class="action-row">
                 <button id="previewMileageReportBtn" class="btn ghost">一覧表示</button>
-                <button id="exportMileageReportBtn" class="btn primary">CVSエクスポート</button>
+                <button id="exportMileageReportBtn" class="btn primary">CSVエクスポート</button>
               </div>
             </div>
           </div>
@@ -656,7 +657,8 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="config.js"></script>
-  <script src="dashboard.js?v=v3-2-ui-tidy-v1"></script>
+  <script src="dashboard.js?v=v3-2-ui-tidy-v1-map"></script>
 </body>
 </html>
