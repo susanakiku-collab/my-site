@@ -2032,7 +2032,7 @@ img, table, input, select, textarea, button{
 }
 .hybrid-toggle-title{ font-size:16px; font-weight:800; color:#fff; }
 .hybrid-toggle-sub{ font-size:12px; color:#aebcd0; margin-top:2px; }
-.hybrid-card-inner{ border:none; box-shadow:none; background:transparent; padding-top:0; }
+.hybrid-card-inner{ border:none; box-shadow:none; background:transparent; padding:0 16px 16px; }
 
 .hybrid-summary-grid{
   display:grid;
@@ -2055,6 +2055,17 @@ img, table, input, select, textarea, button{
 .hybrid-summary-body{ min-width:0; }
 .hybrid-summary-label{ font-size:12px; color:#aebcd0; font-weight:700; }
 .hybrid-summary-value{ margin-top:3px; font-size:18px; color:#fff; font-weight:800; }
+
+.hybrid-diagnosis{
+  margin-top:12px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;
+  padding:12px;
+  background:rgba(255,255,255,.03);
+}
+.hybrid-diagnosis.ok{ background:rgba(47,191,122,.10); border-color:rgba(47,191,122,.28); }
+.hybrid-diagnosis.warn{ background:rgba(230,174,32,.10); border-color:rgba(230,174,32,.28); }
+.hybrid-diagnosis.danger{ background:rgba(224,82,82,.10); border-color:rgba(224,82,82,.28); }
 
 .hybrid-state-row{
   display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;
@@ -2079,6 +2090,9 @@ img, table, input, select, textarea, button{
 .hybrid-legend-title{ font-size:12px; color:#aebcd0; font-weight:700; }
 .hybrid-legend-value{ margin-top:5px; font-size:15px; color:#fff; font-weight:800; line-height:1.45; }
 
+.sim-preview-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.sim-preview-title{ margin:0; font-size:15px; font-weight:800; }
+.sim-preview-meta{ margin-top:8px; font-size:13px; color:#aebcd0; line-height:1.55; }
 .sim-mini-chip-grid{
   display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;
 }
@@ -2088,6 +2102,28 @@ img, table, input, select, textarea, button{
 }
 .sim-mini-name{ font-size:14px; font-weight:800; color:#fff; }
 .sim-mini-area{ font-size:12px; color:#aebcd0; }
+.simulation-preview{
+  margin-top:12px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;
+  padding:12px;
+  background:rgba(255,255,255,.03);
+}
+.simulation-preview.muted{ color:#aebcd0; }
+
+.dispatch-summary-bar{
+  position:sticky;
+  top:0;
+  z-index:30;
+  background:#121823;
+  border:1px solid rgba(255,255,255,.10);
+  padding:14px;
+  border-radius:14px;
+  font-weight:800;
+  margin:14px 0 10px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.22);
+  font-size:15px;
+}
 
 @media (max-width: 768px){
   .hybrid-toggle-summary{ padding:12px; }
