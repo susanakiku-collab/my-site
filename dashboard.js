@@ -10,7 +10,7 @@ function __shouldBlockDirectionMerge(items, vehicles){
 }
 // ==========================================
 
-// THEMIS AI Dispatch v6.3
+// THEMIS AI Dispatch v6.9.12
 const {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -44,6 +44,9 @@ let simulationSlotHour = null;
 let lastSimulationResult = null;
 let isRefreshingHybridUI = false;
 let suppressSimulationSlotChange = false;
+const ENABLE_DISTANCE_REBALANCE = false;
+const ENFORCE_AREA_PRIORITY_STRICT = true;
+const ENABLE_DISPLAY_GROUP_FORCE_BRANCH = false;
 
 const els = {
   plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
@@ -366,6 +369,28 @@ function getDayOfWeek(dateStr) {
   // 火曜-金曜は4時、土曜-月曜は5時
   if (day >= 2 && day <= 5) return 4;
   return 5;
+}
+
+function getEffectiveLastHour(dateStr, rows = []) {
+  const rowHours = (Array.isArray(rows) ? rows : [])
+    .map(row => Number(row?.actual_hour ?? row?.plan_hour ?? row?.hour))
+    .filter(Number.isFinite);
+  if (rowHours.length) return Math.max(...rowHours);
+
+  const cacheHours = [];
+  (Array.isArray(currentActualsCache) ? currentActualsCache : []).forEach(row => {
+    const status = normalizeStatus(row?.status);
+    if (status === "done" || status === "cancel") return;
+    const hour = Number(row?.actual_hour ?? row?.plan_hour);
+    if (Number.isFinite(hour)) cacheHours.push(hour);
+  });
+  (Array.isArray(currentPlansCache) ? currentPlansCache : []).forEach(row => {
+    const hour = Number(row?.plan_hour ?? row?.actual_hour);
+    if (Number.isFinite(hour)) cacheHours.push(hour);
+  });
+
+  if (cacheHours.length) return Math.max(...cacheHours);
+  return getDefaultLastHour(dateStr);
 }
 
 
@@ -1370,43 +1395,70 @@ function getItemLatLng(item) {
 }
 
 function sortItemsByNearestRoute(items) {
-  const remaining = [...items];
-  const sorted = [];
+  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!rows.length) return [];
 
-  let currentLat = ORIGIN_LAT;
-  let currentLng = ORIGIN_LNG;
+  const groups = new Map();
+  rows.forEach((row, idx) => {
+    const hourKey = Number(row?.actual_hour ?? row?.plan_hour ?? 0);
+    if (!groups.has(hourKey)) groups.set(hourKey, []);
+    groups.get(hourKey).push({ row, idx });
+  });
 
-  while (remaining.length) {
-    let bestIndex = 0;
-    let bestScore = Infinity;
+  const ordered = [];
+  const hourKeys = [...groups.keys()].sort((a, b) => a - b);
 
-    remaining.forEach((item, index) => {
-      const point = getItemLatLng(item);
-
-      let score;
-      if (point) {
-        score = estimateRoadKmBetweenPoints(currentLat, currentLng, point.lat, point.lng);
-      } else {
-        score = Number(item.distance_km || 999999);
-      }
-
-      if (score < bestScore) {
-        bestScore = score;
-        bestIndex = index;
-      }
-    });
-
-    const picked = remaining.splice(bestIndex, 1)[0];
-    sorted.push(picked);
-
-    const pickedPoint = getItemLatLng(picked);
-    if (pickedPoint) {
-      currentLat = pickedPoint.lat;
-      currentLng = pickedPoint.lng;
-    }
+  function getRowDistanceValue(row) {
+    return Number(row?.distance_km ?? row?.casts?.distance_km ?? 999999) || 999999;
+  }
+  function getRowTravelValue(row) {
+    const v = Number(row?.casts?.travel_minutes ?? row?.travel_minutes ?? 999999);
+    return Number.isFinite(v) && v > 0 ? v : 999999;
+  }
+  function getRowStableId(row, fallbackIdx) {
+    return Number(row?.id ?? row?.item_id ?? row?.cast_id ?? fallbackIdx ?? 0) || 0;
   }
 
-  return sorted;
+  hourKeys.forEach(hourKey => {
+    const remaining = groups.get(hourKey).slice();
+    let currentDistance = null;
+
+    while (remaining.length) {
+      let bestIndex = 0;
+      let bestKey = null;
+
+      remaining.forEach((entry, index) => {
+        const row = entry.row;
+        const distanceValue = getRowDistanceValue(row);
+        const travelValue = getRowTravelValue(row);
+        const stableId = getRowStableId(row, entry.idx);
+        const primary = currentDistance == null
+          ? distanceValue
+          : Math.abs(distanceValue - currentDistance);
+        const compareKey = [primary, distanceValue, travelValue, stableId];
+
+        if (!bestKey) {
+          bestKey = compareKey;
+          bestIndex = index;
+          return;
+        }
+        for (let i = 0; i < compareKey.length; i += 1) {
+          if (compareKey[i] === bestKey[i]) continue;
+          if (compareKey[i] < bestKey[i]) {
+            bestKey = compareKey;
+            bestIndex = index;
+          }
+          break;
+        }
+      });
+
+      const picked = remaining.splice(bestIndex, 1)[0].row;
+      ordered.push(picked);
+      currentDistance = getRowDistanceValue(picked);
+    }
+  });
+
+  return ordered;
 }
 
 function calculateRouteDistance(items) {
@@ -2118,9 +2170,9 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
 
   if (distance === 0) penalty += 0;
   else if (distance === 1) penalty += sameBroadGroup ? 6 : 18;
-  else if (distance === 2) penalty += sameBroadGroup ? 18 : 72;
-  else if (distance === 3) penalty += sameBroadGroup ? 62 : 220;
-  else if (distance >= 4 && distance < 99) penalty += sameBroadGroup ? 120 : 420;
+  else if (distance === 2) penalty += sameBroadGroup ? 28 : 120;
+  else if (distance === 3) penalty += sameBroadGroup ? 88 : 300;
+  else if (distance >= 4 && distance < 99) penalty += sameBroadGroup ? 160 : 560;
 
   if (routeFlow <= 0) penalty += sameBroadGroup ? 8 : 42;
   else if (routeFlow < 40) penalty += sameBroadGroup ? 4 : 22;
@@ -2132,7 +2184,7 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
   const gatewayA = isGatewayNearArea(areaA);
   const gatewayB = isGatewayNearArea(areaB);
   if (gatewayA || gatewayB) {
-    if (distance >= 2) penalty += 96;
+    if (distance >= 2) penalty += 140;
   }
 
   const pair = [getCanonicalArea(areaA), getCanonicalArea(areaB)].filter(Boolean).sort().join("__");
@@ -2150,7 +2202,7 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
   }
 
   if (isHardReverseMixForRoute(areaA, areaB)) {
-    penalty += 620;
+    penalty += 900;
   } else if (sameBroadGroup && affinity >= 72) {
     penalty -= 36;
   }
@@ -2183,6 +2235,30 @@ function getRouteContinuityPenalty(targetArea, existingAreas = [], homeArea = ""
   penalty += getAreaMixGuardScore(targetArea, areas);
 
   return Math.max(0, penalty);
+}
+
+function isStrictSameDirectionArea(targetArea, existingAreas = []) {
+  const target = normalizeAreaLabel(targetArea);
+  const areas = Array.isArray(existingAreas) ? existingAreas.map(normalizeAreaLabel).filter(Boolean) : [];
+  if (!target || target === "無し" || !areas.length) return true;
+  const targetGroup = getAreaDisplayGroup(target);
+  return areas.every(area => {
+    const group = getAreaDisplayGroup(area);
+    if (group && targetGroup && group !== targetGroup) return false;
+    return !hasHardReverseMix(target, [area]);
+  });
+}
+
+function isLastRunHardAreaConstraintSatisfied(targetArea, existingAreas = [], homeArea = "") {
+  const target = normalizeAreaLabel(targetArea);
+  const home = normalizeAreaLabel(homeArea || "");
+  if (!target || target === "無し") return false;
+  if (home && isHardReverseForHome(target, home)) return false;
+  if (!isStrictSameDirectionArea(target, existingAreas)) return false;
+  const strict = getStrictHomeCompatibilityScore(target, home);
+  const direction = getDirectionAffinityScore(target, home);
+  // Last run should prioritize going toward driver's home direction.
+  return strict >= 52 || direction >= 24;
 }
 
 function getRouteFlowSortWeight(area) {
@@ -2835,7 +2911,7 @@ function renderHomeMonthlyVehicleList() {
     const row = document.createElement("div");
     row.className = "home-monthly-item";
     row.innerHTML = `
-      ${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</span>
+      <span class="chip">${escapeHtml(vehicle.driver_name || vehicle.plate_number || "-")}</span>
       <span class="chip">${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || "-"))}</span>
       <span class="chip">帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || "-"))}</span>
       <span class="chip">月間:${stats.totalDistance.toFixed(1)}km</span>
@@ -5496,6 +5572,8 @@ function buildFallbackAssignments(items, vehicles) {
 
   const assignments = [];
   const seatLoads = new Map();
+  const dateStr = els.actualDate?.value || todayStr();
+  const effectiveLastHour = getEffectiveLastHour(dateStr, orderedItems);
 
   function getLoad(vehicleId, hour) {
     return Number(seatLoads.get(`${vehicleId}_${hour}`) || 0);
@@ -5508,7 +5586,40 @@ function buildFallbackAssignments(items, vehicles) {
 
   orderedItems.forEach((item, index) => {
     const hour = Number(item.actual_hour ?? 0);
+    const targetArea = normalizeAreaLabel(item.destination_area || item.cluster_area || item.planned_area || item?.casts?.area || "無し");
+    const isLastHour = Number(hour) === Number(effectiveLastHour);
+    let candidateVehicles = vehicles.filter(v => getLoad(v.id, hour) < Number(v.seat_capacity || 4));
+    if (isLastHour) {
+      const existingAreasByVehicle = new Map();
+      assignments
+        .filter(a => Number(a.actual_hour ?? 0) === Number(hour))
+        .forEach(a => {
+          const assignedItem = orderedItems.find(row => Number(row.id) === Number(a.item_id));
+          const area = normalizeAreaLabel(assignedItem?.destination_area || assignedItem?.cluster_area || assignedItem?.planned_area || assignedItem?.casts?.area || "無し");
+          const key = Number(a.vehicle_id);
+          if (!existingAreasByVehicle.has(key)) existingAreasByVehicle.set(key, []);
+          if (area) existingAreasByVehicle.get(key).push(area);
+        });
+      const strictCandidates = candidateVehicles.filter(v => {
+        const existingAreas = existingAreasByVehicle.get(Number(v.id)) || [];
+        return isLastRunHardAreaConstraintSatisfied(targetArea, existingAreas, v?.home_area || "");
+      });
+      if (strictCandidates.length) {
+        candidateVehicles = strictCandidates;
+      } else {
+        const directionSafeCandidates = candidateVehicles.filter(v => {
+          const existingAreas = existingAreasByVehicle.get(Number(v.id)) || [];
+          if (!isStrictSameDirectionArea(targetArea, existingAreas)) return false;
+          return !isHardReverseForHome(targetArea, v?.home_area || "");
+        });
+        candidateVehicles = directionSafeCandidates;
+      }
+    }
+
+    if (isLastHour && !candidateVehicles.length) return;
+
     let selectedVehicle =
+      candidateVehicles[0] ||
       vehicles.find(v => getLoad(v.id, hour) < Number(v.seat_capacity || 4)) ||
       vehicles[index % vehicles.length];
 
@@ -5532,7 +5643,7 @@ function applyManualLastVehicleToAssignments(assignments, vehicles) {
   if (!assignments.length || !vehicles.length) return assignments;
 
   const dateStr = els.actualDate?.value || todayStr();
-  const defaultLastHour = getDefaultLastHour(dateStr);
+  const defaultLastHour = getEffectiveLastHour(dateStr, assignments.map(a => ({ actual_hour: a?.actual_hour })));
   const manualLastVehicleId = getManualLastVehicleId();
   const manualVehicle = vehicles.find(v => Number(v.id) === Number(manualLastVehicleId)) || null;
   const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
@@ -5562,6 +5673,19 @@ function applyManualLastVehicleToAssignments(assignments, vehicles) {
         const currentLoad = Number(hourCounts.get(currentKey) || 0);
         const isSameVehicle = Number(vehicle.id) === Number(target.vehicle_id);
         if (!isSameVehicle && currentLoad >= seatCapacity) continue;
+        const existingAreas = optimizedLastHour
+          .filter(
+            a =>
+              Number(a.actual_hour ?? 0) === Number(defaultLastHour) &&
+              Number(a.vehicle_id) === Number(vehicle.id) &&
+              Number(a.item_id) !== Number(target.item_id)
+          )
+          .map(a => {
+            const row = itemMap.get(Number(a.item_id));
+            return normalizeAreaLabel(row?.destination_area || row?.cluster_area || row?.planned_area || row?.casts?.area || "");
+          })
+          .filter(Boolean);
+        if (!isLastRunHardAreaConstraintSatisfied(area, existingAreas, vehicle.home_area || "")) continue;
 
         const currentVehicle = vehicleMap.get(Number(target.vehicle_id));
         const currentHome = normalizeAreaLabel(currentVehicle?.home_area || '');
@@ -5941,6 +6065,7 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
 
   const LONG_BUNDLE_ROUND_TRIP_MINUTES = 55;
   const actualLastHour = clusters.reduce((max, cluster) => Math.max(max, Number(cluster?.hour ?? -Infinity)), -Infinity);
+  const effectiveLastHour = getEffectiveLastHour(els.actualDate?.value || todayStr(), clusters.map(c => ({ hour: c?.hour })));
   const vehicleUsage = new Map();
   const vehicleLongClusterLocks = new Map();
 
@@ -6040,7 +6165,11 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
   function shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) {
     const roundTripMinutes = getClusterRoundTripMinutes(cluster);
     if (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES) return false;
-    if (cluster.count <= 1) return true;
+    if (cluster.count <= 1) {
+      const strongRouteLink = routeFlowScore >= 78 && routeContinuityPenalty <= 85;
+      if (strongRouteLink) return false;
+      return true;
+    }
     if (sameHourLoad <= 0) return true;
     const strongRouteLink = routeFlowScore >= 90 && routeContinuityPenalty <= 45;
     const reasonableRideShare = routeFlowScore >= 70 && routeContinuityPenalty <= 60;
@@ -6076,10 +6205,10 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
       const direction = getDirectionAffinityScore(targetArea, area);
       let score = 0;
 
-      if (targetCanonical && canonical && targetCanonical === canonical) score += 130;
-      else if (targetGroup && group && targetGroup === group) score += 95;
-      else if (affinity >= 72) score += 80;
-      else if (affinity >= 54) score += 48;
+    if (targetCanonical && canonical && targetCanonical === canonical) score += 180;
+    else if (targetGroup && group && targetGroup === group) score += 130;
+    else if (affinity >= 72) score += 100;
+    else if (affinity >= 54) score += 62;
 
       if (direction >= 72) score += 18;
       else if (direction >= 28) score += 8;
@@ -6465,7 +6594,7 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
   for (const cluster of clusters) {
     const dateStr = els.actualDate?.value || todayStr();
     const isLastRun = isLastClusterOfTheDay(cluster, dateStr);
-    const defaultLastHour = getDefaultLastHour(dateStr);
+    const defaultLastHour = effectiveLastHour;
     const isDefaultLastHourCluster =
       Number(cluster.hour) === Number(defaultLastHour) &&
       Number(cluster.hour) === Number(actualLastHour);
@@ -6506,6 +6635,14 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
         const areaMixGuardScore = getAreaMixGuardScore(normalizedClusterArea, existingHourAreas, isLastRun || isDefaultLastHourCluster);
         const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
         const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
+        if ((isLastRun || isDefaultLastHourCluster) && !isLastRunHardAreaConstraintSatisfied(normalizedClusterArea, existingHourAreas, homeArea)) {
+          return null;
+        }
+        if (ENFORCE_AREA_PRIORITY_STRICT) {
+          const areaPriorityWeak = strictHomeScore < 50 && directionAffinity < 24 && vehicleAreaMatch < 55;
+          const mixedDirectionRisk = existingHourAreas.length > 0 && routeContinuityPenalty >= 260;
+          if (areaPriorityWeak || mixedDirectionRisk) return null;
+        }
         const directionSplitGuardScore = getDirectionSplitGuardScore(
           normalizedClusterArea,
           existingHourAreas,
@@ -6575,6 +6712,9 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
             score -= Math.min(routeFlowScore, 120) * 0.40;
             score += routeContinuityPenalty * 0.15;
             score -= 18;
+          }
+          if (sameHourLoad > 0 && routeFlowScore >= 78 && routeContinuityPenalty <= 95) {
+            score -= 120;
           }
 
           score -= bundleCompatibility * (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES ? 1.45 : 0.65);
@@ -6686,7 +6826,11 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
       const forceBundle = shouldForceBundleCluster(cluster, bestExistingAreas);
       const clusterLocked = shouldClusterLock(cluster);
       const areaVehicleShortage = hasAreaVehicleShortageForHour(cluster.hour);
-      const keepTogether = clusterLocked || ((isLastRun || isDefaultLastHourCluster)
+      const forceSameDirectionBundle =
+        bestHourLoad > 0 &&
+        bestRouteFlowScore >= 78 &&
+        bestRouteContinuityPenalty <= 95;
+      const keepTogether = clusterLocked || forceSameDirectionBundle || ((isLastRun || isDefaultLastHourCluster)
         ? true
         : (!areaVehicleShortage && (forceBundle || !shouldPreferSpread(cluster, bestRouteFlowScore, bestRouteContinuityPenalty, bestHourLoad) || idleVehicleCount <= 1)));
 
@@ -6742,6 +6886,17 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
           const areaMixGuardScore = getAreaMixGuardScore(normalizedItemArea, existingHourAreas, isLastRun || isDefaultLastHourCluster);
           const routeFlowScore = getRouteFlowVehicleScore(normalizedItemArea, existingHourAreas, homeArea);
           const routeContinuityPenalty = getRouteContinuityPenalty(normalizedItemArea, existingHourAreas, homeArea);
+          if ((isLastRun || isDefaultLastHourCluster) && !isLastRunHardAreaConstraintSatisfied(normalizedItemArea, existingHourAreas, homeArea)) {
+            return null;
+          }
+          if (ENFORCE_AREA_PRIORITY_STRICT) {
+            const strictItem = getStrictHomeCompatibilityScore(normalizedItemArea, homeArea);
+            const dirItem = getDirectionAffinityScore(normalizedItemArea, homeArea);
+            const areaMatchItem = getVehicleAreaMatchScore(vehicle, normalizedItemArea);
+            const areaPriorityWeak = strictItem < 50 && dirItem < 24 && areaMatchItem < 55;
+            const mixedDirectionRisk = existingHourAreas.length > 0 && routeContinuityPenalty >= 240;
+            if (areaPriorityWeak || mixedDirectionRisk) return null;
+          }
           const directionSplitGuardScore = getDirectionSplitGuardScore(
             normalizedItemArea,
             existingHourAreas,
@@ -6822,6 +6977,9 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
             } else if (rotationPrediction.canShare) {
               score -= Math.min(routeFlowScore, 120) * 0.26;
               score -= 10;
+            }
+            if (sameHourLoad > 0 && routeFlowScore >= 78 && routeContinuityPenalty <= 95) {
+              score -= 95;
             }
 
             score -= bundleCompatibility * (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES ? 1.35 : 0.55);
@@ -6940,6 +7098,7 @@ function __getDisplayGroupAreaLabel(item) {
 }
 
 function __hasEnoughVehiclesForDisplayGroups(items, vehicles) {
+  if (!ENABLE_DISPLAY_GROUP_FORCE_BRANCH) return false;
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
   const safeVehicles = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
   if (!safeItems.length || !safeVehicles.length) return false;
@@ -7403,6 +7562,162 @@ function getVehicleProjectedMonthlyDistance(vehicleId, monthlyMap, orderedRows) 
   return "";
 }
 
+
+let dispatchOverviewMap = null;
+let dispatchOverviewLayer = null;
+let dispatchOverviewHost = null;
+let lastDispatchOverviewCards = [];
+const dispatchOverviewFilterState = new Map();
+
+function getDispatchOverviewVehicleColor(index) {
+  const colors = ["#3b82f6", "#22c55e", "#ef4444", "#f59e0b", "#a855f7", "#06b6d4", "#84cc16", "#ec4899"];
+  return colors[Math.abs(Number(index) || 0) % colors.length];
+}
+
+function getVehicleDisplayName(vehicle) {
+  return String(vehicle?.driver_name || vehicle?.plate_number || `車両${vehicle?.id || ""}` || "車両").trim() || "車両";
+}
+
+function getDispatchRowLatLng(row) {
+  const lat = Number(row?.casts?.latitude ?? row?.latitude ?? row?.lat);
+  const lng = Number(row?.casts?.longitude ?? row?.longitude ?? row?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function buildVehicleRouteMapUrl(vehicle, orderedRows) {
+  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+  if (!rows.length) return "";
+  const origin = `${ORIGIN_LAT},${ORIGIN_LNG}`;
+  const points = rows
+    .map(row => {
+      const p = getDispatchRowLatLng(row);
+      if (p) return `${p.lat},${p.lng}`;
+      const address = String(row?.destination_address || row?.casts?.address || "").trim();
+      return address || "";
+    })
+    .filter(Boolean);
+  if (!points.length) return "";
+  const destination = points[points.length - 1];
+  const waypoints = points.slice(0, -1);
+  const params = new URLSearchParams({
+    api: "1",
+    origin,
+    destination,
+    travelmode: "driving"
+  });
+  if (waypoints.length) params.set("waypoints", waypoints.join("|"));
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function renderDispatchOverviewLegend(cards) {
+  const host = document.getElementById("dispatchOverviewLegend");
+  if (!host) return;
+  host.innerHTML = "";
+  (cards || []).forEach(({ vehicle, orderedRows }, index) => {
+    if (!orderedRows?.length) return;
+    const vehicleId = Number(vehicle?.id || 0);
+    if (!dispatchOverviewFilterState.has(vehicleId)) dispatchOverviewFilterState.set(vehicleId, true);
+    const isOn = dispatchOverviewFilterState.get(vehicleId) !== false;
+    const color = getDispatchOverviewVehicleColor(index);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn ghost";
+    button.style.cssText = `display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;border:1px solid ${isOn ? color : 'rgba(148,163,184,.35)'};background:${isOn ? 'rgba(15,23,42,.85)' : 'rgba(15,23,42,.45)'};color:${isOn ? '#fff' : '#94a3b8'};cursor:pointer;`;
+    button.innerHTML = `<span style="display:inline-block;width:12px;height:12px;border-radius:999px;background:${color};box-shadow:0 0 0 2px rgba(255,255,255,.18) inset;"></span><span>${escapeHtml(getVehicleDisplayName(vehicle))}</span><span style="font-size:11px;opacity:.8;">${isOn ? '表示中' : '非表示'}</span>`;
+    button.addEventListener("click", () => {
+      dispatchOverviewFilterState.set(vehicleId, !isOn);
+      renderDispatchOverviewLegend(lastDispatchOverviewCards);
+      renderDispatchOverviewMap(lastDispatchOverviewCards);
+    });
+    host.appendChild(button);
+  });
+}
+
+function renderDispatchOverviewMap(cards) {
+  const host = document.getElementById("dispatchOverviewMap");
+  lastDispatchOverviewCards = Array.isArray(cards) ? cards : [];
+  renderDispatchOverviewLegend(lastDispatchOverviewCards);
+  if (!host || !window.L) return;
+
+  if (dispatchOverviewMap && dispatchOverviewHost !== host) {
+    try { dispatchOverviewMap.remove(); } catch (_) {}
+    dispatchOverviewMap = null;
+    dispatchOverviewLayer = null;
+  }
+
+  dispatchOverviewHost = host;
+  host.innerHTML = "";
+
+  if (!dispatchOverviewMap) {
+    dispatchOverviewMap = window.L.map(host, { preferCanvas: true, zoomControl: true });
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(dispatchOverviewMap);
+  }
+
+  if (dispatchOverviewLayer) {
+    try { dispatchOverviewLayer.remove(); } catch (_) {}
+  }
+  dispatchOverviewLayer = window.L.layerGroup().addTo(dispatchOverviewMap);
+
+  const bounds = [];
+  const originMarker = window.L.circleMarker([ORIGIN_LAT, ORIGIN_LNG], {
+    radius: 9,
+    color: "#111827",
+    fillColor: "#111827",
+    fillOpacity: 1,
+    weight: 2
+  }).bindPopup(`<b>${escapeHtml(ORIGIN_LABEL || '起点')}</b>`);
+  originMarker.addTo(dispatchOverviewLayer);
+  bounds.push([ORIGIN_LAT, ORIGIN_LNG]);
+
+  (lastDispatchOverviewCards || []).forEach(({ vehicle, orderedRows }, index) => {
+    if (!orderedRows?.length) return;
+    const vehicleId = Number(vehicle?.id || 0);
+    if (!dispatchOverviewFilterState.has(vehicleId)) dispatchOverviewFilterState.set(vehicleId, true);
+    if (dispatchOverviewFilterState.get(vehicleId) === false) return;
+    const color = getDispatchOverviewVehicleColor(index);
+    orderedRows.forEach((row, rowIndex) => {
+      const point = getDispatchRowLatLng(row);
+      if (!point) return;
+      const pinNo = rowIndex + 1;
+      const marker = window.L.marker([point.lat, point.lng], {
+        icon: window.L.divIcon({
+          className: 'dispatch-overview-pin',
+          html: `<div style="width:26px;height:26px;border-radius:999px;background:${color};border:2px solid rgba(255,255,255,.96);box-shadow:0 6px 16px rgba(15,23,42,.38);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px;line-height:1;">${pinNo}</div>`,
+          iconSize: [26, 26],
+          iconAnchor: [13, 13],
+          popupAnchor: [0, -14]
+        })
+      });
+      const vehicleName = getVehicleDisplayName(vehicle);
+      const castName = String(row?.casts?.name || "-");
+      const area = normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || "-");
+      const distanceKm = Number(row?.distance_km || 0).toFixed(1);
+      marker.bindPopup(`<div style="min-width:180px;line-height:1.7;"><b>${escapeHtml(vehicleName)}-${pinNo}</b><br>キャスト: ${escapeHtml(castName)}<br>方面: ${escapeHtml(area)}<br>距離: ${escapeHtml(distanceKm)}km</div>`);
+      marker.bindTooltip(`${escapeHtml(vehicleName)}-${pinNo}`, { direction: "top", opacity: 0.95 });
+      marker.addTo(dispatchOverviewLayer);
+      bounds.push([point.lat, point.lng]);
+    });
+  });
+
+  window.setTimeout(() => {
+    try {
+      dispatchOverviewMap.invalidateSize();
+      if (bounds.length >= 2) {
+        dispatchOverviewMap.fitBounds(bounds, { padding: [24, 24] });
+      } else if (bounds.length === 1) {
+        dispatchOverviewMap.setView(bounds[0], 13);
+      } else {
+        dispatchOverviewMap.setView([ORIGIN_LAT, ORIGIN_LNG], 11);
+      }
+    } catch (error) {
+      console.error("dispatchOverviewMap fit error:", error);
+    }
+  }, 50);
+}
+
 function buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap) {
   return vehicles.map(vehicle => {
     const rows = activeItems
@@ -7424,6 +7739,37 @@ function buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap) {
   });
 }
 
+function buildLineVehicleBlock(vehicle, orderedRows) {
+  const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
+  if (!rows.length) return "";
+
+  const summary = getVehicleDailySummary(vehicle, rows);
+  const forecast = getVehicleRotationForecastSafe(vehicle, rows);
+  const driverName = getVehicleDisplayName(vehicle);
+  const lineId = String(vehicle?.line_id || "").trim();
+  const lastTripTag = isDriverLastTripChecked(vehicle?.id) ? " 【ラスト便】" : "";
+  const routeUrl = buildVehicleRouteMapUrl(vehicle, rows);
+
+  const header = [lineId, `🚗 ${driverName}${lastTripTag}`].filter(Boolean).join(" ");
+  const body = rows.map((row, index) => {
+    const castName = String(row?.casts?.name || "-").trim() || "-";
+    const areaLabel = normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || "無し");
+    return `${index + 1}️⃣ ${castName}　${areaLabel}`;
+  });
+
+  const footer = [
+    `戻り ${forecast?.returnAfterLabel || "-"} / 次便可能 ${forecast?.predictedReadyTime || "-"}`,
+    `距離 ${Number(summary?.totalKm || 0).toFixed(1)}km / 時間 ${formatMinutesAsJa(summary?.driveMinutes || 0)}`
+  ];
+
+  if (routeUrl) {
+    footer.push("📍ルート");
+    footer.push(routeUrl);
+  }
+
+  return [header, ...body, ...footer].join("\n");
+}
+
 function buildLineResultText() {
   const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
   const vehicles = getSelectedVehiclesForToday();
@@ -7432,42 +7778,11 @@ function buildLineResultText() {
   );
 
   const cards = buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap);
-  const lines = [];
-
-  cards.forEach(({ vehicle, orderedRows }) => {
-    if (!orderedRows.length) return;
-
-    const summary = getVehicleDailySummary(vehicle, orderedRows);
-    const uniqueAreas = [...new Set(
-      orderedRows
-        .map(row => normalizeAreaLabel(row.destination_area || row.casts?.area || "無し"))
-        .filter(Boolean)
-    )];
-    const areaLabel = uniqueAreas.length
-      ? uniqueAreas.join("・")
-      : normalizeAreaLabel(vehicle.vehicle_area || "無し");
-    const lineId = String(vehicle?.line_id || "").trim() || "LINE未設定";
-    const driverName = vehicle?.driver_name || vehicle?.plate_number || "-";
-    const estimatedRoundTripKm = `${Number(summary.totalKm || 0).toFixed(1)}km`;
-    const estimatedRoundTripTime = formatMinutesAsJa(summary.driveMinutes);
-
-    const lastTripTag = isDriverLastTripChecked(vehicle.id) ? " 【ラスト便】" : "";
-    lines.push(`${lineId} ${driverName}${lastTripTag} ${areaLabel} ${estimatedRoundTripKm} ${estimatedRoundTripTime}`);
-
-    orderedRows.forEach(row => {
-      const mapUrl = buildDispatchItemMapUrl(row) || buildMapUrlFromAddressOrLatLng(
-        row?.destination_address || row?.casts?.address || "",
-        row?.casts?.latitude,
-        row?.casts?.longitude
-      );
-      const castName = row?.casts?.name || "-";
-      lines.push(`${castName}：${mapUrl || "地図URLなし"}`);
-    });
-
-    lines.push("");
-  });
-
-  return lines.join("\n").trim();
+  return cards
+    .map(({ vehicle, orderedRows }) => buildLineVehicleBlock(vehicle, orderedRows))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 
@@ -7689,6 +8004,7 @@ function rebundleLongDistanceDirectionalClusters(assignments, items, vehicles, m
 function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, monthlyMap) {
   const working = assignments.map(a => ({ ...a }));
   if (!working.length || !vehicles.length) return working;
+  if (!ENABLE_DISTANCE_REBALANCE) return working;
 
   const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
   const hourLoads = new Map();
@@ -7754,8 +8070,9 @@ function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, mont
         Math.max(0, getDirectionAffinityScore(area, vehicle.home_area || "")) * 0.7 +
         getAreaAffinityScore(area, vehicle.home_area || "");
       if (isHardReverseForHome(area, vehicle.home_area || "")) continue;
+      if (ENFORCE_AREA_PRIORITY_STRICT && compat < currentCompat + 10) continue;
 
-      const score = projectedGapImprove * 2.2 + (compat - currentCompat) * 1.1 - dist * 0.12;
+      const score = projectedGapImprove * 1.4 + (compat - currentCompat) * 1.6 - dist * 0.12;
       if (!bestMove || score > bestMove.score) {
         bestMove = { vehicle, score };
       }
@@ -7777,7 +8094,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
 
   const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
   const dateStr = els.actualDate?.value || todayStr();
-  const defaultLastHour = getDefaultLastHour(dateStr);
+  const defaultLastHour = getEffectiveLastHour(dateStr, working.map(a => ({ actual_hour: a?.actual_hour })));
   const targetHour = working.some(a => Number(a.actual_hour ?? 0) === Number(defaultLastHour))
     ? Number(defaultLastHour)
     : Math.max(...working.map(a => Number(a.actual_hour ?? 0)));
@@ -7797,7 +8114,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
     );
   });
 
-  const evaluate = (vehicle, item) => {
+  const evaluate = (vehicle, item, existingAreas = []) => {
     const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || "無し");
     const itemDistance = Number(item?.distance_km || 0);
     const strict = getStrictHomeCompatibilityScore(area, vehicle?.home_area || "");
@@ -7808,6 +8125,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
       Number(monthlyMap?.get(Number(vehicle?.id))?.totalDistance || 0) +
       Number(projectedDistanceByVehicle.get(Number(vehicle?.id)) || 0);
     const hardReverse = isHardReverseForHome(area, vehicle?.home_area || "");
+    if (!isLastRunHardAreaConstraintSatisfied(area, existingAreas, vehicle?.home_area || "")) return -Infinity;
 
     let score =
       strict * 3.2 +
@@ -7827,7 +8145,16 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
     if (!item) continue;
 
     const currentVehicle = vehicles.find(v => Number(v.id) === Number(target.vehicle_id));
-    const currentScore = evaluate(currentVehicle, item);
+    const currentExistingAreas = working
+      .filter(
+        a =>
+          Number(a.vehicle_id) === Number(target.vehicle_id) &&
+          Number(a.actual_hour ?? 0) === Number(targetHour) &&
+          Number(a.item_id) !== Number(target.item_id)
+      )
+      .map(a => normalizeAreaLabel(itemMap.get(Number(a.item_id))?.destination_area || itemMap.get(Number(a.item_id))?.cluster_area || ""))
+      .filter(Boolean);
+    const currentScore = evaluate(currentVehicle, item, currentExistingAreas);
     let best = { vehicle: currentVehicle, score: currentScore };
 
     for (const vehicle of vehicles) {
@@ -7840,7 +8167,16 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
       ).length;
       if (load >= seatCapacity) continue;
 
-      const score = evaluate(vehicle, item);
+      const existingAreas = working
+        .filter(
+          a =>
+            Number(a.vehicle_id) === Number(vehicle.id) &&
+            Number(a.actual_hour ?? 0) === Number(targetHour) &&
+            Number(a.item_id) !== Number(target.item_id)
+        )
+        .map(a => normalizeAreaLabel(itemMap.get(Number(a.item_id))?.destination_area || itemMap.get(Number(a.item_id))?.cluster_area || ""))
+        .filter(Boolean);
+      const score = evaluate(vehicle, item, existingAreas);
       if (score > best.score) best = { vehicle, score };
     }
 
@@ -7876,6 +8212,24 @@ function renderDailyDispatchResult() {
     const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
     const timelineHtml = buildRotationTimelineHtmlSafe(vehicles, activeItems);
     const cards = buildDailyDispatchVehicleCards(vehicles, activeItems, monthlyMap);
+
+    const overviewHtml = `
+      <div class="vehicle-result-card" style="margin-bottom:16px;">
+        <div class="vehicle-result-head" style="align-items:flex-start;gap:12px;">
+          <div class="vehicle-result-title">
+            <h4>全配車 俯瞰マップ</h4>
+            <div class="vehicle-result-meta">各車両は色分け表示。凡例クリックで表示ON/OFFできます。</div>
+          </div>
+          <div class="vehicle-result-badges">
+            <span class="metric-badge">起点 黒</span>
+            <span class="metric-badge">車両別 色分け</span>
+            <span class="metric-badge">ピン番号=降車順</span>
+          </div>
+        </div>
+        <div id="dispatchOverviewLegend" style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 14px;"></div>
+        <div id="dispatchOverviewMap" style="width:100%;height:420px;border-radius:18px;overflow:hidden;background:#0f172a;"></div>
+      </div>
+    `;
 
     const cardsHtml = cards
       .map(({ vehicle, rows, orderedRows }) => {
@@ -7943,6 +8297,7 @@ function renderDailyDispatchResult() {
                 <span class="metric-badge">累計距離 ${summary.totalKm.toFixed(1)}km</span>
                 <span class="metric-badge">累計時間 ${escapeHtml(formatMinutesAsJa(summary.driveMinutes))}</span>
                 <span class="metric-badge">累計件数 ${summary.jobCount}件</span>
+                ${buildVehicleRouteMapUrl(vehicle, orderedRows) ? `<a href="${escapeHtml(buildVehicleRouteMapUrl(vehicle, orderedRows))}" target="_blank" rel="noopener noreferrer" class="metric-badge" style="text-decoration:none;">Google Mapsで開く</a>` : ""}
               </div>
             </div>
             <div class="vehicle-result-body">${body}</div>
@@ -7969,8 +8324,9 @@ function renderDailyDispatchResult() {
       })
       .join("");
 
-    els.dailyDispatchResult.innerHTML = timelineHtml + cardsHtml;
+    els.dailyDispatchResult.innerHTML = timelineHtml + overviewHtml + cardsHtml;
     renderOperationAndSimulationUI();
+    renderDispatchOverviewMap(cards);
 
     els.dailyDispatchResult.querySelectorAll(".dispatch-vehicle-select").forEach(select => {
       select.addEventListener("change", async () => {
@@ -10164,543 +10520,75 @@ window.renderDailyDispatchResult = function(){
   setTimeout(renderDispatchSummaryFromDOM, 50);
 };
 
-/* ===== THEMIS display order patch: anchor-last drop order v1 ===== */
+/* ===== THEMIS v6.9.13 drop-order unify hotfix start ===== */
 (function(){
-  function __themisDisplayNum(v, fallback = 0) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
-  }
-
-  function __themisDisplayArea(row) {
-    try {
-      if (typeof getThemisV54RowArea === 'function') return getThemisV54RowArea(row);
-    } catch (_) {}
-    return normalizeAreaLabel(row?.destination_area || row?.cluster_area || row?.planned_area || row?.casts?.area || '無し');
-  }
-
-  function __themisDisplayDistance(row) {
-    try {
-      if (typeof getThemisV54RowDistance === 'function') {
-        const n = Number(getThemisV54RowDistance(row));
-        if (Number.isFinite(n) && n > 0) return n;
-      }
-    } catch (_) {}
-    const direct = Number(row?.distance_km ?? row?.casts?.distance_km ?? row?.plan_distance_km);
-    if (Number.isFinite(direct) && direct > 0) return direct;
-    const lat = Number(row?.casts?.latitude);
-    const lng = Number(row?.casts?.longitude);
-    if (typeof estimateRoadKmFromStation === 'function' && isValidLatLng(lat, lng)) {
-      return Number(estimateRoadKmFromStation(lat, lng) || 0);
+  function __themisOrderDistance(row) {
+    const v = Number(row?.distance_km ?? row?.casts?.distance_km ?? 0);
+    if (Number.isFinite(v) && v > 0) return v;
+    const pt = (typeof getThemisV54RowPoint === 'function') ? getThemisV54RowPoint(row) : null;
+    if (pt && typeof estimateRoadKmBetweenPoints === 'function') {
+      return Number(estimateRoadKmBetweenPoints(ORIGIN_LAT, ORIGIN_LNG, pt.lat, pt.lng) || 999999);
     }
-    return 0;
-  }
-
-  function __themisDisplayTravelMinutes(row) {
-    try {
-      if (typeof getThemisV54StoredTravelMinutes === 'function') {
-        const n = Number(getThemisV54StoredTravelMinutes(row));
-        if (Number.isFinite(n) && n > 0) return n;
-      }
-    } catch (_) {}
-    const direct = Number(row?.casts?.travel_minutes ?? row?.travel_minutes);
-    return Number.isFinite(direct) && direct > 0 ? direct : 0;
-  }
-
-  function __themisDisplayHour(row) {
-    return __themisDisplayNum(row?.actual_hour ?? row?.plan_hour, 0);
-  }
-
-  function __themisDisplayRowKey(row) {
-    return [
-      String(row?.id || ''),
-      String(row?.cast_id || row?.casts?.id || ''),
-      String(row?.actual_hour ?? row?.plan_hour ?? ''),
-      String(row?.destination_area || row?.casts?.area || ''),
-      String(row?.casts?.name || row?.cast_name || ''),
-      String(row?.address || row?.casts?.address || '')
-    ].join('|');
-  }
-
-  function __themisDisplayDirectionKey(row) {
-    const area = __themisDisplayArea(row);
-    try {
-      if (typeof getAreaDirectionCluster === 'function') {
-        return getAreaDirectionCluster(area) || area || '無し';
-      }
-    } catch (_) {}
-    return area || '無し';
-  }
-
-  function __themisAnchorMetric(row) {
-    return {
-      distance: __themisDisplayDistance(row),
-      travel: __themisDisplayTravelMinutes(row),
-      key: __themisDisplayRowKey(row)
-    };
-  }
-
-  function __themisCompareAnchorDesc(a, b) {
-    const am = __themisAnchorMetric(a);
-    const bm = __themisAnchorMetric(b);
-    if (am.distance !== bm.distance) return bm.distance - am.distance;
-    if (am.travel !== bm.travel) return bm.travel - am.travel;
-    return am.key.localeCompare(bm.key, 'ja');
-  }
-
-  function __themisCompareDropAsc(a, b) {
-    const am = __themisAnchorMetric(a);
-    const bm = __themisAnchorMetric(b);
-    if (am.distance !== bm.distance) return am.distance - bm.distance;
-    if (am.travel !== bm.travel) return am.travel - bm.travel;
-    const aa = __themisDisplayArea(a);
-    const ba = __themisDisplayArea(b);
-    const byArea = aa.localeCompare(ba, 'ja');
-    if (byArea !== 0) return byArea;
-    return am.key.localeCompare(bm.key, 'ja');
-  }
-
-  function __themisDisplayLatLng(row) {
-    const lat = toNullableNumber(row?.casts?.latitude ?? row?.latitude);
-    const lng = toNullableNumber(row?.casts?.longitude ?? row?.longitude);
-    if (typeof isValidLatLng === 'function' && isValidLatLng(lat, lng)) {
-      return { lat, lng };
-    }
-    return null;
-  }
-
-  function __themisEstimateLegKm(fromPoint, row) {
-    const toPoint = __themisDisplayLatLng(row);
-    if (fromPoint && toPoint && typeof estimateRoadKmBetweenPoints === 'function') {
-      const km = Number(estimateRoadKmBetweenPoints(fromPoint.lat, fromPoint.lng, toPoint.lat, toPoint.lng));
-      if (Number.isFinite(km) && km >= 0) return km;
-    }
-    return __themisDisplayDistance(row);
-  }
-
-  function __themisCompareNearestChainFromPoint(fromPoint, a, b) {
-    const aLeg = __themisEstimateLegKm(fromPoint, a);
-    const bLeg = __themisEstimateLegKm(fromPoint, b);
-    if (aLeg !== bLeg) return aLeg - bLeg;
-    return __themisCompareDropAsc(a, b);
-  }
-
-  function __themisSortAnchorBucket(rows) {
-    const safeRows = [...(rows || [])].filter(Boolean);
-    if (safeRows.length <= 1) return safeRows;
-
-    const remaining = [...safeRows];
-    const ordered = [];
-    let currentPoint = { lat: ORIGIN_LAT, lng: ORIGIN_LNG };
-
-    while (remaining.length) {
-      remaining.sort((a, b) => __themisCompareNearestChainFromPoint(currentPoint, a, b));
-      const picked = remaining.shift();
-      ordered.push(picked);
-      const pickedPoint = __themisDisplayLatLng(picked);
-      if (pickedPoint) currentPoint = pickedPoint;
-    }
-
-    return ordered;
-  }
-
-  function __themisBuildDisplayOrderedRows(rows) {
-    const safeRows = [...(rows || [])].filter(Boolean);
-    const hourMap = new Map();
-
-    safeRows.forEach(row => {
-      const hourKey = String(__themisDisplayHour(row));
-      if (!hourMap.has(hourKey)) hourMap.set(hourKey, []);
-      hourMap.get(hourKey).push(row);
-    });
-
-    const ordered = [];
-    [...hourMap.entries()]
-      .sort((a, b) => Number(a[0]) - Number(b[0]))
-      .forEach(([, hourRows]) => {
-        const dirMap = new Map();
-        hourRows.forEach(row => {
-          const dirKey = __themisDisplayDirectionKey(row);
-          if (!dirMap.has(dirKey)) dirMap.set(dirKey, []);
-          dirMap.get(dirKey).push(row);
-        });
-
-        const dirBuckets = [...dirMap.entries()].sort((a, b) => {
-          const aAnchor = [...(a[1] || [])].sort(__themisCompareAnchorDesc)[0];
-          const bAnchor = [...(b[1] || [])].sort(__themisCompareAnchorDesc)[0];
-          const metricDiff = __themisCompareAnchorDesc(aAnchor, bAnchor);
-          if (metricDiff !== 0) return metricDiff;
-          return String(a[0]).localeCompare(String(b[0]), 'ja');
-        });
-
-        dirBuckets.forEach(([, bucketRows]) => {
-          ordered.push(...__themisSortAnchorBucket(bucketRows));
-        });
-      });
-
-    if (typeof moveManualLastItemsToEnd === 'function') {
-      return moveManualLastItemsToEnd(ordered);
-    }
-    return ordered;
-  }
-
-  window.getDisplayOrderedRowsByAnchor = __themisBuildDisplayOrderedRows;
-
-  buildDailyDispatchVehicleCards = function(vehicles, activeItems, monthlyMap) {
-    return (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
-      const rows = (Array.isArray(activeItems) ? activeItems : [])
-        .filter(item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0))
-        .sort((a, b) => {
-          const ah = __themisDisplayHour(a);
-          const bh = __themisDisplayHour(b);
-          if (ah !== bh) return ah - bh;
-          return __themisCompareDropAsc(a, b);
-        });
-
-      const orderedRows = __themisBuildDisplayOrderedRows(rows);
-      return { vehicle, rows, orderedRows };
-    });
-  };
-
-  const _THEMIS_ANCHOR_DISPLAY_buildRotationTimelineHtmlSafe = typeof buildRotationTimelineHtmlSafe === 'function' ? buildRotationTimelineHtmlSafe : null;
-  buildRotationTimelineHtmlSafe = function(vehicles, activeItems) {
-    try {
-      const timeline = (Array.isArray(vehicles) ? vehicles : [])
-        .map(vehicle => {
-          const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
-            item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0)
-          );
-          if (!rows.length) return null;
-
-          const orderedRows = __themisBuildDisplayOrderedRows(rows);
-          const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-          const summary = getVehicleDailySummary(vehicle, orderedRows);
-
-          return {
-            name: vehicle?.driver_name || vehicle?.plate_number || '-',
-            lineId: vehicle?.line_id || '',
-            returnAfterLabel: forecast?.returnAfterLabel || `${Number(forecast?.predictedReturnMinutes || 0)}分後`,
-            nextRunTime: forecast?.predictedReadyTime || '-',
-            totalKm: summary.totalKm,
-            totalJobs: summary.jobCount
-          };
-        })
-        .filter(Boolean);
-
-      if (!timeline.length) return '';
-
-      return `
-        <div class="panel-card" style="margin-bottom:16px;">
-          <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-          <div style="display:flex; flex-wrap:wrap; gap:8px;">
-            ${timeline.map(item => `
-              <div class="chip" style="min-width:180px;">
-                <div><strong>${escapeHtml(item.name)}</strong> ${item.lineId ? `<span class="muted">(${escapeHtml(item.lineId)})</span>` : ''}</div>
-                <div class="muted">戻り: ${escapeHtml(item.returnAfterLabel)} / 次便可能: ${escapeHtml(item.nextRunTime)}</div>
-                <div class="muted">本日 ${Number(item.totalKm || 0).toFixed(1)}km / ${Number(item.totalJobs || 0)}件</div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-    } catch (e) {
-      console.error('buildRotationTimelineHtmlSafe anchor display patch error:', e);
-      return _THEMIS_ANCHOR_DISPLAY_buildRotationTimelineHtmlSafe
-        ? _THEMIS_ANCHOR_DISPLAY_buildRotationTimelineHtmlSafe.apply(this, arguments)
-        : '';
-    }
-  };
-
-  if (typeof getEffectiveVehiclesForHour === 'function') {
-    getEffectiveVehiclesForHour = function(targetHour) {
-      const slotMinutes = Number(targetHour) * 60;
-      const vehicles = Array.isArray(getSelectedVehiclesForToday()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
-      const activeItems = (Array.isArray(currentActualsCache) ? currentActualsCache : []).filter(row => {
-        const status = normalizeStatus(row?.status);
-        return status !== 'done' && status !== 'cancel';
-      });
-
-      return vehicles.filter(vehicle => {
-        const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0));
-        if (!rows.length) return true;
-        const orderedRows = __themisBuildDisplayOrderedRows(rows);
-        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-        const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
-        if (readyMinutes === null) return true;
-        return readyMinutes <= slotMinutes;
-      });
-    };
-  }
-
-  if (typeof getVehicleDeadNamesForHour === 'function') {
-    getVehicleDeadNamesForHour = function(targetHour) {
-      const slotMinutes = Number(targetHour) * 60;
-      const vehicles = Array.isArray(getSelectedVehiclesForToday()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
-      const activeItems = (Array.isArray(currentActualsCache) ? currentActualsCache : []).filter(row => {
-        const status = normalizeStatus(row?.status);
-        return status !== 'done' && status !== 'cancel';
-      });
-
-      return vehicles.filter(vehicle => {
-        const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0));
-        if (!rows.length) return false;
-        const orderedRows = __themisBuildDisplayOrderedRows(rows);
-        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-        const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
-        return readyMinutes !== null && readyMinutes > slotMinutes;
-      }).map(vehicle => vehicle?.driver_name || vehicle?.plate_number || `車両${vehicle.id}`);
-    };
-  }
-})();
-
-
-/* ===== THEMIS nearest-chain display hotfix start ===== */
-(function(){
-  function __themisNormalizeNum(v){
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function __themisRowPoint(row){
-    try{
-      if (typeof getThemisV54RowPoint === 'function') {
-        const p = getThemisV54RowPoint(row);
-        if (p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng))) {
-          return { lat:Number(p.lat), lng:Number(p.lng) };
-        }
-      }
-    }catch(e){}
-    try{
-      if (typeof getItemLatLng === 'function') {
-        const p = getItemLatLng(row);
-        if (p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng))) {
-          return { lat:Number(p.lat), lng:Number(p.lng) };
-        }
-      }
-    }catch(e){}
-    return null;
-  }
-
-  function __themisOriginDistanceKm(row){
-    const direct = __themisNormalizeNum(row?.distance_km ?? row?.casts?.distance_km);
-    if (direct != null && direct >= 0) return direct;
-    const stored = __themisNormalizeNum(row?.travel_minutes ?? row?.casts?.travel_minutes);
-    if (stored != null && stored > 0) return stored / 2.0;
     return 999999;
   }
 
-  function __themisSegmentDistanceKm(fromState, row){
-    const point = __themisRowPoint(row);
-    if (fromState?.point && point && typeof estimateRoadKmBetweenPoints === 'function') {
-      const km = Number(estimateRoadKmBetweenPoints(fromState.point.lat, fromState.point.lng, point.lat, point.lng) || 0);
-      if (Number.isFinite(km) && km >= 0) return km;
+  function __themisOrderTravel(row) {
+    if (typeof getThemisV54StoredTravelMinutes === 'function') {
+      const v = Number(getThemisV54StoredTravelMinutes(row) || 0);
+      if (Number.isFinite(v) && v > 0) return v;
     }
-    const currentOriginKm = __themisOriginDistanceKm(row);
-    if (fromState && Number.isFinite(Number(fromState.originDistanceKm))) {
-      return Math.abs(currentOriginKm - Number(fromState.originDistanceKm));
-    }
-    return currentOriginKm;
+    const v = Number(row?.travel_minutes ?? row?.casts?.travel_minutes ?? 0);
+    return Number.isFinite(v) && v > 0 ? v : 999999;
   }
 
-  function __themisDirectionPenalty(fromRow, toRow){
-    try{
-      const a = typeof getThemisV54RowArea === 'function'
-        ? getThemisV54RowArea(fromRow)
-        : (fromRow?.destination_area || fromRow?.planned_area || fromRow?.cluster_area || fromRow?.casts?.area || '');
-      const b = typeof getThemisV54RowArea === 'function'
-        ? getThemisV54RowArea(toRow)
-        : (toRow?.destination_area || toRow?.planned_area || toRow?.cluster_area || toRow?.casts?.area || '');
-      if (!a || !b) return 0;
-      if (typeof isHardReverseMixForRoute === 'function' && isHardReverseMixForRoute(a, b)) return 1000;
-      if (typeof getDirectionAffinityScore === 'function') {
-        const affinity = Number(getDirectionAffinityScore(a, b) || 0);
-        if (affinity <= -45) return 180;
-        if (affinity <= -20) return 60;
-      }
-      return 0;
-    }catch(e){
-      return 0;
-    }
+  function __themisOrderId(row) {
+    const v = Number(row?.id || row?.cast_id || row?.casts?.id || 0);
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  function __themisCompareByOrigin(a, b) {
+    const da = __themisOrderDistance(a);
+    const db = __themisOrderDistance(b);
+    if (da !== db) return da - db;
+
+    const ta = __themisOrderTravel(a);
+    const tb = __themisOrderTravel(b);
+    if (ta !== tb) return ta - tb;
+
+    return __themisOrderId(a) - __themisOrderId(b);
+  }
+
+  function __themisCompareFromPrevious(prev, a, b) {
+    const prevD = __themisOrderDistance(prev);
+    const da = Math.abs(__themisOrderDistance(a) - prevD);
+    const db = Math.abs(__themisOrderDistance(b) - prevD);
+    if (da !== db) return da - db;
+
+    const oa = __themisOrderDistance(a);
+    const ob = __themisOrderDistance(b);
+    if (oa !== ob) return oa - ob;
+
+    const ta = __themisOrderTravel(a);
+    const tb = __themisOrderTravel(b);
+    if (ta !== tb) return ta - tb;
+
+    return __themisOrderId(a) - __themisOrderId(b);
   }
 
   sortItemsByNearestRoute = function(items) {
     const remaining = [...(items || [])].filter(Boolean);
-    const ordered = [];
-    let current = {
-      point: { lat: Number(ORIGIN_LAT), lng: Number(ORIGIN_LNG) },
-      originDistanceKm: 0,
-      row: null
-    };
+    if (!remaining.length) return [];
+
+    remaining.sort(__themisCompareByOrigin);
+    const ordered = [remaining.shift()];
 
     while (remaining.length) {
-      let bestIndex = 0;
-      let bestMetric = Infinity;
-      let bestTie1 = Infinity;
-      let bestTie2 = Infinity;
-      let bestTie3 = Infinity;
-
-      remaining.forEach((row, index) => {
-        const legKm = __themisSegmentDistanceKm(current, row);
-        const directionPenalty = current.row ? __themisDirectionPenalty(current.row, row) : 0;
-        const metric = legKm + directionPenalty;
-        const tie1 = __themisOriginDistanceKm(row);
-        const tie2 = __themisNormalizeNum(row?.travel_minutes ?? row?.casts?.travel_minutes) ?? 999999;
-        const tie3 = Number(row?.id || row?.cast_id || row?.plan_id || index || 0);
-
-        const better = (
-          metric < bestMetric - 1e-9 ||
-          (Math.abs(metric - bestMetric) <= 1e-9 && tie1 < bestTie1 - 1e-9) ||
-          (Math.abs(metric - bestMetric) <= 1e-9 && Math.abs(tie1 - bestTie1) <= 1e-9 && tie2 < bestTie2 - 1e-9) ||
-          (Math.abs(metric - bestMetric) <= 1e-9 && Math.abs(tie1 - bestTie1) <= 1e-9 && Math.abs(tie2 - bestTie2) <= 1e-9 && tie3 < bestTie3)
-        );
-
-        if (better) {
-          bestIndex = index;
-          bestMetric = metric;
-          bestTie1 = tie1;
-          bestTie2 = tie2;
-          bestTie3 = tie3;
-        }
-      });
-
-      const picked = remaining.splice(bestIndex, 1)[0];
-      ordered.push(picked);
-      current = {
-        point: __themisRowPoint(picked),
-        originDistanceKm: __themisOriginDistanceKm(picked),
-        row: picked
-      };
+      const prev = ordered[ordered.length - 1];
+      remaining.sort((a, b) => __themisCompareFromPrevious(prev, a, b));
+      ordered.push(remaining.shift());
     }
 
     return ordered;
   };
 })();
-/* ===== THEMIS nearest-chain display hotfix end ===== */
-
-
-/* ===== THEMIS display order fixed start ===== */
-(function(){
-  function __themisDisplayHourFixed(row){
-    const h = Number(row?.actual_hour ?? row?.hour ?? row?.dispatch_hour ?? row?.slot_hour ?? 0);
-    return Number.isFinite(h) ? h : 0;
-  }
-
-  function __themisDisplayGroupByHourNearestChain(rows){
-    const safeRows = [...(rows || [])].filter(Boolean);
-    const hourMap = new Map();
-    safeRows.forEach(row => {
-      const key = String(__themisDisplayHourFixed(row));
-      if (!hourMap.has(key)) hourMap.set(key, []);
-      hourMap.get(key).push(row);
-    });
-
-    const ordered = [];
-    [...hourMap.entries()]
-      .sort((a, b) => Number(a[0]) - Number(b[0]))
-      .forEach(([, hourRows]) => {
-        ordered.push(...sortItemsByNearestRoute(hourRows));
-      });
-
-    if (typeof moveManualLastItemsToEnd === 'function') {
-      return moveManualLastItemsToEnd(ordered);
-    }
-    return ordered;
-  }
-
-  window.getDisplayOrderedRowsFixed = __themisDisplayGroupByHourNearestChain;
-
-  buildDailyDispatchVehicleCards = function(vehicles, activeItems, monthlyMap) {
-    return (Array.isArray(vehicles) ? vehicles : []).map(vehicle => {
-      const rows = (Array.isArray(activeItems) ? activeItems : [])
-        .filter(item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0));
-      const orderedRows = __themisDisplayGroupByHourNearestChain(rows);
-      return { vehicle, rows, orderedRows };
-    });
-  };
-
-  const __THEMIS_DISPLAY_FIXED_prevTimeline = typeof buildRotationTimelineHtmlSafe === 'function' ? buildRotationTimelineHtmlSafe : null;
-  buildRotationTimelineHtmlSafe = function(vehicles, activeItems) {
-    try {
-      const timeline = (Array.isArray(vehicles) ? vehicles : [])
-        .map(vehicle => {
-          const rows = (Array.isArray(activeItems) ? activeItems : []).filter(
-            item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0)
-          );
-          if (!rows.length) return null;
-          const orderedRows = __themisDisplayGroupByHourNearestChain(rows);
-          const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-          const summary = getVehicleDailySummary(vehicle, orderedRows);
-          return {
-            name: vehicle?.driver_name || vehicle?.plate_number || '-',
-            lineId: vehicle?.line_id || '',
-            returnAfterLabel: forecast?.returnAfterLabel || `${Number(forecast?.predictedReturnMinutes || 0)}分後`,
-            nextRunTime: forecast?.predictedReadyTime || '-',
-            totalKm: summary.totalKm,
-            totalJobs: summary.jobCount
-          };
-        })
-        .filter(Boolean);
-
-      if (!timeline.length) return '';
-
-      return `
-        <div class="panel-card" style="margin-bottom:16px;">
-          <h3 style="margin-bottom:10px;">車両稼働タイムライン</h3>
-          <div style="display:flex; flex-wrap:wrap; gap:8px;">
-            ${timeline.map(item => `
-              <div class="chip" style="min-width:180px;">
-                <div><strong>${escapeHtml(item.name)}</strong> ${item.lineId ? `<span class="muted">(${escapeHtml(item.lineId)})</span>` : ''}</div>
-                <div class="muted">戻り: ${escapeHtml(item.returnAfterLabel)} / 次便可能: ${escapeHtml(item.nextRunTime)}</div>
-                <div class="muted">本日 ${Number(item.totalKm || 0).toFixed(1)}km / ${Number(item.totalJobs || 0)}件</div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-    } catch (e) {
-      console.error('buildRotationTimelineHtmlSafe display fixed patch error:', e);
-      return __THEMIS_DISPLAY_FIXED_prevTimeline ? __THEMIS_DISPLAY_FIXED_prevTimeline.apply(this, arguments) : '';
-    }
-  };
-
-  if (typeof getEffectiveVehiclesForHour === 'function') {
-    getEffectiveVehiclesForHour = function(targetHour) {
-      const slotMinutes = Number(targetHour) * 60;
-      const vehicles = Array.isArray(getSelectedVehiclesForToday()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
-      const activeItems = (Array.isArray(currentActualsCache) ? currentActualsCache : []).filter(row => {
-        const status = normalizeStatus(row?.status);
-        return status !== 'done' && status !== 'cancel';
-      });
-
-      return vehicles.filter(vehicle => {
-        const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0));
-        if (!rows.length) return true;
-        const orderedRows = __themisDisplayGroupByHourNearestChain(rows);
-        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-        const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
-        if (readyMinutes === null) return true;
-        return readyMinutes <= slotMinutes;
-      });
-    };
-  }
-
-  if (typeof getVehicleDeadNamesForHour === 'function') {
-    getVehicleDeadNamesForHour = function(targetHour) {
-      const slotMinutes = Number(targetHour) * 60;
-      const vehicles = Array.isArray(getSelectedVehiclesForToday()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
-      const activeItems = (Array.isArray(currentActualsCache) ? currentActualsCache : []).filter(row => {
-        const status = normalizeStatus(row?.status);
-        return status !== 'done' && status !== 'cancel';
-      });
-
-      return vehicles.filter(vehicle => {
-        const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle?.id || 0));
-        if (!rows.length) return false;
-        const orderedRows = __themisDisplayGroupByHourNearestChain(rows);
-        const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-        const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
-        return readyMinutes !== null && readyMinutes > slotMinutes;
-      }).map(vehicle => vehicle?.driver_name || vehicle?.plate_number || `車両${vehicle.id}`);
-    };
-  }
-})();
-/* ===== THEMIS display order fixed end ===== */
+/* ===== THEMIS v6.9.13 drop-order unify hotfix end ===== */
