@@ -199,6 +199,12 @@ textarea{
   font-size:13px;
 }
 
+.chip.subtle{
+  background:rgba(255,255,255,.02);
+  border-color:rgba(255,255,255,.06);
+  color:#a7b3c7;
+}
+
 .memo-list{
   margin:0;
   padding-left:18px;
