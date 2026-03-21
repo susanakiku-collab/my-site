@@ -14,7 +14,7 @@
         <h1 class="app-title">THEMIS AI Dispatch 🚐🌙</h1>
         <p class="app-subtitle">AI Route & Dispatch System</p>
         <div class="app-version">
-        THEMIS AI Dispatch v6.9.12 beta<br>
+        THEMIS AI Dispatch v6.1 beta<br>
         Build 2026
         </div>
       </div>
@@ -355,12 +355,12 @@
     </div>
 
     <div class="daily-vehicles-block">
-      <h3>本日使用する車両（可能車両）</h3>
+      <h3>本日使用する車両（配車可能車両）</h3>
       <div id="dailyVehicleChecklist" class="vehicle-checklist"></div>
       <div id="manualLastVehicleInfo" class="muted" style="margin-top:10px;">ラスト便車両: なし</div>
     </div>
 
-    <div class="daily-hybrid-panel">
+        <div class="daily-hybrid-panel">
       <div class="hybrid-grid hybrid-grid-stack">
         <details class="hybrid-toggle-card">
           <summary class="hybrid-toggle-summary">
@@ -401,8 +401,8 @@
                 <span>前便未処理予定を流入</span>
               </label>
               <div class="action-row">
-                <button id="runSimulationBtn" class="btn ghost">試算</button>
-                <button id="runSimulationDispatchBtn" class="btn primary">自動配車を試す</button>
+                <button id="runSimulationBtn" class="btn ghost">この便を試算</button>
+                <button id="runSimulationDispatchBtn" class="btn primary">この便で自動配車を試す</button>
               </div>
             </div>
             <div id="simulationDiagnosis" class="hybrid-diagnosis muted">試算対象便を選択してください</div>
@@ -412,7 +412,7 @@
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div id="dispatchSummaryBar" class="dispatch-summary-bar"></div>
 
     <div class="divider"></div>
 
