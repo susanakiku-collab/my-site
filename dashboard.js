@@ -44,9 +44,6 @@ let simulationSlotHour = null;
 let lastSimulationResult = null;
 let isRefreshingHybridUI = false;
 let suppressSimulationSlotChange = false;
-const ENABLE_DISTANCE_REBALANCE = false;
-const ENFORCE_AREA_PRIORITY_STRICT = true;
-const ENABLE_DISPLAY_GROUP_FORCE_BRANCH = false;
 
 const els = {
   plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
@@ -369,28 +366,6 @@ function getDayOfWeek(dateStr) {
   // 火曜-金曜は4時、土曜-月曜は5時
   if (day >= 2 && day <= 5) return 4;
   return 5;
-}
-
-function getEffectiveLastHour(dateStr, rows = []) {
-  const rowHours = (Array.isArray(rows) ? rows : [])
-    .map(row => Number(row?.actual_hour ?? row?.plan_hour ?? row?.hour))
-    .filter(Number.isFinite);
-  if (rowHours.length) return Math.max(...rowHours);
-
-  const cacheHours = [];
-  (Array.isArray(currentActualsCache) ? currentActualsCache : []).forEach(row => {
-    const status = normalizeStatus(row?.status);
-    if (status === "done" || status === "cancel") return;
-    const hour = Number(row?.actual_hour ?? row?.plan_hour);
-    if (Number.isFinite(hour)) cacheHours.push(hour);
-  });
-  (Array.isArray(currentPlansCache) ? currentPlansCache : []).forEach(row => {
-    const hour = Number(row?.plan_hour ?? row?.actual_hour);
-    if (Number.isFinite(hour)) cacheHours.push(hour);
-  });
-
-  if (cacheHours.length) return Math.max(...cacheHours);
-  return getDefaultLastHour(dateStr);
 }
 
 
@@ -2170,9 +2145,9 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
 
   if (distance === 0) penalty += 0;
   else if (distance === 1) penalty += sameBroadGroup ? 6 : 18;
-  else if (distance === 2) penalty += sameBroadGroup ? 28 : 120;
-  else if (distance === 3) penalty += sameBroadGroup ? 88 : 300;
-  else if (distance >= 4 && distance < 99) penalty += sameBroadGroup ? 160 : 560;
+  else if (distance === 2) penalty += sameBroadGroup ? 18 : 72;
+  else if (distance === 3) penalty += sameBroadGroup ? 62 : 220;
+  else if (distance >= 4 && distance < 99) penalty += sameBroadGroup ? 120 : 420;
 
   if (routeFlow <= 0) penalty += sameBroadGroup ? 8 : 42;
   else if (routeFlow < 40) penalty += sameBroadGroup ? 4 : 22;
@@ -2184,7 +2159,7 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
   const gatewayA = isGatewayNearArea(areaA);
   const gatewayB = isGatewayNearArea(areaB);
   if (gatewayA || gatewayB) {
-    if (distance >= 2) penalty += 140;
+    if (distance >= 2) penalty += 96;
   }
 
   const pair = [getCanonicalArea(areaA), getCanonicalArea(areaB)].filter(Boolean).sort().join("__");
@@ -2202,7 +2177,7 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
   }
 
   if (isHardReverseMixForRoute(areaA, areaB)) {
-    penalty += 900;
+    penalty += 620;
   } else if (sameBroadGroup && affinity >= 72) {
     penalty -= 36;
   }
@@ -2235,30 +2210,6 @@ function getRouteContinuityPenalty(targetArea, existingAreas = [], homeArea = ""
   penalty += getAreaMixGuardScore(targetArea, areas);
 
   return Math.max(0, penalty);
-}
-
-function isStrictSameDirectionArea(targetArea, existingAreas = []) {
-  const target = normalizeAreaLabel(targetArea);
-  const areas = Array.isArray(existingAreas) ? existingAreas.map(normalizeAreaLabel).filter(Boolean) : [];
-  if (!target || target === "無し" || !areas.length) return true;
-  const targetGroup = getAreaDisplayGroup(target);
-  return areas.every(area => {
-    const group = getAreaDisplayGroup(area);
-    if (group && targetGroup && group !== targetGroup) return false;
-    return !hasHardReverseMix(target, [area]);
-  });
-}
-
-function isLastRunHardAreaConstraintSatisfied(targetArea, existingAreas = [], homeArea = "") {
-  const target = normalizeAreaLabel(targetArea);
-  const home = normalizeAreaLabel(homeArea || "");
-  if (!target || target === "無し") return false;
-  if (home && isHardReverseForHome(target, home)) return false;
-  if (!isStrictSameDirectionArea(target, existingAreas)) return false;
-  const strict = getStrictHomeCompatibilityScore(target, home);
-  const direction = getDirectionAffinityScore(target, home);
-  // Last run should prioritize going toward driver's home direction.
-  return strict >= 52 || direction >= 24;
 }
 
 function getRouteFlowSortWeight(area) {
@@ -5572,8 +5523,6 @@ function buildFallbackAssignments(items, vehicles) {
 
   const assignments = [];
   const seatLoads = new Map();
-  const dateStr = els.actualDate?.value || todayStr();
-  const effectiveLastHour = getEffectiveLastHour(dateStr, orderedItems);
 
   function getLoad(vehicleId, hour) {
     return Number(seatLoads.get(`${vehicleId}_${hour}`) || 0);
@@ -5586,40 +5535,7 @@ function buildFallbackAssignments(items, vehicles) {
 
   orderedItems.forEach((item, index) => {
     const hour = Number(item.actual_hour ?? 0);
-    const targetArea = normalizeAreaLabel(item.destination_area || item.cluster_area || item.planned_area || item?.casts?.area || "無し");
-    const isLastHour = Number(hour) === Number(effectiveLastHour);
-    let candidateVehicles = vehicles.filter(v => getLoad(v.id, hour) < Number(v.seat_capacity || 4));
-    if (isLastHour) {
-      const existingAreasByVehicle = new Map();
-      assignments
-        .filter(a => Number(a.actual_hour ?? 0) === Number(hour))
-        .forEach(a => {
-          const assignedItem = orderedItems.find(row => Number(row.id) === Number(a.item_id));
-          const area = normalizeAreaLabel(assignedItem?.destination_area || assignedItem?.cluster_area || assignedItem?.planned_area || assignedItem?.casts?.area || "無し");
-          const key = Number(a.vehicle_id);
-          if (!existingAreasByVehicle.has(key)) existingAreasByVehicle.set(key, []);
-          if (area) existingAreasByVehicle.get(key).push(area);
-        });
-      const strictCandidates = candidateVehicles.filter(v => {
-        const existingAreas = existingAreasByVehicle.get(Number(v.id)) || [];
-        return isLastRunHardAreaConstraintSatisfied(targetArea, existingAreas, v?.home_area || "");
-      });
-      if (strictCandidates.length) {
-        candidateVehicles = strictCandidates;
-      } else {
-        const directionSafeCandidates = candidateVehicles.filter(v => {
-          const existingAreas = existingAreasByVehicle.get(Number(v.id)) || [];
-          if (!isStrictSameDirectionArea(targetArea, existingAreas)) return false;
-          return !isHardReverseForHome(targetArea, v?.home_area || "");
-        });
-        candidateVehicles = directionSafeCandidates;
-      }
-    }
-
-    if (isLastHour && !candidateVehicles.length) return;
-
     let selectedVehicle =
-      candidateVehicles[0] ||
       vehicles.find(v => getLoad(v.id, hour) < Number(v.seat_capacity || 4)) ||
       vehicles[index % vehicles.length];
 
@@ -5643,7 +5559,7 @@ function applyManualLastVehicleToAssignments(assignments, vehicles) {
   if (!assignments.length || !vehicles.length) return assignments;
 
   const dateStr = els.actualDate?.value || todayStr();
-  const defaultLastHour = getEffectiveLastHour(dateStr, assignments.map(a => ({ actual_hour: a?.actual_hour })));
+  const defaultLastHour = getDefaultLastHour(dateStr);
   const manualLastVehicleId = getManualLastVehicleId();
   const manualVehicle = vehicles.find(v => Number(v.id) === Number(manualLastVehicleId)) || null;
   const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
@@ -5673,19 +5589,6 @@ function applyManualLastVehicleToAssignments(assignments, vehicles) {
         const currentLoad = Number(hourCounts.get(currentKey) || 0);
         const isSameVehicle = Number(vehicle.id) === Number(target.vehicle_id);
         if (!isSameVehicle && currentLoad >= seatCapacity) continue;
-        const existingAreas = optimizedLastHour
-          .filter(
-            a =>
-              Number(a.actual_hour ?? 0) === Number(defaultLastHour) &&
-              Number(a.vehicle_id) === Number(vehicle.id) &&
-              Number(a.item_id) !== Number(target.item_id)
-          )
-          .map(a => {
-            const row = itemMap.get(Number(a.item_id));
-            return normalizeAreaLabel(row?.destination_area || row?.cluster_area || row?.planned_area || row?.casts?.area || "");
-          })
-          .filter(Boolean);
-        if (!isLastRunHardAreaConstraintSatisfied(area, existingAreas, vehicle.home_area || "")) continue;
 
         const currentVehicle = vehicleMap.get(Number(target.vehicle_id));
         const currentHome = normalizeAreaLabel(currentVehicle?.home_area || '');
@@ -6065,7 +5968,6 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
 
   const LONG_BUNDLE_ROUND_TRIP_MINUTES = 55;
   const actualLastHour = clusters.reduce((max, cluster) => Math.max(max, Number(cluster?.hour ?? -Infinity)), -Infinity);
-  const effectiveLastHour = getEffectiveLastHour(els.actualDate?.value || todayStr(), clusters.map(c => ({ hour: c?.hour })));
   const vehicleUsage = new Map();
   const vehicleLongClusterLocks = new Map();
 
@@ -6165,11 +6067,7 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
   function shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) {
     const roundTripMinutes = getClusterRoundTripMinutes(cluster);
     if (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES) return false;
-    if (cluster.count <= 1) {
-      const strongRouteLink = routeFlowScore >= 78 && routeContinuityPenalty <= 85;
-      if (strongRouteLink) return false;
-      return true;
-    }
+    if (cluster.count <= 1) return true;
     if (sameHourLoad <= 0) return true;
     const strongRouteLink = routeFlowScore >= 90 && routeContinuityPenalty <= 45;
     const reasonableRideShare = routeFlowScore >= 70 && routeContinuityPenalty <= 60;
@@ -6205,10 +6103,10 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
       const direction = getDirectionAffinityScore(targetArea, area);
       let score = 0;
 
-    if (targetCanonical && canonical && targetCanonical === canonical) score += 180;
-    else if (targetGroup && group && targetGroup === group) score += 130;
-    else if (affinity >= 72) score += 100;
-    else if (affinity >= 54) score += 62;
+      if (targetCanonical && canonical && targetCanonical === canonical) score += 130;
+      else if (targetGroup && group && targetGroup === group) score += 95;
+      else if (affinity >= 72) score += 80;
+      else if (affinity >= 54) score += 48;
 
       if (direction >= 72) score += 18;
       else if (direction >= 28) score += 8;
@@ -6594,7 +6492,7 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
   for (const cluster of clusters) {
     const dateStr = els.actualDate?.value || todayStr();
     const isLastRun = isLastClusterOfTheDay(cluster, dateStr);
-    const defaultLastHour = effectiveLastHour;
+    const defaultLastHour = getDefaultLastHour(dateStr);
     const isDefaultLastHourCluster =
       Number(cluster.hour) === Number(defaultLastHour) &&
       Number(cluster.hour) === Number(actualLastHour);
@@ -6635,14 +6533,6 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
         const areaMixGuardScore = getAreaMixGuardScore(normalizedClusterArea, existingHourAreas, isLastRun || isDefaultLastHourCluster);
         const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
         const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
-        if ((isLastRun || isDefaultLastHourCluster) && !isLastRunHardAreaConstraintSatisfied(normalizedClusterArea, existingHourAreas, homeArea)) {
-          return null;
-        }
-        if (ENFORCE_AREA_PRIORITY_STRICT) {
-          const areaPriorityWeak = strictHomeScore < 50 && directionAffinity < 24 && vehicleAreaMatch < 55;
-          const mixedDirectionRisk = existingHourAreas.length > 0 && routeContinuityPenalty >= 260;
-          if (areaPriorityWeak || mixedDirectionRisk) return null;
-        }
         const directionSplitGuardScore = getDirectionSplitGuardScore(
           normalizedClusterArea,
           existingHourAreas,
@@ -6712,9 +6602,6 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
             score -= Math.min(routeFlowScore, 120) * 0.40;
             score += routeContinuityPenalty * 0.15;
             score -= 18;
-          }
-          if (sameHourLoad > 0 && routeFlowScore >= 78 && routeContinuityPenalty <= 95) {
-            score -= 120;
           }
 
           score -= bundleCompatibility * (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES ? 1.45 : 0.65);
@@ -6826,11 +6713,7 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
       const forceBundle = shouldForceBundleCluster(cluster, bestExistingAreas);
       const clusterLocked = shouldClusterLock(cluster);
       const areaVehicleShortage = hasAreaVehicleShortageForHour(cluster.hour);
-      const forceSameDirectionBundle =
-        bestHourLoad > 0 &&
-        bestRouteFlowScore >= 78 &&
-        bestRouteContinuityPenalty <= 95;
-      const keepTogether = clusterLocked || forceSameDirectionBundle || ((isLastRun || isDefaultLastHourCluster)
+      const keepTogether = clusterLocked || ((isLastRun || isDefaultLastHourCluster)
         ? true
         : (!areaVehicleShortage && (forceBundle || !shouldPreferSpread(cluster, bestRouteFlowScore, bestRouteContinuityPenalty, bestHourLoad) || idleVehicleCount <= 1)));
 
@@ -6886,17 +6769,6 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
           const areaMixGuardScore = getAreaMixGuardScore(normalizedItemArea, existingHourAreas, isLastRun || isDefaultLastHourCluster);
           const routeFlowScore = getRouteFlowVehicleScore(normalizedItemArea, existingHourAreas, homeArea);
           const routeContinuityPenalty = getRouteContinuityPenalty(normalizedItemArea, existingHourAreas, homeArea);
-          if ((isLastRun || isDefaultLastHourCluster) && !isLastRunHardAreaConstraintSatisfied(normalizedItemArea, existingHourAreas, homeArea)) {
-            return null;
-          }
-          if (ENFORCE_AREA_PRIORITY_STRICT) {
-            const strictItem = getStrictHomeCompatibilityScore(normalizedItemArea, homeArea);
-            const dirItem = getDirectionAffinityScore(normalizedItemArea, homeArea);
-            const areaMatchItem = getVehicleAreaMatchScore(vehicle, normalizedItemArea);
-            const areaPriorityWeak = strictItem < 50 && dirItem < 24 && areaMatchItem < 55;
-            const mixedDirectionRisk = existingHourAreas.length > 0 && routeContinuityPenalty >= 240;
-            if (areaPriorityWeak || mixedDirectionRisk) return null;
-          }
           const directionSplitGuardScore = getDirectionSplitGuardScore(
             normalizedItemArea,
             existingHourAreas,
@@ -6977,9 +6849,6 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
             } else if (rotationPrediction.canShare) {
               score -= Math.min(routeFlowScore, 120) * 0.26;
               score -= 10;
-            }
-            if (sameHourLoad > 0 && routeFlowScore >= 78 && routeContinuityPenalty <= 95) {
-              score -= 95;
             }
 
             score -= bundleCompatibility * (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES ? 1.35 : 0.55);
@@ -7098,7 +6967,6 @@ function __getDisplayGroupAreaLabel(item) {
 }
 
 function __hasEnoughVehiclesForDisplayGroups(items, vehicles) {
-  if (!ENABLE_DISPLAY_GROUP_FORCE_BRANCH) return false;
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
   const safeVehicles = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
   if (!safeItems.length || !safeVehicles.length) return false;
@@ -8004,7 +7872,6 @@ function rebundleLongDistanceDirectionalClusters(assignments, items, vehicles, m
 function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, monthlyMap) {
   const working = assignments.map(a => ({ ...a }));
   if (!working.length || !vehicles.length) return working;
-  if (!ENABLE_DISTANCE_REBALANCE) return working;
 
   const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
   const hourLoads = new Map();
@@ -8070,9 +7937,8 @@ function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, mont
         Math.max(0, getDirectionAffinityScore(area, vehicle.home_area || "")) * 0.7 +
         getAreaAffinityScore(area, vehicle.home_area || "");
       if (isHardReverseForHome(area, vehicle.home_area || "")) continue;
-      if (ENFORCE_AREA_PRIORITY_STRICT && compat < currentCompat + 10) continue;
 
-      const score = projectedGapImprove * 1.4 + (compat - currentCompat) * 1.6 - dist * 0.12;
+      const score = projectedGapImprove * 2.2 + (compat - currentCompat) * 1.1 - dist * 0.12;
       if (!bestMove || score > bestMove.score) {
         bestMove = { vehicle, score };
       }
@@ -8094,7 +7960,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
 
   const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
   const dateStr = els.actualDate?.value || todayStr();
-  const defaultLastHour = getEffectiveLastHour(dateStr, working.map(a => ({ actual_hour: a?.actual_hour })));
+  const defaultLastHour = getDefaultLastHour(dateStr);
   const targetHour = working.some(a => Number(a.actual_hour ?? 0) === Number(defaultLastHour))
     ? Number(defaultLastHour)
     : Math.max(...working.map(a => Number(a.actual_hour ?? 0)));
@@ -8114,7 +7980,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
     );
   });
 
-  const evaluate = (vehicle, item, existingAreas = []) => {
+  const evaluate = (vehicle, item) => {
     const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || "無し");
     const itemDistance = Number(item?.distance_km || 0);
     const strict = getStrictHomeCompatibilityScore(area, vehicle?.home_area || "");
@@ -8125,7 +7991,6 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
       Number(monthlyMap?.get(Number(vehicle?.id))?.totalDistance || 0) +
       Number(projectedDistanceByVehicle.get(Number(vehicle?.id)) || 0);
     const hardReverse = isHardReverseForHome(area, vehicle?.home_area || "");
-    if (!isLastRunHardAreaConstraintSatisfied(area, existingAreas, vehicle?.home_area || "")) return -Infinity;
 
     let score =
       strict * 3.2 +
@@ -8145,16 +8010,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
     if (!item) continue;
 
     const currentVehicle = vehicles.find(v => Number(v.id) === Number(target.vehicle_id));
-    const currentExistingAreas = working
-      .filter(
-        a =>
-          Number(a.vehicle_id) === Number(target.vehicle_id) &&
-          Number(a.actual_hour ?? 0) === Number(targetHour) &&
-          Number(a.item_id) !== Number(target.item_id)
-      )
-      .map(a => normalizeAreaLabel(itemMap.get(Number(a.item_id))?.destination_area || itemMap.get(Number(a.item_id))?.cluster_area || ""))
-      .filter(Boolean);
-    const currentScore = evaluate(currentVehicle, item, currentExistingAreas);
+    const currentScore = evaluate(currentVehicle, item);
     let best = { vehicle: currentVehicle, score: currentScore };
 
     for (const vehicle of vehicles) {
@@ -8167,16 +8023,7 @@ function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicl
       ).length;
       if (load >= seatCapacity) continue;
 
-      const existingAreas = working
-        .filter(
-          a =>
-            Number(a.vehicle_id) === Number(vehicle.id) &&
-            Number(a.actual_hour ?? 0) === Number(targetHour) &&
-            Number(a.item_id) !== Number(target.item_id)
-        )
-        .map(a => normalizeAreaLabel(itemMap.get(Number(a.item_id))?.destination_area || itemMap.get(Number(a.item_id))?.cluster_area || ""))
-        .filter(Boolean);
-      const score = evaluate(vehicle, item, existingAreas);
+      const score = evaluate(vehicle, item);
       if (score > best.score) best = { vehicle, score };
     }
 
