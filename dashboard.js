@@ -44,6 +44,9 @@ let simulationSlotHour = null;
 let lastSimulationResult = null;
 let isRefreshingHybridUI = false;
 let suppressSimulationSlotChange = false;
+const ENABLE_DISTANCE_REBALANCE = false;
+const ENFORCE_AREA_PRIORITY_STRICT = true;
+const ENABLE_DISPLAY_GROUP_FORCE_BRANCH = false;
 
 const els = {
   plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
@@ -178,1691 +181,6 @@ const els = {
   historyList: document.getElementById("historyList")
 };
 
-function todayStr() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-
-function getCurrentDispatchDateStr() {
-  return els.dispatchDate?.value || els.actualDate?.value || els.planDate?.value || todayStr();
-}
-
-function getManualLastVehicleStorageKey(dateStr = getCurrentDispatchDateStr()) {
-  return `THEMIS_MANUAL_LAST_VEHICLE_${dateStr}`;
-}
-
-function getManualLastVehicleState(dateStr = getCurrentDispatchDateStr()) {
-  try {
-    const raw = window.localStorage.getItem(getManualLastVehicleStorageKey(dateStr));
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    console.error(e);
-    return null;
-  }
-}
-
-function getManualLastVehicleId(dateStr = getCurrentDispatchDateStr()) {
-  return Number(getManualLastVehicleState(dateStr)?.vehicle_id || 0);
-}
-
-function saveManualLastVehicleState(vehicle, dateStr = getCurrentDispatchDateStr()) {
-  const payload = {
-    vehicle_id: Number(vehicle?.id || 0),
-    driver_name: vehicle?.driver_name || vehicle?.plate_number || "",
-    home_area: normalizeAreaLabel(vehicle?.home_area || ""),
-    vehicle_area: normalizeAreaLabel(vehicle?.vehicle_area || "")
-  };
-  window.localStorage.setItem(getManualLastVehicleStorageKey(dateStr), JSON.stringify(payload));
-  renderManualLastVehicleInfo();
-}
-
-function clearManualLastVehicleState(dateStr = getCurrentDispatchDateStr()) {
-  window.localStorage.removeItem(getManualLastVehicleStorageKey(dateStr));
-  renderManualLastVehicleInfo();
-}
-
-function renderManualLastVehicleInfo() {
-  const state = getManualLastVehicleState();
-  const text = state?.vehicle_id
-    ? `ラスト便車両: ${state.driver_name || "-"} / 帰宅:${normalizeAreaLabel(state.home_area || "無し")}`
-    : "ラスト便車両: なし";
-  const checkedNames = getDriverLastTripCheckedNames();
-  const extra = checkedNames.length ? ` / ラスト便チェック: ${checkedNames.join("・")}` : "";
-  if (els.manualLastVehicleInfo) els.manualLastVehicleInfo.textContent = text + extra;
-}function clearManualLastVehicle() {
-  clearManualLastVehicleState();
-  renderManualLastVehicleInfo();
-  renderDailyDispatchResult();
-  alert("ラスト便車両を解除しました");
-}
-
-function isManualLastVehicle(vehicleId, dateStr = getCurrentDispatchDateStr()) {
-  return Number(vehicleId) === Number(getManualLastVehicleId(dateStr));
-}
-
-function getDriverLastTripStorageKey(dateStr = getCurrentDispatchDateStr()) {
-  return `THEMIS_DRIVER_LAST_TRIP_FLAGS_${dateStr}`;
-}
-
-function getDriverLastTripState(dateStr = getCurrentDispatchDateStr()) {
-  try {
-    const raw = window.localStorage.getItem(getDriverLastTripStorageKey(dateStr));
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    console.error(error);
-    return {};
-  }
-}
-
-function saveDriverLastTripState(state, dateStr = getCurrentDispatchDateStr()) {
-  try {
-    window.localStorage.setItem(
-      getDriverLastTripStorageKey(dateStr),
-      JSON.stringify(state || {})
-    );
-  } catch (error) {
-    console.error(error);
-  }
-}
-
-function isDriverLastTripChecked(vehicleId, dateStr = getCurrentDispatchDateStr()) {
-  const state = getDriverLastTripState(dateStr);
-  return Boolean(state[String(Number(vehicleId || 0))]);
-}
-
-function hasAnyDriverLastTripChecked(dateStr = getCurrentDispatchDateStr()) {
-  const state = getDriverLastTripState(dateStr);
-  return Object.values(state).some(Boolean);
-}
-
-function setDriverLastTripChecked(vehicleId, checked, dateStr = getCurrentDispatchDateStr()) {
-  const key = String(Number(vehicleId || 0));
-  const state = getDriverLastTripState(dateStr);
-
-  if (checked) state[key] = true;
-  else delete state[key];
-
-  saveDriverLastTripState(state, dateStr);
-}
-
-function getDriverLastTripCheckedNames(dateStr = getCurrentDispatchDateStr()) {
-  const state = getDriverLastTripState(dateStr);
-  return allVehiclesCache
-    .filter(vehicle => Boolean(state[String(Number(vehicle.id || 0))]))
-    .map(vehicle => vehicle.driver_name || vehicle.plate_number || "-");
-}
-
-
-function isManualLastTripItem() {
-  return false;
-}
-
-function moveManualLastItemsToEnd(rows) {
-  return Array.isArray(rows) ? rows : [];
-}
-
-
-function formatDateTimeJa(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value || "");
-  return d.toLocaleString("ja-JP");
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function toNullableNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function normalizeStatus(status) {
-  if (status === "done") return "done";
-  if (status === "cancel") return "cancel";
-  if (status === "assigned") return "assigned";
-  return "pending";
-}
-
-function getStatusText(status) {
-  const s = normalizeStatus(status);
-  if (s === "done") return "完了";
-  if (s === "cancel") return "キャンセル";
-  if (s === "assigned") return "配車済";
-  return "未完了";
-}
-
-function getHourLabel(hour) {
-  const n = Number(hour);
-  return `${n}時`;
-}
-
-function getMonthKey(dateStr) {
-  const d = new Date(dateStr);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function getMonthStartStr(dateStr) {
-  const d = new Date(dateStr);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function getDayOfWeek(dateStr) {
-  const d = new Date(dateStr);
-  return d.getDay();
-}function getDefaultLastHour(dateStr) {
-  const day = getDayOfWeek(dateStr);
-  // 火曜-金曜は4時、土曜-月曜は5時
-  if (day >= 2 && day <= 5) return 4;
-  return 5;
-}
-
-
-function getUnifiedHourSet() {
-  const set = new Set();
-  (Array.isArray(currentPlansCache) ? currentPlansCache : []).forEach(row => {
-    const hour = Number(row?.plan_hour ?? row?.actual_hour);
-    if (Number.isFinite(hour)) set.add(hour);
-  });
-  (Array.isArray(currentActualsCache) ? currentActualsCache : []).forEach(row => {
-    const status = normalizeStatus(row?.status);
-    if (status === "cancel") return;
-    const hour = Number(row?.actual_hour ?? row?.plan_hour);
-    if (Number.isFinite(hour)) set.add(hour);
-  });
-  if (!set.size) set.add(getDefaultLastHour(els.dispatchDate?.value || todayStr()));
-  return [...set].sort((a, b) => a - b);
-}
-
-function getOperationBaseHour() {
-  const activeHours = (Array.isArray(currentActualsCache) ? currentActualsCache : [])
-    .filter(row => {
-      const status = normalizeStatus(row?.status);
-      return status !== "done" && status !== "cancel";
-    })
-    .map(row => Number(row?.actual_hour ?? row?.plan_hour))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-
-  if (activeHours.length) return activeHours[0];
-
-  const plannedHours = (Array.isArray(currentPlansCache) ? currentPlansCache : [])
-    .map(row => Number(row?.plan_hour ?? row?.actual_hour))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-
-  if (plannedHours.length) return plannedHours[0];
-  return getDefaultLastHour(els.dispatchDate?.value || todayStr());
-}
-
-function getNextHourSlot(baseHour) {
-  const hours = getUnifiedHourSet();
-  const found = hours.find(hour => Number(hour) > Number(baseHour));
-  return Number.isFinite(found) ? found : null;
-}
-
-function getLastHourSlot() {
-  const hours = getUnifiedHourSet();
-  return hours.length ? hours[hours.length - 1] : getDefaultLastHour(els.dispatchDate?.value || todayStr());
-}
-
-function parseClockTextToMinutes(value) {
-  if (!value || value === "-") return null;
-  const m = String(value).match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-function buildProjectedRowsForHour(targetHour) {
-  const hour = Number(targetHour);
-  const actualRows = (Array.isArray(currentActualsCache) ? currentActualsCache : [])
-    .filter(row => Number(row?.actual_hour ?? row?.plan_hour) === hour)
-    .filter(row => {
-      const status = normalizeStatus(row?.status);
-      return status !== "done" && status !== "cancel";
-    });
-
-  const actualPlanIds = new Set(actualRows.map(row => Number(row?.plan_id || 0)).filter(Boolean));
-  const actualCastKeys = new Set(actualRows.map(row => `${Number(row?.cast_id || 0)}:${hour}`));
-  const doneOrCancelPlanIds = new Set(
-    (Array.isArray(currentActualsCache) ? currentActualsCache : [])
-      .filter(row => Number(row?.actual_hour ?? row?.plan_hour) === hour)
-      .filter(row => {
-        const status = normalizeStatus(row?.status);
-        return status === "done" || status === "cancel";
-      })
-      .map(row => Number(row?.plan_id || 0))
-      .filter(Boolean)
-  );
-
-  const planRows = (Array.isArray(currentPlansCache) ? currentPlansCache : [])
-    .filter(plan => Number(plan?.plan_hour ?? -1) === hour)
-    .filter(plan => !actualPlanIds.has(Number(plan?.id || 0)))
-    .filter(plan => !doneOrCancelPlanIds.has(Number(plan?.id || 0)))
-    .filter(plan => !actualCastKeys.has(`${Number(plan?.cast_id || 0)}:${hour}`))
-    .map((plan, index) => ({
-      id: -100000 - index - Number(plan?.id || 0),
-      plan_id: Number(plan?.id || 0),
-      cast_id: Number(plan?.cast_id || 0),
-      actual_hour: hour,
-      plan_hour: hour,
-      status: "pending",
-      distance_km: Number(plan?.distance_km || plan?.casts?.distance_km || 0),
-      destination_area: plan?.planned_area || plan?.casts?.area || "",
-      destination_address: plan?.destination_address || plan?.casts?.address || "",
-      note: plan?.note || "",
-      casts: {
-        ...(plan?.casts || {}),
-        area: plan?.planned_area || plan?.casts?.area || "",
-        address: plan?.destination_address || plan?.casts?.address || "",
-        distance_km: Number(plan?.distance_km || plan?.casts?.distance_km || 0),
-        travel_minutes: Number(plan?.casts?.travel_minutes || 0),
-      },
-      simulated_from_plan: true
-    }));
-
-  return [...actualRows, ...planRows];
-}
-
-function getEffectiveVehiclesForHour(targetHour) {
-  const slotMinutes = Number(targetHour) * 60;
-  const vehicles = Array.isArray(getSelectedVehiclesForToday()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
-  const activeItems = (Array.isArray(currentActualsCache) ? currentActualsCache : []).filter(row => {
-    const status = normalizeStatus(row?.status);
-    return status !== "done" && status !== "cancel";
-  });
-
-  return vehicles.filter(vehicle => {
-    const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle.id));
-    if (!rows.length) return true;
-    const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
-    const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-    const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
-    if (readyMinutes === null) return true;
-    return readyMinutes <= slotMinutes;
-  });
-}
-
-function getVehicleDeadNamesForHour(targetHour) {
-  const slotMinutes = Number(targetHour) * 60;
-  const vehicles = Array.isArray(getSelectedVehiclesForToday()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
-  const activeItems = (Array.isArray(currentActualsCache) ? currentActualsCache : []).filter(row => {
-    const status = normalizeStatus(row?.status);
-    return status !== "done" && status !== "cancel";
-  });
-
-  return vehicles.filter(vehicle => {
-    const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle.id));
-    if (!rows.length) return false;
-    const orderedRows = moveManualLastItemsToEnd(sortItemsByNearestRoute(rows));
-    const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-    const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
-    return readyMinutes !== null && readyMinutes > slotMinutes;
-  }).map(vehicle => vehicle?.driver_name || vehicle?.plate_number || `車両${vehicle.id}`);
-}
-
-function buildSimulationRowsForHour(targetHour, options = {}) {
-  const hour = Number(targetHour);
-  const includePlanInflow = Boolean(options.includePlanInflow);
-  const actualRows = Array.isArray(currentActualsCache) ? currentActualsCache : [];
-  const plans = Array.isArray(currentPlansCache) ? currentPlansCache : [];
-
-  const actualPlanIds = new Set();
-  const actualCastHourKeys = new Set();
-  actualRows.forEach(row => {
-    const planId = Number(row?.plan_id || 0);
-    const castId = Number(row?.cast_id || 0);
-    const actualHour = Number(row?.actual_hour ?? row?.plan_hour);
-    if (planId) actualPlanIds.add(planId);
-    if (castId && Number.isFinite(actualHour)) actualCastHourKeys.add(`${castId}:${actualHour}`);
-  });
-
-  const isOpenPlan = (plan) => {
-    const status = String(plan?.status || '').toLowerCase();
-    return status !== 'done' && status !== 'cancel';
-  };
-
-  const toSimRow = (plan, index, sourceType) => ({
-    id: -700000 - index - Number(plan?.id || 0),
-    plan_id: Number(plan?.id || 0),
-    cast_id: Number(plan?.cast_id || 0),
-    actual_hour: hour,
-    plan_hour: Number(plan?.plan_hour ?? hour),
-    status: 'pending',
-    distance_km: Number(plan?.distance_km || plan?.casts?.distance_km || 0),
-    destination_area: plan?.planned_area || plan?.casts?.area || '',
-    destination_address: plan?.destination_address || plan?.casts?.address || '',
-    note: plan?.note || '',
-    simulation_source: sourceType,
-    casts: {
-      ...(plan?.casts || {}),
-      area: plan?.planned_area || plan?.casts?.area || '',
-      address: plan?.destination_address || plan?.casts?.address || '',
-      distance_km: Number(plan?.distance_km || plan?.casts?.distance_km || 0),
-      travel_minutes: Number(plan?.casts?.travel_minutes || 0),
-    }
-  });
-
-  const selectedPlans = plans
-    .filter(plan => Number(plan?.plan_hour ?? -1) === hour)
-    .filter(isOpenPlan)
-    .filter(plan => !actualPlanIds.has(Number(plan?.id || 0)))
-    .filter(plan => !actualCastHourKeys.has(`${Number(plan?.cast_id || 0)}:${hour}`));
-
-  const inflowPlans = includePlanInflow
-    ? plans
-        .filter(plan => Number(plan?.plan_hour ?? -1) < hour)
-        .filter(isOpenPlan)
-        .filter(plan => !actualPlanIds.has(Number(plan?.id || 0)))
-    : [];
-
-  const merged = [];
-  const seenPlanIds = new Set();
-  const seenCastIds = new Set();
-
-  [...selectedPlans, ...inflowPlans].forEach(plan => {
-    const planId = Number(plan?.id || 0);
-    const castId = Number(plan?.cast_id || 0);
-    if (planId && seenPlanIds.has(planId)) return;
-    if (castId && seenCastIds.has(castId)) return;
-    if (planId) seenPlanIds.add(planId);
-    if (castId) seenCastIds.add(castId);
-    merged.push(toSimRow(plan, merged.length, Number(plan?.plan_hour ?? hour) < hour ? 'plan_inflow' : 'slot_plan'));
-  });
-
-  const summary = {
-    slotPlanCount: selectedPlans.length,
-    inflowPlanCount: inflowPlans.filter(plan => {
-      const planId = Number(plan?.id || 0);
-      const castId = Number(plan?.cast_id || 0);
-      return (!planId || seenPlanIds.has(planId)) && (!castId || seenCastIds.has(castId));
-    }).length
-  };
-
-  return { rows: merged, summary };
-}
-
-function diagnoseSimulationHourWindow(targetHour, options = {}) {
-  const built = buildSimulationRowsForHour(targetHour, options);
-  const rows = built.rows;
-  const vehicles = getEffectiveVehiclesForHour(targetHour);
-  const effectiveVehicleCount = vehicles.length;
-  const totalCapacity = vehicles.reduce((sum, vehicle) => sum + Math.max(1, Number(vehicle?.seat_capacity || 4)), 0);
-  const castCount = rows.length;
-  const areaGroups = new Set(rows.map(row => getAreaDisplayGroup(normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || "無し"))));
-  const shortageCount = Math.max(0, castCount - totalCapacity);
-  let statusKey = "ok";
-  let statusText = "OK";
-  if (totalCapacity < castCount) {
-    statusKey = "danger";
-    statusText = "定員オーバー見込み";
-  } else if (areaGroups.size > effectiveVehicleCount && castCount > 0) {
-    statusKey = "warn";
-    statusText = "車両不足見込み";
-  }
-  return {
-    hour: Number(targetHour),
-    rows,
-    vehicles,
-    castCount,
-    effectiveVehicleCount,
-    totalCapacity,
-    areaGroupCount: areaGroups.size,
-    shortageCount,
-    statusKey,
-    statusText,
-    deadVehicleNames: getVehicleDeadNamesForHour(targetHour),
-    slotPlanCount: built.summary.slotPlanCount,
-    inflowPlanCount: built.summary.inflowPlanCount
-  };
-}
-
-function diagnoseHourWindow(targetHour) {
-  const rows = buildProjectedRowsForHour(targetHour);
-  const vehicles = getEffectiveVehiclesForHour(targetHour);
-  const effectiveVehicleCount = vehicles.length;
-  const totalCapacity = vehicles.reduce((sum, vehicle) => sum + Math.max(1, Number(vehicle?.seat_capacity || 4)), 0);
-  const castCount = rows.length;
-  const areaGroups = new Set(rows.map(row => getAreaDisplayGroup(normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || "無し"))));
-  const shortageCount = Math.max(0, castCount - totalCapacity);
-  let statusKey = "ok";
-  let statusText = "OK";
-  if (totalCapacity < castCount) {
-    statusKey = "danger";
-    statusText = "定員オーバー見込み";
-  } else if (areaGroups.size > effectiveVehicleCount && castCount > 0) {
-    statusKey = "warn";
-    statusText = "車両不足見込み";
-  }
-  return {
-    hour: Number(targetHour),
-    rows,
-    vehicles,
-    castCount,
-    effectiveVehicleCount,
-    totalCapacity,
-    areaGroupCount: areaGroups.size,
-    shortageCount,
-    statusKey,
-    statusText,
-    deadVehicleNames: getVehicleDeadNamesForHour(targetHour)
-  };
-}
-
-function getStatusPillClass(statusKey) {
-  if (statusKey === "danger") return "danger";
-  if (statusKey === "warn") return "warn";
-  return "ok";
-}
-
-function buildStatusPill(label, value, statusKey = "ok") {
-  return `<span class="status-pill ${getStatusPillClass(statusKey)}"><span class="status-pill-label">${escapeHtml(label)}</span><span class="status-pill-value">${escapeHtml(value)}</span></span>`;
-}
-
-function buildSummaryItemsHtml(items) {
-  return items.map(item => `
-    <div class="hybrid-summary-item ${escapeHtml(item.tone || '')}">
-      <div class="hybrid-summary-icon">${escapeHtml(item.icon || '•')}</div>
-      <div class="hybrid-summary-body">
-        <div class="hybrid-summary-label">${escapeHtml(item.label)}</div>
-        <div class="hybrid-summary-value">${escapeHtml(item.value)}</div>
-      </div>
-    </div>
-  `).join("");
-}
-
-function buildOperationDiagnosisHtml(operationDiag, nextDiag, lastDiag) {
-  const nextDead = nextDiag?.deadVehicleNames?.length ? nextDiag.deadVehicleNames.join(" / ") : "なし";
-  return `
-    <div class="hybrid-state-row">
-      ${buildStatusPill("今", `${getHourLabel(operationDiag.hour)} / ${operationDiag.castCount}名`, operationDiag.statusKey)}
-      ${buildStatusPill("次", nextDiag ? `${getHourLabel(nextDiag.hour)} / ${nextDiag.castCount}名` : '-', nextDiag?.statusKey || 'ok')}
-      ${buildStatusPill("終", lastDiag ? `${getHourLabel(lastDiag.hour)} / ${lastDiag.castCount}名` : '-', lastDiag?.statusKey || 'ok')}
-    </div>
-    <div class="hybrid-legend-grid">
-      <div class="hybrid-legend-card">
-        <div class="hybrid-legend-title">次便の状態</div>
-        <div class="hybrid-legend-value">${escapeHtml(nextDiag ? nextDiag.statusText : '-')}</div>
-      </div>
-      <div class="hybrid-legend-card">
-        <div class="hybrid-legend-title">次便NG車両</div>
-        <div class="hybrid-legend-value">${escapeHtml(nextDead)}</div>
-      </div>
-      <div class="hybrid-legend-card">
-        <div class="hybrid-legend-title">次便 実効/定員</div>
-        <div class="hybrid-legend-value">${nextDiag ? `${nextDiag.effectiveVehicleCount}台 / ${nextDiag.totalCapacity}` : '-'}</div>
-      </div>
-    </div>
-  `;
-}
-
-function buildSimulationDiagnosisHtml(diag) {
-  return `
-    <div class="hybrid-state-row">
-      ${buildStatusPill("便", `${getHourLabel(diag.hour)}`, diag.statusKey)}
-      ${buildStatusPill("人数", `${diag.castCount}名`, diag.statusKey)}
-      ${buildStatusPill("車両", `${diag.effectiveVehicleCount}台`, diag.statusKey)}
-      ${buildStatusPill("定員", `${diag.totalCapacity}`, diag.statusKey)}
-    </div>
-    <div class="hybrid-legend-grid">
-      <div class="hybrid-legend-card">
-        <div class="hybrid-legend-title">判定</div>
-        <div class="hybrid-legend-value">${escapeHtml(diag.statusText)}${diag.shortageCount > 0 ? ` / 未配車見込み ${diag.shortageCount}名` : ''}</div>
-      </div>
-      <div class="hybrid-legend-card">
-        <div class="hybrid-legend-title">方面系統</div>
-        <div class="hybrid-legend-value">${diag.areaGroupCount}</div>
-      </div>
-      <div class="hybrid-legend-card">
-        <div class="hybrid-legend-title">次便NG車両</div>
-        <div class="hybrid-legend-value">${escapeHtml(diag.deadVehicleNames.length ? diag.deadVehicleNames.join(' / ') : 'なし')}</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderOperationAndSimulationUI() {
-  if (isRefreshingHybridUI) return;
-  isRefreshingHybridUI = true;
-  try {
-    const operationBaseHour = getOperationBaseHour();
-    const realNextHour = getNextHourSlot(operationBaseHour);
-    const lastHour = getLastHourSlot();
-    const operationDiag = diagnoseHourWindow(operationBaseHour);
-    const nextDiag = Number.isFinite(realNextHour) ? diagnoseHourWindow(realNextHour) : null;
-    const lastDiag = Number.isFinite(lastHour) ? diagnoseHourWindow(lastHour) : null;
-
-    if (els.operationContextSummary) {
-      els.operationContextSummary.innerHTML = buildSummaryItemsHtml([
-        { icon: "📍", label: "今の基準", value: getHourLabel(operationBaseHour), tone: "tone-blue" },
-        { icon: "⏭", label: "次に見る便", value: Number.isFinite(realNextHour) ? getHourLabel(realNextHour) : "-", tone: "tone-indigo" },
-        { icon: "🏁", label: "最終便", value: Number.isFinite(lastHour) ? getHourLabel(lastHour) : "-", tone: "tone-amber" },
-        { icon: "🚐", label: "次便の使える車両", value: nextDiag ? `${nextDiag.effectiveVehicleCount}台` : "-", tone: "tone-green" }
-      ]);
-    }
-
-    if (els.operationDiagnosis) {
-      const cls = nextDiag?.statusKey === "danger" || lastDiag?.statusKey === "danger"
-        ? "danger"
-        : (nextDiag?.statusKey === "warn" || lastDiag?.statusKey === "warn" ? "warn" : "ok");      els.operationDiagnosis.className = `hybrid-diagnosis ${cls}`;
-      els.operationDiagnosis.innerHTML = buildOperationDiagnosisHtml(operationDiag, nextDiag, lastDiag);
-    }
-
-    const hourOptions = getUnifiedHourSet();
-    if (els.simulationSlotSelect) {
-      const previous = Number.isFinite(simulationSlotHour) ? simulationSlotHour : (Number.isFinite(realNextHour) ? realNextHour : operationBaseHour);
-      suppressSimulationSlotChange = true;
-      try {
-        const optionHtml = hourOptions.map(hour => `<option value="${hour}">${getHourLabel(hour)}</option>`).join("");
-        if (els.simulationSlotSelect.innerHTML !== optionHtml) {
-          els.simulationSlotSelect.innerHTML = optionHtml;
-        }
-        const targetValue = hourOptions.includes(previous) ? previous : (hourOptions[0] ?? operationBaseHour);
-        simulationSlotHour = targetValue;
-        if (String(els.simulationSlotSelect.value) !== String(targetValue)) {
-          els.simulationSlotSelect.value = String(targetValue);
-        }
-      } finally {
-        setTimeout(() => { suppressSimulationSlotChange = false; }, 0);
-      }
-    }
-
-    if (!lastSimulationResult && els.simulationDiagnosis) {
-      els.simulationDiagnosis.className = 'hybrid-diagnosis muted';
-      els.simulationDiagnosis.textContent = '試算対象便を選択してください';
-    }
-  } catch (error) {
-    console.error(error);
-    if (els.operationDiagnosis) {
-      els.operationDiagnosis.className = 'hybrid-diagnosis danger';
-      els.operationDiagnosis.textContent = `診断エラー: ${error?.message || error}`;
-    }
-  } finally {
-    isRefreshingHybridUI = false;
-  }
-}
-
-function runSlotDiagnosisPreview() {
-  const hour = Number(els.simulationSlotSelect?.value ?? simulationSlotHour ?? getOperationBaseHour());
-  simulationSlotHour = hour;
-  const diag = diagnoseSimulationHourWindow(hour, { includePlanInflow: Boolean(els.simulationIncludePlanInflow?.checked) });
-  lastSimulationResult = { type: 'diagnosis', hour, diag };
-  if (els.simulationDiagnosis) {    els.simulationDiagnosis.className = `hybrid-diagnosis ${diag.statusKey}`;
-    els.simulationDiagnosis.innerHTML = buildSimulationDiagnosisHtml(diag);
-  }
-  if (els.simulationPreview) {
-    if (!diag.rows.length) {
-      els.simulationPreview.className = 'simulation-preview muted';
-      els.simulationPreview.textContent = 'この便の予定対象はありません';
-    } else {
-      const list = diag.rows.map(row => `
-        <div class="sim-mini-chip">
-          <span class="sim-mini-name">${escapeHtml(row?.casts?.name || '-')}</span>
-          <span class="sim-mini-area">${escapeHtml(normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || '-'))}</span>
-        </div>
-      `).join('');
-      els.simulationPreview.className = 'simulation-preview';
-      els.simulationPreview.innerHTML = `
-        <div class="sim-preview-head">
-          <h4 class="sim-preview-title">試算対象一覧</h4>
-          <span class="chip">${getHourLabel(diag.hour)}</span>
-        </div>
-        <div class="sim-preview-meta">対象便予定 ${diag.slotPlanCount}名 / 前便未処理予定 ${diag.inflowPlanCount}名</div>
-        <div class="sim-mini-chip-grid">${list}</div>
-      `;
-    }
-  }
-}
-
-function getAssignmentsForPreview(items, vehicles, monthlyMap) {
-  let assignments = optimizeAssignments(items, vehicles, monthlyMap);
-  if (!Array.isArray(assignments)) assignments = [];
-
-  if (__hasEnoughVehiclesForDisplayGroups(items, vehicles)) {
-    assignments = __buildAssignmentsPreserveDisplayGroups(items, vehicles, monthlyMap);
-  } else {
-    const routeFlowAssignments = optimizeAssignmentsByRouteFlow(assignments, items, vehicles);
-    assignments = Array.isArray(routeFlowAssignments) ? routeFlowAssignments : assignments;
-    if (!Array.isArray(assignments) || !assignments.length) assignments = buildFallbackAssignments(items, vehicles);
-    const balancedAssignments = optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, monthlyMap);
-    assignments = Array.isArray(balancedAssignments) ? balancedAssignments : assignments;
-    const correctedAssignments = applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicles, monthlyMap);
-    assignments = Array.isArray(correctedAssignments) ? correctedAssignments : assignments;
-    const manualAssignments = applyManualLastVehicleToAssignments(assignments, vehicles);
-    assignments = Array.isArray(manualAssignments) ? manualAssignments : assignments;
-  }
-
-  return Array.isArray(assignments) ? assignments : [];
-}
-
-function runSimulationDispatchPreview() {
-  const hour = Number(els.simulationSlotSelect?.value ?? simulationSlotHour ?? getOperationBaseHour());
-  simulationSlotHour = hour;
-  const simBuilt = buildSimulationRowsForHour(hour, { includePlanInflow: Boolean(els.simulationIncludePlanInflow?.checked) });
-  const items = simBuilt.rows.map((row, index) => ({ ...row, id: Number(row?.id || -(index + 1)) }));
-  const vehicles = getEffectiveVehiclesForHour(hour);
-  const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
-  const assignments = getAssignmentsForPreview(items, vehicles, monthlyMap);
-  const applied = items.map(item => {
-    const assigned = assignments.find(a => Number(a?.item_id) === Number(item.id));
-    return assigned ? { ...item, vehicle_id: assigned.vehicle_id, driver_name: assigned.driver_name || '' } : { ...item };
-  });
-  const cards = buildDailyDispatchVehicleCards(vehicles, applied, monthlyMap);
-  const html = cards.map(({ vehicle, orderedRows }) => {
-    const summary = getVehicleDailySummary(vehicle, orderedRows);
-    const forecast = getVehicleRotationForecastSafe(vehicle, orderedRows);
-    const body = orderedRows.length
-      ? orderedRows.map((row, index) => `
-          <div class="sim-preview-row">
-            <span>順番${index + 1} ${escapeHtml(row?.casts?.name || '-')} / ${escapeHtml(normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || '-'))}</span>
-            <span>${Number(row?.distance_km || 0).toFixed(1)}km</span>
-          </div>
-        `).join('')
-      : `<div class="muted">送りなし</div>`;
-    return `
-      <div class="sim-preview-card">
-        <h4>${escapeHtml(vehicle?.driver_name || vehicle?.plate_number || '-')}</h4>
-        <div class="sim-preview-meta">人数 ${orderedRows.length} / 距離 ${summary.totalKm.toFixed(1)}km / 戻り ${escapeHtml(forecast.returnAfterLabel)} / 次便可能 ${escapeHtml(forecast.predictedReadyTime)}</div>
-        ${body}
-      </div>
-    `;
-  }).join('');
-
-  const unassigned = applied.filter(item => !Number(item?.vehicle_id || 0));
-  const diag = diagnoseSimulationHourWindow(hour, { includePlanInflow: Boolean(els.simulationIncludePlanInflow?.checked) });
-  lastSimulationResult = { type: 'dispatch', hour, diag, unassignedCount: unassigned.length };
-  if (els.simulationDiagnosis) {
-    const cls = unassigned.length > 0 || diag.statusKey === 'danger' ? 'danger' : (diag.statusKey === 'warn' ? 'warn' : 'ok');    els.simulationDiagnosis.className = `hybrid-diagnosis ${cls}`;
-    els.simulationDiagnosis.innerHTML = buildSimulationDiagnosisHtml({
-      ...diag,
-      effectiveVehicleCount: vehicles.length,
-      shortageCount: unassigned.length
-    });
-  }
-  if (els.simulationPreview) {
-    els.simulationPreview.className = 'simulation-preview';
-    els.simulationPreview.innerHTML = `
-      <div class="sim-preview-head">
-        <h4 class="sim-preview-title">試算配車プレビュー</h4>
-        <span class="chip">${getHourLabel(hour)}</span>
-      </div>
-      <div class="sim-preview-meta">このプレビューは保存しません。対象便予定 ${diag.slotPlanCount}名 / 前便未処理予定 ${diag.inflowPlanCount}名 / 現実の配車状態は維持されます。</div>
-      <div class="sim-preview-grid">${html || '<div class="muted">配車結果なし</div>'}</div>
-    `;
-  }
-}
-
-function isValidLatLng(lat, lng) {
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-  if (lat < -90 || lat > 90) return false;
-  if (lng < -180 || lng > 180) return false;
-  return true;
-}
-
-const GOOGLE_GEOCODE_CACHE_KEY = "themis_google_geocode_cache_v1";
-const GOOGLE_ROUTE_DISTANCE_CACHE_KEY = "themis_google_route_distance_cache_v1";
-let lastCastGeocodeKey = "";
-let castGeocodeSeq = 0;
-let googleMapsApiPromise = null;
-
-function normalizeGeocodeAddressKey(address) {
-  return String(address || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function setCastGeoStatus(state = "idle", message = "") {
-  if (!els.castGeoStatus) return;
-  els.castGeoStatus.className = `geo-status ${state}`;
-  els.castGeoStatus.textContent = message || "住所入力後 Enter で座標取得 / 未取得時は座標貼り付けから手動反映できます";
-}
-
-function scheduleCastAutoGeocode() {
-  const address = String(els.castAddress?.value || "").trim();
-  if (!address) {
-    if (els.castLat) els.castLat.value = "";
-    if (els.castLng) els.castLng.value = "";
-    if (els.castLatLngText) els.castLatLngText.value = "";
-    lastCastGeocodeKey = "";
-    castGeocodeSeq++;
-    setCastGeoStatus("idle", "住所入力後 Enter で座標取得 / 未取得時は座標貼り付けから手動反映できます");
-    return;
-  }
-  setCastGeoStatus("idle", "住所入力後 Enter で座標取得");
-}
-
-async function triggerCastAddressGeocodeNow() {
-  const address = String(els.castAddress?.value || "").trim();
-  if (!address) {
-    setCastGeoStatus("idle", "住所を入力してください");
-    return null;
-  }
-  const runSeq = ++castGeocodeSeq;
-  const currentKey = normalizeGeocodeAddressKey(address);
-  setCastGeoStatus("loading", "取得中…");
-  const result = await fillCastLatLngFromAddress({ silent: true, force: currentKey !== lastCastGeocodeKey });
-  if (runSeq !== castGeocodeSeq) return result;
-  if (result) {
-    const sourceText = result.source === "cache" ? "キャッシュから取得" : result.source === "existing" ? "入力済み座標" : "Google Geocoding";
-    setCastGeoStatus("success", `✔ 座標取得済 (${sourceText})`);
-  } else {
-    setCastGeoStatus("error", "座標を自動取得できませんでした。住所を確認して Enter で再試行するか、座標貼り付けで手動入力してください");
-  }
-  return result;
-}
-
-function loadGeocodeCache() {
-  try {
-    return JSON.parse(localStorage.getItem(GOOGLE_GEOCODE_CACHE_KEY) || "{}");
-  } catch (_) {
-    return {};
-  }
-}
-
-function saveGeocodeCache(cache) {
-  try {
-    localStorage.setItem(GOOGLE_GEOCODE_CACHE_KEY, JSON.stringify(cache || {}));
-  } catch (_) {}
-}
-
-
-function loadRouteDistanceCache() {
-  try {
-    return JSON.parse(localStorage.getItem(GOOGLE_ROUTE_DISTANCE_CACHE_KEY) || "{}");
-  } catch (_) {
-    return {};
-  }
-}
-
-function saveRouteDistanceCache(cache) {
-  try {
-    localStorage.setItem(GOOGLE_ROUTE_DISTANCE_CACHE_KEY, JSON.stringify(cache || {}));
-  } catch (_) {}
-}
-
-function ensureCastTravelMinutesUi() {
-  if (document.getElementById("castTravelMinutes")) {
-    els.castTravelMinutes = document.getElementById("castTravelMinutes");
-    els.fetchCastTravelMinutesBtn = document.getElementById("fetchCastTravelMinutesBtn");
-    if (els.fetchCastTravelMinutesBtn) {
-      els.fetchCastTravelMinutesBtn.style.display = "none";
-      els.fetchCastTravelMinutesBtn.disabled = true;
-      els.fetchCastTravelMinutesBtn.title = "時間取得は使用しません";
-    }
-    return;
-  }
-
-  const distanceField = els.castDistanceKm?.closest?.(".field");
-  if (distanceField?.parentElement) {
-    const wrap = document.createElement("div");
-    wrap.className = "field";
-    wrap.innerHTML = `
-      <label for="castTravelMinutes">片道予想時間(分)</label>
-      <input id="castTravelMinutes" type="number" min="0" step="1" placeholder="例：35" />
-    `;
-    distanceField.insertAdjacentElement("afterend", wrap);
-  }
-
-  els.castTravelMinutes = document.getElementById("castTravelMinutes");
-  els.fetchCastTravelMinutesBtn = document.getElementById("fetchCastTravelMinutesBtn");
-  if (els.fetchCastTravelMinutesBtn) {
-    els.fetchCastTravelMinutesBtn.style.display = "none";
-    els.fetchCastTravelMinutesBtn.disabled = true;
-    els.fetchCastTravelMinutesBtn.title = "時間取得は使用しません";
-  }
-}
-
-function getStoredTravelMinutes(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
-}
-
-function getCastTravelMinutesValue(castLike) {
-  if (!castLike) return 0;
-  return getStoredTravelMinutes(castLike.travel_minutes || castLike.travelMinutes);
-}
-
-function makeRouteDistanceCacheKey(address, lat, lng) {
-  const latNum = toNullableNumber(lat);
-  const lngNum = toNullableNumber(lng);
-  if (isValidLatLng(latNum, lngNum)) return `latlng:${latNum},${lngNum}`;
-  return `addr:${normalizeGeocodeAddressKey(address)}`;
-}
-
-async function getGoogleDrivingDistanceKmFromOrigin(address, lat, lng) {
-  const cacheKey = makeRouteDistanceCacheKey(address, lat, lng);
-  if (!cacheKey || cacheKey === 'addr:') return null;
-
-  const cache = loadRouteDistanceCache();
-  const cached = cache[cacheKey];
-  if (Number.isFinite(Number(cached))) return Number(cached);
-
-  await loadGoogleMapsApi();
-  if (!window.google?.maps?.DirectionsService) return null;
-
-  const destinationLat = toNullableNumber(lat);
-  const destinationLng = toNullableNumber(lng);
-  const destination = isValidLatLng(destinationLat, destinationLng)
-    ? { lat: destinationLat, lng: destinationLng }
-    : String(address || '').trim();
-
-  if (!destination) return null;
-
-  const runOnce = () => new Promise((resolve, reject) => {
-    const service = new google.maps.DirectionsService();
-    service.route({
-      origin: { lat: ORIGIN_LAT, lng: ORIGIN_LNG },
-      destination,
-      travelMode: google.maps.TravelMode.DRIVING,
-      region: 'JP'
-    }, (result, status) => {
-      if (status === 'OK') {
-        const leg = result?.routes?.[0]?.legs?.[0];
-        const meters = Number(leg?.distance?.value || 0);
-        if (meters > 0) {
-          resolve(Number((meters / 1000).toFixed(1)));
-          return;
-        }
-        resolve(null);
-        return;
-      }
-      if (status === 'ZERO_RESULTS' || status === 'NOT_FOUND' || status === 'REQUEST_DENIED' || status === 'INVALID_REQUEST') {
-        resolve(null);
-        return;
-      }
-      reject(new Error(`Google directions error: ${status}`));
-    });
-  });
-
-  let km = null;
-  try {
-    km = await runOnce();
-  } catch (error) {
-    const transient = /UNKNOWN_ERROR|ERROR|OVER_QUERY_LIMIT/.test(String(error?.message || ""));
-    if (!transient) throw error;
-    await new Promise(r => setTimeout(r, 700));
-    km = await runOnce();
-  }
-
-  if (Number.isFinite(Number(km)) && Number(km) > 0) {
-    cache[cacheKey] = Number(km);
-    saveRouteDistanceCache(cache);
-    return Number(km);
-  }
-
-  return null;
-}
-
-async function resolveDistanceKmFromOrigin(address, lat, lng) {
-  const latNum = toNullableNumber(lat);
-  const lngNum = toNullableNumber(lng);
-
-  try {
-    const routeKm = await getGoogleDrivingDistanceKmFromOrigin(address, latNum, lngNum);
-    if (Number.isFinite(Number(routeKm)) && Number(routeKm) > 0) return Number(routeKm);
-  } catch (error) {
-    console.warn('resolveDistanceKmFromOrigin fallback:', error);
-  }
-
-  if (isValidLatLng(latNum, lngNum)) {
-    return estimateRoadKmFromStation(latNum, lngNum);
-  }
-  return null;
-}
-
-async function resolveDistanceKmForCastRecord(cast, overrideAddress = '') {
-  let distance = toNullableNumber(cast?.distance_km);
-  if (distance !== null) return distance;
-
-  const lat = toNullableNumber(cast?.latitude);
-  const lng = toNullableNumber(cast?.longitude);
-  const address = String(overrideAddress || cast?.address || '').trim();
-
-  if (!address && !isValidLatLng(lat, lng)) return null;
-  return await resolveDistanceKmFromOrigin(address, lat, lng);
-}
-
-function loadGoogleMapsApi() {
-  if (window.google?.maps?.Geocoder) return Promise.resolve(window.google.maps);
-  if (googleMapsApiPromise) return googleMapsApiPromise;
-
-  const apiKey = String(window.APP_CONFIG?.GOOGLE_MAPS_API_KEY || "").trim();
-  if (!apiKey) {
-    return Promise.reject(new Error("GOOGLE_MAPS_API_KEY が未設定です"));
-  }
-
-  googleMapsApiPromise = new Promise((resolve, reject) => {
-    const callbackName = "__themisGoogleMapsInit";
-    const timeout = window.setTimeout(() => {
-      cleanup();
-      reject(new Error("Google Maps API の読み込みがタイムアウトしました"));
-    }, 15000);
-
-    function cleanup() {
-      window.clearTimeout(timeout);
-      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
-    }
-
-    if (window.google?.maps?.Geocoder) {
-      cleanup();
-      resolve(window.google.maps);
-      return;
-    }
-
-    const existing = document.getElementById("googleMapsApiScript");
-    window[callbackName] = () => {
-      cleanup();
-      if (window.google?.maps?.Geocoder) {
-        resolve(window.google.maps);
-      } else {
-        reject(new Error("Google Maps API は読み込まれましたが Geocoder が使えません"));
-      }
-    };
-
-    if (existing) {
-      existing.addEventListener("error", () => {
-        cleanup();
-        reject(new Error("Google Maps API の読み込みに失敗しました"));
-      }, { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = "googleMapsApiScript";
-    script.async = true;
-    script.defer = true;
-    script.onerror = () => {
-      cleanup();
-      reject(new Error("Google Maps API の読み込みに失敗しました"));
-    };
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&language=ja&region=JP&callback=${callbackName}`;
-    document.head.appendChild(script);
-  }).catch((error) => {
-    googleMapsApiPromise = null;
-    throw error;
-  });
-
-  return googleMapsApiPromise;
-}
-
-async function geocodeAddressGoogle(address) {
-  const normalizedAddress = String(address || "").trim();
-  if (!normalizedAddress) return null;
-
-  const key = normalizeGeocodeAddressKey(normalizedAddress);
-  const cache = loadGeocodeCache();
-  const cached = cache[key];
-  if (cached && isValidLatLng(Number(cached.lat), Number(cached.lng))) {
-    return {
-      lat: Number(cached.lat),
-      lng: Number(cached.lng),
-      source: "cache"
-    };
-  }
-
-  await loadGoogleMapsApi();
-
-  async function runOnce() {
-    return await new Promise((resolve, reject) => {
-      const geocoder = new google.maps.Geocoder();
-      geocoder.geocode({
-        address: normalizedAddress,
-        region: "JP",
-        componentRestrictions: { country: "JP" }
-      }, (results, status) => {
-        if (status === "OK") {
-          const first = Array.isArray(results) ? results[0] : null;
-          if (!first?.geometry?.location) {
-            resolve(null);
-            return;
-          }
-          const loc = first.geometry.location;
-          resolve({
-            lat: Number(loc.lat()),
-            lng: Number(loc.lng()),
-            source: "api"
-          });
-          return;
-        }
-        if (status === "ZERO_RESULTS") {
-          resolve(null);
-          return;
-        }
-        reject(new Error(`Google geocode error: ${status}`));
-      });
-    });
-  }
-
-  let result = null;
-  try {
-    result = await runOnce();
-  } catch (error) {
-    const transient = /OVER_QUERY_LIMIT|UNKNOWN_ERROR|ERROR/.test(String(error?.message || ""));
-    if (!transient) throw error;
-    await new Promise(r => setTimeout(r, 700));
-    result = await runOnce();
-  }
-
-  if (!result || !isValidLatLng(result.lat, result.lng)) return null;
-
-  cache[key] = { lat: result.lat, lng: result.lng, ts: Date.now() };
-  saveGeocodeCache(cache);
-  return result;
-}
-
-async function fillCastLatLngFromAddress(options = {}) {
-  const silent = Boolean(options.silent);
-  const address = String(els.castAddress?.value || "").trim();
-
-  if (!address) {
-    if (!silent) alert("住所を入力してください");
-    return null;
-  }
-
-  const currentKey = normalizeGeocodeAddressKey(address);
-  const existingLat = toNullableNumber(els.castLat?.value);
-  const existingLng = toNullableNumber(els.castLng?.value);
-  if (isValidLatLng(existingLat, existingLng) && !options.force && currentKey === lastCastGeocodeKey) {
-    return { lat: existingLat, lng: existingLng, source: "existing" };
-  }
-
-  try {
-    const result = await geocodeAddressGoogle(address);
-    if (!result) {
-      if (!silent) alert("住所から座標を取得できませんでした。手動入力してください");
-      return null;
-    }
-
-    if (els.castLat) els.castLat.value = String(result.lat);
-    if (els.castLng) els.castLng.value = String(result.lng);
-    if (els.castLatLngText) els.castLatLngText.value = `${result.lat},${result.lng}`;
-    if (els.castArea) {
-      els.castArea.value = normalizeAreaLabel(guessArea(result.lat, result.lng, address));
-    }
-    if (els.castDistanceKm && !String(els.castDistanceKm.value || "").trim()) {
-      const autoKm = await resolveDistanceKmFromOrigin(address, result.lat, result.lng);
-      if (autoKm !== null) els.castDistanceKm.value = String(autoKm);
-    }
-
-    lastCastGeocodeKey = currentKey;
-    if (!silent) {
-      const label = result.source === "cache" ? "キャッシュ" : "Google Geocoding";
-      alert(`${label}で座標を取得しました`);
-    }
-    return result;
-  } catch (error) {
-    console.error("fillCastLatLngFromAddress error:", error);
-    if (!silent) alert(`住所から座標取得できませんでした。${error.message || "時間をおいて再試行するか、手動で入力してください"}`);
-    return null;
-  }
-}
-
-function parseLatLngText(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return null;
-
-  const normalized = raw
-    .replace(/[　 ]+/g, "")
-    .replace(/，/g, ",")
-    .replace(/、/g, ",")
-    .replace(/緯度[:：]/g, "")
-    .replace(/経度[:：]/g, "")
-    .replace(/latitude[:=]/gi, "")
-    .replace(/longitude[:=]/gi, "");
-
-  const patterns = [
-    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
-    /(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/
-  ];
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (!match) continue;
-    const lat = Number(match[1]);
-    const lng = Number(match[2]);
-    if (isValidLatLng(lat, lng)) return { lat, lng };
-  }
-  return null;
-}
-
-function haversineKm(lat1, lng1, lat2, lng2) {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
-function estimateRoadKmFromStation(lat, lng) {
-  const straight = haversineKm(ORIGIN_LAT, ORIGIN_LNG, lat, lng);
-  return Number((straight * 1.22).toFixed(1));
-}
-
-function estimateRoadKmBetweenPoints(lat1, lng1, lat2, lng2) {
-  if (!isValidLatLng(lat1, lng1) || !isValidLatLng(lat2, lng2)) return 0;
-  const straight = haversineKm(lat1, lng1, lat2, lng2);
-  return Number((straight * 1.22).toFixed(1));
-}
-
-function getItemLatLng(item) {
-  const lat = toNullableNumber(item?.casts?.latitude);
-  const lng = toNullableNumber(item?.casts?.longitude);
-  if (isValidLatLng(lat, lng)) return { lat, lng };
-  return null;
-}
-
-function sortItemsByNearestRoute(items) {
-  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!rows.length) return [];
-
-  const groups = new Map();
-  rows.forEach((row, idx) => {
-    const hourKey = Number(row?.actual_hour ?? row?.plan_hour ?? 0);
-    if (!groups.has(hourKey)) groups.set(hourKey, []);
-    groups.get(hourKey).push({ row, idx });
-  });
-
-  const ordered = [];
-  const hourKeys = [...groups.keys()].sort((a, b) => a - b);
-
-  function getRowDistanceValue(row) {
-    return Number(row?.distance_km ?? row?.casts?.distance_km ?? 999999) || 999999;
-  }
-  function getRowTravelValue(row) {
-    const v = Number(row?.casts?.travel_minutes ?? row?.travel_minutes ?? 999999);
-    return Number.isFinite(v) && v > 0 ? v : 999999;
-  }
-  function getRowStableId(row, fallbackIdx) {
-    return Number(row?.id ?? row?.item_id ?? row?.cast_id ?? fallbackIdx ?? 0) || 0;
-  }
-
-  hourKeys.forEach(hourKey => {
-    const remaining = groups.get(hourKey).slice();
-    let currentDistance = null;
-
-    while (remaining.length) {
-      let bestIndex = 0;
-      let bestKey = null;
-
-      remaining.forEach((entry, index) => {
-        const row = entry.row;
-        const distanceValue = getRowDistanceValue(row);
-        const travelValue = getRowTravelValue(row);
-        const stableId = getRowStableId(row, entry.idx);
-        const primary = currentDistance == null
-          ? distanceValue
-          : Math.abs(distanceValue - currentDistance);
-        const compareKey = [primary, distanceValue, travelValue, stableId];
-
-        if (!bestKey) {
-          bestKey = compareKey;
-          bestIndex = index;
-          return;
-        }
-        for (let i = 0; i < compareKey.length; i += 1) {
-          if (compareKey[i] === bestKey[i]) continue;
-          if (compareKey[i] < bestKey[i]) {
-            bestKey = compareKey;
-            bestIndex = index;
-          }
-          break;
-        }
-      });
-
-      const picked = remaining.splice(bestIndex, 1)[0].row;
-      ordered.push(picked);
-      currentDistance = getRowDistanceValue(picked);
-    }
-  });
-
-  return ordered;
-}
-
-function calculateRouteDistance(items) {
-  if (!items.length) return 0;
-
-  let total = 0;
-  let currentLat = ORIGIN_LAT;
-  let currentLng = ORIGIN_LNG;
-
-  items.forEach(item => {
-    const point = getItemLatLng(item);
-
-    if (point) {
-      total += estimateRoadKmBetweenPoints(currentLat, currentLng, point.lat, point.lng);
-      currentLat = point.lat;
-      currentLng = point.lng;
-    } else {
-      total += Number(item.distance_km || 0);
-    }
-  });
-
-  return Number(total.toFixed(1));
-}
-
-
-function normalizeAddressText(address) {
-  return String(address || "")
-    .trim()
-    .replace(/[　\s]+/g, "")
-    .replace(/ヶ/g, "ケ")
-    .replace(/之/g, "の")
-    .replace(/−/g, "-")
-    .replace(/ー/g, "-");
-}
-
-function detectPrefecture(address) {
-  const a = normalizeAddressText(address);
-
-  if (a.includes("東京都")) return "東京";
-  if (a.includes("埼玉県")) return "埼玉";
-  if (a.includes("千葉県")) return "千葉";
-  if (a.includes("茨城県")) return "茨城";
-
-  return "";
-}
-
-function extractCityTownFromAddress(address = "") {
-  const raw = String(address || "").trim();
-  const a = normalizeAddressText(raw);
-  if (!a) return { city: "", town: "" };
-
-  const match = a.match(
-    /(足立区|葛飾区|江戸川区|墨田区|江東区|荒川区|台東区|中央区|千代田区|港区|新宿区|文京区|品川区|目黒区|大田区|世田谷区|渋谷区|中野区|杉並区|豊島区|北区|板橋区|練馬区|松戸市|柏市|白井市|印西市|流山市|我孫子市|野田市|市川市|鎌ケ谷市|鎌ヶ谷市|船橋市|浦安市|習志野市|八千代市|三郷市|八潮市|草加市|越谷市|吉川市|守谷市|取手市|つくば市|つくばみらい市|牛久市|龍ケ崎市|龍ヶ崎市|利根町)(.+)?/
-  );
-
-  if (!match) return { city: "", town: "" };
-
-  const cityRaw = match[1] || "";
-  let townRaw = match[2] || "";
-
-  townRaw = townRaw
-    .replace(/丁目.*$/, "")
-    .replace(/番地.*$/, "")
-    .replace(/番.*$/, "")
-    .replace(/号.*$/, "")
-    .replace(/[0-9０-９]+/g, "")
-    .replace(/[-‐-‒–—―ー－]+/g, "")
-    .replace(/^千葉県|^埼玉県|^東京都|^茨城県/, "")
-    .replace(/^日本/, "")
-    .trim();
-
-  const city = cityRaw.replace(/(市|区|町)$/, "");
-  return { city, town: townRaw };
-}
-
-function getSevenAreaGroupByCity(city = "") {
-  if (!city) return "東京方面";
-
-  if (["松戸"].includes(city)) return "松戸方面";
-
-  if (["柏", "白井", "印西"].includes(city)) return "柏方面";
-
-  if (["我孫子", "取手", "守谷", "つくばみらい", "牛久", "龍ケ崎", "龍ヶ崎", "利根", "つくば"].includes(city)) {
-    return "我孫子・取手方面";
-  }
-
-  if (["市川", "船橋", "鎌ケ谷", "鎌ヶ谷", "浦安", "習志野", "八千代"].includes(city)) {
-    return "市川・船橋方面";
-  }
-
-  if ([
-    "足立", "葛飾", "江戸川", "墨田", "江東", "荒川", "台東",
-    "中央", "千代田", "港", "新宿", "文京", "品川", "目黒",
-    "大田", "世田谷", "渋谷", "中野", "杉並", "豊島", "北",
-    "板橋", "練馬"
-  ].includes(city)) {
-    return "東京方面";
-  }
-
-  if (["三郷", "八潮", "草加", "越谷", "吉川"].includes(city)) return "埼玉方面";
-
-  if (["流山", "野田"].includes(city)) return "流山・野田方面";
-
-  return "東京方面";
-}
-
-function detectAreaGroup(address = "") {
-  const { city, town } = extractCityTownFromAddress(address);
-
-  const allJobs = [
-    ...(currentPlansCache || []),
-    ...(currentActualsCache || []),
-    ...(allCastsCache || [])
-  ];
-
-  const normalizedTown = String(town || "").trim();
-
-  const sameTownGroups = allJobs
-    .map(j => ({
-      address: j.address || j.destination_address || "",
-      area: j.area || j.area_group || j.planned_area || j.destination_area || ""
-    }))
-    .map(j => {
-      const parsed = extractCityTownFromAddress(j.address);
-      return {
-        city: parsed.city,
-        town: parsed.town,
-        group: getAreaDisplayGroup(j.area)
-      };
-    })
-    .filter(x => x.city === city && normalizedTown && x.town === normalizedTown && x.group);
-
-  if (sameTownGroups.length > 0) {
-    const count = {};
-    sameTownGroups.forEach(x => count[x.group] = (count[x.group] || 0) + 1);
-    return Object.keys(count).sort((a, b) => count[b] - count[a])[0];
-  }
-
-  const sameCityGroups = allJobs
-    .map(j => ({
-      address: j.address || j.destination_address || "",
-      area: j.area || j.area_group || j.planned_area || j.destination_area || ""
-    }))
-    .map(j => {
-      const parsed = extractCityTownFromAddress(j.address);
-      return {
-        city: parsed.city,
-        group: getAreaDisplayGroup(j.area)
-      };
-    })
-    .filter(x => x.city === city && x.group);
-
-  if (sameCityGroups.length > 0) {
-    const count = {};
-    sameCityGroups.forEach(x => count[x.group] = (count[x.group] || 0) + 1);
-    return Object.keys(count).sort((a, b) => count[b] - count[a])[0];
-  }
-
-  return getSevenAreaGroupByCity(city);
-}function classifyAreaByAddress(address) {
-  return detectAreaGroup(address);
-}
-
-function getDirection8(lat, lng) {
-  if (!isValidLatLng(lat, lng)) return "";
-
-  const dLat = lat - ORIGIN_LAT;
-  const dLng = lng - ORIGIN_LNG;
-  const angle = Math.atan2(dLat, dLng) * 180 / Math.PI;
-
-  if (angle >= -22.5 && angle < 22.5) return "東";
-  if (angle >= 22.5 && angle < 67.5) return "北東";
-  if (angle >= 67.5 && angle < 112.5) return "北";
-  if (angle >= 112.5 && angle < 157.5) return "北西";
-  if (angle >= -67.5 && angle < -22.5) return "南東";
-  if (angle >= -112.5 && angle < -67.5) return "南";
-  if (angle >= -157.5 && angle < -112.5) return "南西";
-  return "西";
-}
-
-function classifyAreaByLatLng(lat, lng) {
-  if (!isValidLatLng(lat, lng)) return "";
-
-  if (lat >= 35.79 && lat <= 35.86 && lng >= 139.90 && lng <= 139.97) {
-    return "松戸方面";
-  }
-
-  if (lat >= 35.79 && lat <= 35.88 && lng >= 139.76 && lng <= 139.85) {
-    if (lat >= 35.84) return "草加方面";
-    if (lat >= 35.81) return "谷塚方面";
-    return "八潮方面";
-  }
-
-  if (lat >= 35.84 && lat <= 35.92 && lng >= 139.84 && lng <= 139.92) {
-    return "三郷方面";
-  }
-
-  if (lat >= 35.86 && lat <= 35.91 && lng >= 139.82 && lng <= 139.87) {
-    return "吉川方面";
-  }
-
-  if (lat >= 35.84 && lat <= 35.89 && lng >= 139.92 && lng <= 139.98) {
-    return "柏方面";
-  }
-
-  if (lat >= 35.85 && lat <= 35.91 && lng > 139.98 && lng <= 140.05) {
-    return "柏の葉方面";
-  }
-
-  if (lat >= 35.92 && lat <= 35.99 && lng >= 139.84 && lng <= 139.91) {
-    return "野田方面";
-  }
-
-  if (lat >= 35.84 && lat <= 35.90 && lng >= 139.88 && lng <= 139.95) {
-    return "流山方面";
-  }
-
-  if (lat >= 35.85 && lat <= 35.89 && lng > 140.00 && lng <= 140.08) {
-    return "我孫子方面";
-  }
-
-  if (lat >= 35.70 && lat <= 35.78 && lng >= 139.78 && lng <= 139.86) {
-    return "墨田方面";
-  }
-  if (lat >= 35.73 && lat <= 35.80 && lng >= 139.80 && lng <= 139.88) {
-    return "足立方面";
-  }
-  if (lat >= 35.75 && lat <= 35.79 && lng >= 139.84 && lng <= 139.89) {
-    return "葛飾方面";
-  }
-  if (lat >= 35.67 && lat <= 35.72 && lng >= 139.80 && lng <= 139.86) {
-    return "江東方面";
-  }
-
-  if (lat >= 35.90 && lat <= 36.02 && lng >= 140.00 && lng <= 140.08) {
-    return "藤代方面";
-  }
-  if (lat >= 35.88 && lat <= 35.95 && lng >= 140.03 && lng <= 140.10) {
-    return "取手方面";
-  }
-  if (lat >= 35.93 && lat <= 36.02 && lng >= 139.97 && lng <= 140.05) {
-    return "守谷方面";
-  }
-  if (lat >= 36.02 && lat <= 36.10 && lng >= 140.05 && lng <= 140.15) {
-    return "つくば方面";
-  }
-  if (lat >= 35.95 && lat <= 36.02 && lng >= 140.12 && lng <= 140.20) {
-    return "牛久方面";
-  }
-
-  return "";
-}
-
-function guessArea(lat, lng, address = "") {
-  const byAddress = classifyAreaByAddress(address);
-  if (byAddress) return byAddress;
-
-  const byLatLng = classifyAreaByLatLng(lat, lng);
-  if (byLatLng) return byLatLng;
-
-  const pref = detectPrefecture(address);
-  const dir = getDirection8(lat, lng);
-
-  if (pref && dir) return `${pref}${dir}方面`;
-  if (pref) return `${pref}方面`;
-  if (dir) return `${dir}方面`;
-
-  return "周辺";
-}
-
-
-function normalizeCastInputValue(value) {
-  return String(value || "").trim();
-}
-
-function findCastByInputValue(value) {
-  const normalized = normalizeCastInputValue(value);
-  if (!normalized) return null;
-
-  return (
-    allCastsCache.find(c => String(c.name || "").trim() === normalized) ||
-    allCastsCache.find(
-      c => `${String(c.name || "").trim()} | ${normalizeAreaLabel(c.area || "-")}` === normalized
-    ) ||
-    null
-  );
-}
-
-function normalizeAreaLabel(area) {
-  const value = String(area || "").trim();
-  if (!value) return "無し";
-  return value;
-}
-
-function getAreaDisplayGroup(area) {
-  const a = normalizeAreaLabel(area || "");
-
-  if (!a || a === "無し") return "東京方面";
-
-  if (a.includes("松戸")) return "松戸方面";
-
-  if (a.includes("柏") || a.includes("白井") || a.includes("印西")) return "柏方面";
-
-  if (
-    a.includes("我孫子") || a.includes("取手") || a.includes("守谷") ||
-    a.includes("牛久") || a.includes("藤代") || a.includes("つくば") ||
-    a.includes("龍ケ崎") || a.includes("龍ヶ崎")
-  ) return "我孫子・取手方面";
-
-  if (
-    a.includes("市川") || a.includes("船橋") || a.includes("鎌ヶ谷") ||
-    a.includes("鎌ケ谷") || a.includes("浦安") || a.includes("習志野") ||
-    a.includes("八千代")
-  ) return "市川・船橋方面";
-
-  if (
-    a.includes("足立") || a.includes("葛飾") || a.includes("江戸川") ||
-    a.includes("墨田") || a.includes("江東") || a.includes("荒川") ||
-    a.includes("台東") || a.includes("中央") || a.includes("千代田") ||
-    a.includes("港") || a.includes("新宿") || a.includes("文京") ||
-    a.includes("品川") || a.includes("目黒") || a.includes("大田") ||
-    a.includes("世田谷") || a.includes("渋谷") || a.includes("中野") ||
-    a.includes("杉並") || a.includes("豊島") || a.includes("北") ||
-    a.includes("板橋") || a.includes("練馬") || a.includes("東京")
-  ) return "東京方面";
-
-  if (
-    a.includes("三郷") || a.includes("八潮") || a.includes("草加") ||
-    a.includes("越谷") || a.includes("吉川")
-  ) return "埼玉方面";
-
-  if (a.includes("流山") || a.includes("野田")) return "流山・野田方面";
-
-  return "東京方面";
-}
-
-
-function getGroupedAreaHeaderHtml(area) {
-  const detailArea = normalizeAreaLabel(area || "無し");
-  const displayGroup = getAreaDisplayGroup(detailArea);
-
-  if (!detailArea || detailArea === "無し") {
-    return `<span class="group-main">${escapeHtml(displayGroup)}</span>`;
-  }
-
-  if (displayGroup === detailArea) {
-    return `<span class="group-main">${escapeHtml(displayGroup)}</span>`;
-  }
-
-  return `
-    <div class="group-area-stack">
-      <span class="group-main">${escapeHtml(displayGroup)}</span>
-      <span class="group-sub">${escapeHtml(detailArea)}</span>
-    </div>
-  `;
-}
-
-function getGroupedAreasByDisplay(items, areaGetter) {
-  const ordered = [];
-  const seen = new Set();
-
-  for (const item of items) {
-    const detailArea = normalizeAreaLabel(areaGetter(item));
-    const key = `${getAreaDisplayGroup(detailArea)}__${detailArea}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    ordered.push({
-      displayGroup: getAreaDisplayGroup(detailArea),
-      detailArea
-    });
-  }
-
-  ordered.sort((a, b) => {
-    const groupCompare = a.displayGroup.localeCompare(b.displayGroup, "ja");
-    if (groupCompare !== 0) return groupCompare;
-    return a.detailArea.localeCompare(b.detailArea, "ja");
-  });
-
-  return ordered;
-}
-
-const AREA_CANONICAL_PATTERNS = [
-  ["松戸近郊", ["松戸近郊", "松戸方面", "松戸"]],
-  ["葛飾方面", ["葛飾方面", "葛飾区", "葛飾"]],
-  ["足立方面", ["足立方面", "足立区", "足立"]],
-  ["江戸川方面", ["江戸川方面", "江戸川区", "江戸川"]],
-  ["市川方面", ["市川方面", "市川", "本八幡", "妙典", "行徳", "下総中山"]],
-  ["船橋方面", ["船橋方面", "船橋", "習志野", "西船橋"]],
-  ["鎌ヶ谷方面", ["鎌ヶ谷方面", "鎌ケ谷方面", "鎌ヶ谷", "鎌ケ谷", "新鎌ヶ谷", "新鎌ケ谷"]],
-  ["我孫子方面", ["我孫子方面", "我孫子", "天王台", "湖北"]],
-  ["取手方面", ["取手方面", "取手", "藤代方面", "藤代", "桐木"]],
-  ["藤代方面", ["藤代方面", "藤代", "取手", "桐木"]],
-  ["守谷方面", ["守谷方面", "守谷"]],
-  ["柏方面", ["柏方面", "柏", "南柏", "北柏"]],
-  ["柏の葉方面", ["柏の葉方面", "柏の葉", "柏たなか"]],
-  ["流山方面", ["流山方面", "流山", "南流山", "おおたかの森"]],
-  ["野田方面", ["野田方面", "野田", "運河", "梅郷", "川間"]],
-  ["三郷方面", ["三郷方面", "三郷"]],
-  ["八潮方面", ["八潮方面", "八潮"]],
-  ["草加方面", ["草加方面", "草加", "谷塚方面", "谷塚"]],
-  ["吉川方面", ["吉川方面", "吉川"]],
-  ["越谷方面", ["越谷方面", "越谷", "新越谷"]],
-  ["千葉方面", ["千葉方面", "千葉", "幕張", "蘇我", "稲毛", "都賀"]]
-];
-
-const AREA_AFFINITY_MAP = {
-  "松戸近郊": { "葛飾方面": 80, "市川方面": 72, "柏方面": 60, "三郷方面": 62, "足立方面": 58 },
-  "葛飾方面": { "松戸近郊": 80, "足立方面": 62, "江戸川方面": 58, "市川方面": 55 },
-  "足立方面": { "葛飾方面": 62, "松戸近郊": 58, "八潮方面": 55, "草加方面": 52 },
-  "江戸川方面": { "葛飾方面": 58, "市川方面": 54, "船橋方面": 46 },
-  "市川方面": { "葛飾方面": 55, "松戸近郊": 72, "船橋方面": 68, "鎌ヶ谷方面": 66, "江戸川方面": 54 },
-  "船橋方面": { "市川方面": 68, "鎌ヶ谷方面": 76, "千葉方面": 58, "江戸川方面": 46 },
-  "鎌ヶ谷方面": { "船橋方面": 76, "市川方面": 66, "柏方面": 56, "我孫子方面": 42 },
-  "我孫子方面": { "取手方面": 88, "藤代方面": 84, "柏方面": 70, "守谷方面": 60, "鎌ヶ谷方面": 42 },
-  "取手方面": { "我孫子方面": 88, "藤代方面": 92, "守谷方面": 72, "柏方面": 44 },
-  "藤代方面": { "我孫子方面": 84, "取手方面": 92, "守谷方面": 70 },
-  "守谷方面": { "取手方面": 72, "藤代方面": 70, "我孫子方面": 60, "つくば方面": 62 },
-  "柏方面": { "我孫子方面": 70, "流山方面": 66, "柏の葉方面": 64, "野田方面": 56, "鎌ヶ谷方面": 56, "松戸近郊": 60, "取手方面": 44 },
-  "柏の葉方面": { "柏方面": 64, "流山方面": 62, "野田方面": 58 },
-  "流山方面": { "柏方面": 66, "柏の葉方面": 62, "野田方面": 58, "三郷方面": 56, "吉川方面": 54 },
-  "野田方面": { "柏方面": 56, "柏の葉方面": 58, "流山方面": 58, "吉川方面": 52 },
-  "三郷方面": { "松戸近郊": 62, "流山方面": 56, "八潮方面": 62, "吉川方面": 54 },
-  "八潮方面": { "三郷方面": 62, "草加方面": 56, "足立方面": 55 },
-  "草加方面": { "八潮方面": 56, "足立方面": 52, "越谷方面": 52 },
-  "吉川方面": { "流山方面": 54, "野田方面": 52, "三郷方面": 54, "越谷方面": 52 },
-  "越谷方面": { "草加方面": 52, "吉川方面": 52 },
-  "千葉方面": { "船橋方面": 58 }
-};
-
 const AREA_DIRECTION_MAP = {
   "松戸近郊": "CENTER",
   "葛飾方面": "W",
@@ -1937,53 +255,6 @@ const ROUTE_FLOW_MAP = {
   "千葉方面": ["船橋方面", "市川方面"]
 };
 
-function getRouteFlowCompatibilityBetweenAreas(areaA, areaB) {
-  const a = getCanonicalArea(areaA);
-  const b = getCanonicalArea(areaB);
-  if (!a || !b) return 0;
-  if (a === b) return 100;
-
-  const linkedA = ROUTE_FLOW_MAP[a] || [];
-  const linkedB = ROUTE_FLOW_MAP[b] || [];
-  const affinity = getAreaAffinityScore(a, b);
-  const direction = getDirectionAffinityScore(a, b);
-
-  let score = 0;
-  if (linkedA.includes(b) || linkedB.includes(a)) score = 82;
-  else if (affinity >= 72) score = 62;
-  else if (affinity >= 54 && direction >= 28) score = 44;
-  else if (direction >= 72) score = 36;
-  else if (direction <= -38) score = -60;
-
-  if ((a === "松戸近郊" && ["流山方面", "吉川方面", "三郷方面", "柏方面", "我孫子方面"].includes(b)) ||
-      (b === "松戸近郊" && ["流山方面", "吉川方面", "三郷方面", "柏方面", "我孫子方面"].includes(a))) {
-    score = Math.max(score, 88);
-  }
-
-  return score;
-}
-
-function getRouteFlowVehicleScore(targetArea, existingAreas = [], homeArea = "") {
-  const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
-  let best = 0;
-
-  for (const area of areas) {
-    best = Math.max(best, getRouteFlowCompatibilityBetweenAreas(targetArea, area));
-  }
-
-  if (areas.length) {
-    if (hasHardReverseMix(targetArea, areas)) best -= 220;
-    best += getAreaBundleBonus(targetArea, areas);
-    best -= getAreaSplitPenalty(targetArea, areas);
-  }
-
-  if (!areas.length && homeArea) {
-    best = Math.max(best, getRouteFlowCompatibilityBetweenAreas(targetArea, homeArea) * 0.35);
-  }
-
-  return best;
-}
-
 const ROUTE_CONTINUITY_HINTS = [
   { dir: "N", patterns: ["新松戸", "馬橋", "北松戸", "北小金", "小金", "幸谷", "新八柱", "八柱", "常盤平", "みのり台"] },
   { dir: "NE", patterns: ["南流山", "流山", "柏", "柏の葉", "我孫子", "取手", "藤代", "守谷"] },
@@ -2041,68 +312,6 @@ function isHardReverseMixForRoute(areaA, areaB) {
   return false;
 }
 
-function hasHardReverseMix(targetArea, existingAreas = []) {
-  return (existingAreas || []).some(area => isHardReverseMixForRoute(targetArea, area));
-}
-
-function getHardReverseMixPenalty(targetArea, existingAreas = []) {
-  const reverseCount = (existingAreas || []).filter(area => isHardReverseMixForRoute(targetArea, area)).length;
-  return reverseCount ? 520 + (reverseCount - 1) * 180 : 0;
-}
-
-function getAreaMixGuardScore(targetArea, existingAreas = [], isLastRun = false) {
-  const penalty = getHardReverseMixPenalty(targetArea, existingAreas);
-  if (!penalty) return 0;
-  return isLastRun ? penalty * 1.15 : penalty;
-}
-
-function getAreaBundleBonus(targetArea, existingAreas = []) {
-  const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
-  if (!areas.length) return 0;
-
-  const targetCanonical = getCanonicalArea(targetArea);
-  const targetGroup = getHardRouteMixGroup(targetArea);
-  let sameCanonicalCount = 0;
-  let nearGroupCount = 0;
-  let highAffinityCount = 0;
-
-  for (const area of areas) {
-    const canonical = getCanonicalArea(area);
-    if (canonical && canonical === targetCanonical) sameCanonicalCount += 1;
-    if (targetGroup && getHardRouteMixGroup(area) === targetGroup) nearGroupCount += 1;
-    if (getAreaAffinityScore(targetArea, area) >= 72) highAffinityCount += 1;
-  }
-
-  let bonus = 0;
-  if (sameCanonicalCount >= 2) bonus += 86;
-  else if (sameCanonicalCount >= 1) bonus += 44;
-
-  if (nearGroupCount >= 2) bonus += 56;
-  else if (nearGroupCount >= 1) bonus += 24;
-
-  if (highAffinityCount >= 2) bonus += 40;
-  else if (highAffinityCount >= 1) bonus += 18;
-
-  return bonus;
-}
-
-function getAreaSplitPenalty(targetArea, existingAreas = []) {
-  const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
-  const groups = new Set(areas.map(getHardRouteMixGroup).filter(Boolean));
-  const targetGroup = getHardRouteMixGroup(targetArea);
-  if (!targetGroup || !groups.size) return 0;
-
-  const nearGroupCount = areas.filter(area => getHardRouteMixGroup(area) === targetGroup).length;
-  const highAffinityCount = areas.filter(area => getAreaAffinityScore(targetArea, area) >= 72).length;
-
-  if (groups.size >= 2 && !groups.has(targetGroup)) return 220;
-  if (groups.size >= 2 && groups.has(targetGroup)) {
-    if (nearGroupCount >= 1 || highAffinityCount >= 1) return 18;
-    return 68;
-  }
-  return 0;
-}
-
 function getAreaTravelDirection(area) {
   const raw = normalizeAreaLabel(area);
   if (!raw || raw === "無し") return "";
@@ -2131,6 +340,25 @@ function isGatewayNearArea(area) {
   return ["松戸", "新松戸", "馬橋", "北松戸", "北小金", "小金", "八柱", "常盤平", "みのり台"].some(keyword => raw.includes(keyword));
 }
 
+
+function getOnTheWayCompatibility(areaA, areaB) {
+  const a = normalizeAreaLabel(areaA);
+  const b = normalizeAreaLabel(areaB);
+  if (!a || !b || a === "無し" || b === "無し") return 0;
+
+  const corridor = ["柏", "我孫子", "取手", "藤代", "牛久", "ひたち野うしく"];
+  const idxA = corridor.findIndex(k => a.includes(k));
+  const idxB = corridor.findIndex(k => b.includes(k));
+
+  if (idxA === -1 || idxB === -1) return 0;
+
+  const diff = Math.abs(idxA - idxB);
+  if (diff === 0) return 80;
+  if (diff === 1) return 100;
+  if (diff === 2) return 60;
+  return 0;
+}
+
 function getPairRouteContinuityPenalty(areaA, areaB) {
   const dirA = getAreaTravelDirection(areaA);
   const dirB = getAreaTravelDirection(areaB);
@@ -2145,9 +373,9 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
 
   if (distance === 0) penalty += 0;
   else if (distance === 1) penalty += sameBroadGroup ? 6 : 18;
-  else if (distance === 2) penalty += sameBroadGroup ? 18 : 72;
-  else if (distance === 3) penalty += sameBroadGroup ? 62 : 220;
-  else if (distance >= 4 && distance < 99) penalty += sameBroadGroup ? 120 : 420;
+  else if (distance === 2) penalty += sameBroadGroup ? 28 : 120;
+  else if (distance === 3) penalty += sameBroadGroup ? 88 : 300;
+  else if (distance >= 4 && distance < 99) penalty += sameBroadGroup ? 160 : 560;
 
   if (routeFlow <= 0) penalty += sameBroadGroup ? 8 : 42;
   else if (routeFlow < 40) penalty += sameBroadGroup ? 4 : 22;
@@ -2159,7 +387,7 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
   const gatewayA = isGatewayNearArea(areaA);
   const gatewayB = isGatewayNearArea(areaB);
   if (gatewayA || gatewayB) {
-    if (distance >= 2) penalty += 96;
+    if (distance >= 2) penalty += 140;
   }
 
   const pair = [getCanonicalArea(areaA), getCanonicalArea(areaB)].filter(Boolean).sort().join("__");
@@ -2177,39 +405,40 @@ function getPairRouteContinuityPenalty(areaA, areaB) {
   }
 
   if (isHardReverseMixForRoute(areaA, areaB)) {
-    penalty += 620;
+    penalty += 900;
   } else if (sameBroadGroup && affinity >= 72) {
     penalty -= 36;
   }
 
+  const onTheWay = getOnTheWayCompatibility(areaA, areaB);
+  if (onTheWay >= 80) penalty -= 120;
+  else if (onTheWay >= 50) penalty -= 70;
+
   return Math.max(0, penalty);
 }
 
-function getRouteContinuityPenalty(targetArea, existingAreas = [], homeArea = "") {
-  const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
-  if (!areas.length) return 0;
+function isStrictSameDirectionArea(targetArea, existingAreas = []) {
+  const target = normalizeAreaLabel(targetArea);
+  const areas = Array.isArray(existingAreas) ? existingAreas.map(normalizeAreaLabel).filter(Boolean) : [];
+  if (!target || target === "無し" || !areas.length) return true;
+  const targetGroup = getAreaDisplayGroup(target);
+  return areas.every(area => {
+    const group = getAreaDisplayGroup(area);
+    if (group && targetGroup && group !== targetGroup) return false;
+    return !hasHardReverseMix(target, [area]);
+  });
+}
 
-  let penalty = 0;
-  let bestPairPenalty = Infinity;
-
-  for (const area of areas) {
-    const pairPenalty = getPairRouteContinuityPenalty(targetArea, area);
-    bestPairPenalty = Math.min(bestPairPenalty, pairPenalty);
-    penalty += pairPenalty;
-  }
-
-  penalty = bestPairPenalty === Infinity ? penalty : penalty * 0.45 + bestPairPenalty * 0.9;
-
-  if (homeArea) {
-    const homeDir = getAreaTravelDirection(homeArea);
-    const targetDir = getAreaTravelDirection(targetArea);
-    const homeDistance = getDirectionDistanceByKey(targetDir, homeDir);
-    if (homeDistance >= 3) penalty += 42;
-  }
-
-  penalty += getAreaMixGuardScore(targetArea, areas);
-
-  return Math.max(0, penalty);
+function isLastRunHardAreaConstraintSatisfied(targetArea, existingAreas = [], homeArea = "") {
+  const target = normalizeAreaLabel(targetArea);
+  const home = normalizeAreaLabel(homeArea || "");
+  if (!target || target === "無し") return false;
+  if (home && isHardReverseForHome(target, home)) return false;
+  if (!isStrictSameDirectionArea(target, existingAreas)) return false;
+  const strict = getStrictHomeCompatibilityScore(target, home);
+  const direction = getDirectionAffinityScore(target, home);
+  // Last run should prioritize going toward driver's home direction.
+  return strict >= 52 || direction >= 24;
 }
 
 function getRouteFlowSortWeight(area) {
@@ -2237,76 +466,6 @@ function getAssignmentAreasByVehicleHour(assignments, itemsById, vehicleId, hour
     .filter(a => Number(a.vehicle_id) === Number(vehicleId) && Number(a.actual_hour) === Number(hour) && Number(a.item_id) !== Number(excludeItemId || -1))
     .map(a => normalizeAreaLabel(itemsById.get(Number(a.item_id))?.destination_area || ""))
     .filter(Boolean);
-}
-
-function optimizeAssignmentsByRouteFlow(assignments, items, vehicles) {
-  const itemById = new Map(items.map(item => [Number(item.id), item]));
-  const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
-  const working = assignments.map(a => ({ ...a }));
-
-  for (const assignment of working) {
-    const item = itemById.get(Number(assignment.item_id));
-    if (!item) continue;
-
-    const area = normalizeAreaLabel(item.destination_area || item.cluster_area || "無し");
-    const currentVehicle = vehicleMap.get(Number(assignment.vehicle_id));
-    const currentHome = normalizeAreaLabel(currentVehicle?.home_area || "");
-    const currentAreas = getAssignmentAreasByVehicleHour(working, itemById, assignment.vehicle_id, assignment.actual_hour, assignment.item_id);
-    const currentRouteScore = getRouteFlowVehicleScore(area, currentAreas, currentHome);
-    const currentHomeScore = getLastTripHomePriorityWeight(area, currentHome, true, true);
-
-    let best = null;
-
-    for (const vehicle of vehicles) {
-      if (Number(vehicle.id) === Number(assignment.vehicle_id)) continue;
-
-      const hourAssignments = working.filter(a => Number(a.vehicle_id) === Number(vehicle.id) && Number(a.actual_hour) === Number(assignment.actual_hour));
-      const seatCapacity = Number(vehicle.seat_capacity || 4);
-      if (hourAssignments.length >= seatCapacity) continue;
-
-      const homeArea = normalizeAreaLabel(vehicle.home_area || "");
-      if (isHardReverseForHome(area, homeArea)) continue;
-
-      const existingAreas = hourAssignments.map(a => normalizeAreaLabel(itemById.get(Number(a.item_id))?.destination_area || ""));
-      if (existingAreas.length && hasHardReverseMix(area, existingAreas)) continue;
-      const routeScore = getRouteFlowVehicleScore(area, existingAreas, homeArea);
-      const continuityPenalty = getRouteContinuityPenalty(area, existingAreas, homeArea);
-      const currentContinuityPenalty = getRouteContinuityPenalty(area, currentAreas, currentHome);
-      const homeScore = getLastTripHomePriorityWeight(area, homeArea, true, true);
-      const direction = Math.max(0, getDirectionAffinityScore(area, homeArea));
-      const strict = getStrictHomeCompatibilityScore(area, homeArea);
-
-      const mixGuardPenalty = getAreaMixGuardScore(area, existingAreas, true);
-      const currentMixGuardPenalty = getAreaMixGuardScore(area, currentAreas, true);
-      const totalScore = routeScore * 2.4 + homeScore * 0.9 + direction * 0.5 + strict * 0.6 - continuityPenalty * 2.15 - mixGuardPenalty - hourAssignments.length * 12;
-      const currentTotal = currentRouteScore * 2.4 + currentHomeScore * 0.9 + Math.max(0, getDirectionAffinityScore(area, currentHome)) * 0.5 + getStrictHomeCompatibilityScore(area, currentHome) * 0.6 - currentContinuityPenalty * 2.15 - currentMixGuardPenalty - currentAreas.length * 12;
-
-      if (totalScore >= currentTotal + 90) {
-        if (!best || totalScore > best.totalScore) best = { vehicle, totalScore };
-      }
-    }
-
-    if (best) {
-      assignment.vehicle_id = best.vehicle.id;
-      assignment.driver_name = best.vehicle.driver_name || "";
-    }
-  }
-
-  return working;
-}
-
-function getCanonicalArea(area) {
-  const normalized = normalizeAreaLabel(area);
-  if (!normalized || normalized === "無し") return "";
-
-  for (const [canonical, patterns] of AREA_CANONICAL_PATTERNS) {
-    if (patterns.some(pattern => normalized.includes(pattern))) {
-      return canonical;
-    }
-  }
-
-  if (normalized.endsWith("方面")) return normalized;
-  return normalized;
 }
 
 function getAreaAffinityScore(areaA, areaB) {
@@ -2387,272 +546,87 @@ function getLastTripHomePriorityWeight(clusterArea, homeArea, isLastRun, isDefau
   return weight * 0.45;
 }
 
-function openGoogleMap(address, lat = null, lng = null) {
-  const origin = encodeURIComponent(ORIGIN_LABEL);
-  const latNum = toNullableNumber(lat);
-  const lngNum = toNullableNumber(lng);
-  let dest = "";
-  if (isValidLatLng(latNum, lngNum)) dest = encodeURIComponent(`${latNum},${lngNum}`);
-  else dest = encodeURIComponent(String(address || "").trim());
-  if (!dest) return;
-  window.open(
-    `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=driving`,
-    "_blank"
-  );
-}
-
-
-
-
-function buildMapUrlFromAddressOrLatLng(address, lat, lng) {
-  const numLat = toNullableNumber(lat);
-  const numLng = toNullableNumber(lng);
-
-  if (isValidLatLng(numLat, numLng)) {
-    return `https://www.google.com/maps/search/?api=1&query=${numLat},${numLng}`;
-  }
-
-  const safeAddress = String(address || "").trim();
-  if (safeAddress) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(safeAddress)}`;
-  }
-
-  return "";
-}
-
-function buildCastMapUrl(cast) {
-  return buildMapUrlFromAddressOrLatLng(
-    cast?.address,
-    cast?.latitude,
-    cast?.longitude
-  );
-}
-
-function buildDispatchItemMapUrl(item) {
-  return buildMapUrlFromAddressOrLatLng(
-    item?.destination_address || item?.casts?.address || "",
-    item?.casts?.latitude,
-    item?.casts?.longitude
-  );
-}
-
-function buildMapLinkHtml({ name, address, lat, lng, className = "map-name-link" }) {
-  const safeName = escapeHtml(name || "-");
-  const mapUrl = buildMapUrlFromAddressOrLatLng(address, lat, lng);
-
-  if (!mapUrl) return safeName;
-
-  return `<a href="${mapUrl}" target="_blank" rel="noopener noreferrer" class="${className}">${safeName} 📍</a>`;
-}
-
-function downloadTextFile(filename, text, mimeType = "text/plain;charset=utf-8") {
-  const blob = new Blob([text], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function csvEscape(value) {
-  const s = String(value ?? "");
-  if (s.includes('"') || s.includes(",") || s.includes("\n")) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}
-
-function parseCsvLine(line) {
-  const result = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    const next = line[i + 1];
-
-    if (char === '"' && inQuotes && next === '"') {
-      current += '"';
-      i++;
-      continue;
-    }
-    if (char === '"') {
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      result.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-
-  result.push(current.trim());
-  return result;
-}
-
-function normalizeCsvHeader(header) {
-  const raw = String(header || "").trim();
-  const h = raw.toLowerCase();
-
-  const map = {
-    name: "name",
-    名前: "name",
-    cast_name: "name",
-
-    phone: "phone",
-    tel: "phone",
-    telephone: "phone",
-    電話: "phone",
-    電話番号: "phone",
-
-    address: "address",
-    住所: "address",
-
-    area: "area",
-    方面: "area",
-    地域: "area",
-
-    latitude: "latitude",
-    lat: "latitude",
-    緯度: "latitude",
-
-    longitude: "longitude",
-    lng: "longitude",
-    lon: "longitude",
-    経度: "longitude",
-
-    memo: "memo",
-    メモ: "memo",
-    note: "memo",
-
-    distance_km: "distance_km",
-    距離: "distance_km",
-    想定距離: "distance_km",
-
-    travel_minutes: "travel_minutes",
-    travel_time: "travel_minutes",
-    片道予想時間: "travel_minutes",
-    "片道予想時間(分)": "travel_minutes",
-    予想時間: "travel_minutes",
-    時間: "travel_minutes",
-
-    plate_number: "plate_number",
-    vehicle_id: "plate_number",
-    車両id: "plate_number",
-    車両ID: "plate_number",
-    車両: "plate_number",
-
-    vehicle_area: "vehicle_area",
-    担当方面: "vehicle_area",
-
-    home_area: "home_area",
-    帰宅方面: "home_area",
-
-    seat_capacity: "seat_capacity",
-    定員: "seat_capacity",
-    乗車可能人員: "seat_capacity",
-
-    driver_name: "driver_name",
-    driver: "driver_name",
-    ドライバー: "driver_name",
-    ドライバー名: "driver_name",
-
-    line_id: "line_id",
-    line: "line_id",
-    lineid: "line_id",
-    "line id": "line_id",
-    LINEID: "line_id",
-    "LINE ID": "line_id",
-    line_id_: "line_id",
-
-    status: "status",
-    状態: "status"
-  };
-
-  return map[raw] || map[h] || h;
-}
-
-function parseCsv(text) {
-  const lines = text
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .filter(line => line.trim() !== "");
-
-  if (!lines.length) return [];
-
-  const headers = parseCsvLine(lines[0]).map(h => normalizeCsvHeader(h.trim()));
-  const rows = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseCsvLine(lines[i]);
-    const row = {};
-    headers.forEach((header, idx) => {
-      row[header] = values[idx] ?? "";
-    });
-    rows.push(row);
-  }
-
-  return rows;
-}
-
-async function readCsvFileAsText(file) {
-  const buffer = await file.arrayBuffer();
-  let text = new TextDecoder("utf-8").decode(buffer);
-
-  const mojibakeLike =
-    text.includes("�") ||
-    (!text.includes("name") &&
-      !text.includes("address") &&
-      !text.includes("名前") &&
-      !text.includes("住所"));
-
-  if (mojibakeLike) {
-    try {
-      text = new TextDecoder("shift_jis").decode(buffer);
-    } catch (e) {
-      console.warn("shift_jis decode failed:", e);
-    }
-  }
-
-  return text;
-}
-
-function normalizeCsvRows(rows) {
-  return rows.map(row => {
-    const normalized = {};
-    Object.keys(row).forEach(key => {
-      const nk = normalizeCsvHeader(key);
-      normalized[nk] = row[key];
-    });
-    return normalized;
-  });
-}
-
 function getVehicleMonthlyStatsMap(reportRows, targetMonth) {
   const map = new Map();
 
-  reportRows.forEach(row => {
-    if (getMonthKey(row.report_date) !== targetMonth) return;
-    const vehicleId = Number(row.vehicle_id);
+  function resolveVehicleIdFromReport(row) {
+    const directId = Number(row?.vehicle_id || row?.vehicles?.id || 0);
+    if (directId > 0) return directId;
+
+    const reportDriver = String(row?.driver_name || row?.vehicles?.driver_name || "").trim();
+    const reportPlate = String(row?.plate_number || row?.vehicles?.plate_number || "").trim();
+
+    const matchedVehicle = (Array.isArray(allVehiclesCache) ? allVehiclesCache : []).find(vehicle => {
+      const vehicleDriver = String(vehicle?.driver_name || "").trim();
+      const vehiclePlate = String(vehicle?.plate_number || "").trim();
+      return (reportDriver && vehicleDriver && reportDriver === vehicleDriver) ||
+             (reportPlate && vehiclePlate && reportPlate === vehiclePlate);
+    });
+
+    return Number(matchedVehicle?.id || 0);
+  }
+
+  (Array.isArray(reportRows) ? reportRows : []).forEach(row => {
+    if (getMonthKey(row?.report_date) !== targetMonth) return;
+
+    const vehicleId = resolveVehicleIdFromReport(row);
+    if (!vehicleId) return;
+
     const prev = map.get(vehicleId) || {
       totalDistance: 0,
       workedDays: 0,
-      avgDistance: 0
+      avgDistance: 0,
+      byDate: new Map()
     };
-    prev.totalDistance += Number(row.distance_km || 0);
-    prev.workedDays += 1;
+
+    const dateKey = String(row?.report_date || "").trim();
+    const distance = Number(row?.distance_km || 0);
+    prev.totalDistance += distance;
+    if (dateKey) {
+      prev.byDate.set(dateKey, Number((prev.byDate.get(dateKey) || 0) + distance));
+    }
+    prev.workedDays = [...prev.byDate.values()].filter(value => Number(value || 0) > 0).length;
     prev.avgDistance = prev.workedDays > 0 ? prev.totalDistance / prev.workedDays : 0;
     map.set(vehicleId, prev);
   });
 
+  map.forEach(stats => {
+    stats.totalDistance = Number(Number(stats.totalDistance || 0).toFixed(1));
+    stats.avgDistance = Number(Number(stats.avgDistance || 0).toFixed(1));
+    delete stats.byDate;
+  });
+
   return map;
+}
+
+
+function buildMonthlyDistanceMapForCurrentMonth() {
+  try {
+    const today = typeof getSelectedDispatchDate === "function"
+      ? getSelectedDispatchDate()
+      : (new Date()).toISOString().slice(0, 10);
+    const monthKey = typeof getMonthKey === "function"
+      ? getMonthKey(today)
+      : String(today || "").slice(0, 7);
+    return getVehicleMonthlyStatsMap(
+      Array.isArray(currentDailyReportsCache) ? currentDailyReportsCache : [],
+      monthKey
+    );
+  } catch (_) {
+    return new Map();
+  }
+}
+
+function optimizeAssignmentsByRouteFlow(assignments, items, vehicles) {
+  return Array.isArray(assignments) ? assignments : [];
+}
+
+function applyManualLastVehicleToAssignments(assignments, vehicles) {
+  return Array.isArray(assignments) ? assignments : [];
+}
+
+function joinManualLastVehicleToAssignments(assignments, vehicles) {
+  return applyManualLastVehicleToAssignments(assignments, vehicles);
 }
 
 function getDoneCastIdsInActuals() {
@@ -2706,100 +680,6 @@ function isLastClusterOfTheDay(cluster, dateStr) {
   return remainingIds.size === 0;
 }
 
-function getVehicleAreaMatchScore(vehicle, area) {
-  const normalizedArea = normalizeAreaLabel(area);
-  const vehicleArea = normalizeAreaLabel(vehicle?.vehicle_area || "");
-  const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-  let score = 0;
-
-  const vehicleAffinity = getAreaAffinityScore(vehicleArea, normalizedArea);
-  const homeAffinity = getAreaAffinityScore(homeArea, normalizedArea);
-  const vehicleDirection = Math.max(0, getDirectionAffinityScore(vehicleArea, normalizedArea));
-  const homeDirection = Math.max(0, getDirectionAffinityScore(homeArea, normalizedArea));
-  const strictHome = getStrictHomeCompatibilityScore(normalizedArea, homeArea);
-
-  score += vehicleAffinity * 0.40;
-  score += homeAffinity * 0.24;
-  score += vehicleDirection * 0.20;
-  score += homeDirection * 0.28;
-  score += strictHome * 0.34;
-
-  return score;
-}
-
-function buildDispatchClusters(items) {
-  const activeItems = [...items]
-    .filter(item => !["done", "cancel"].includes(normalizeStatus(item.status)))
-    .map(item => ({
-      ...item,
-      cluster_hour: Number(item.actual_hour ?? 0),
-      cluster_area: normalizeAreaLabel(item.destination_area || "無し"),
-      cluster_distance: Number(item.distance_km || 0)
-    }));
-
-  const clusterMap = new Map();
-
-  activeItems.forEach(item => {
-    const key = `${item.cluster_hour}__${item.cluster_area}`;
-    if (!clusterMap.has(key)) {
-      clusterMap.set(key, {
-        key,
-        hour: item.cluster_hour,
-        area: item.cluster_area,
-        items: [],
-        totalDistance: 0,
-        count: 0
-      });
-    }
-    const cluster = clusterMap.get(key);
-    cluster.items.push(item);
-    cluster.totalDistance += item.cluster_distance;
-    cluster.count += 1;
-  });
-
-  return sortClustersForRouteFlow([...clusterMap.values()]);
-}
-
-async function ensureAuth() {
-  const { data, error } = await supabaseClient.auth.getUser();
-
-  if (error) {
-    alert("ユーザー情報の取得に失敗しました");
-    window.location.href = "index.html";
-    return false;
-  }
-
-  currentUser = data.user;
-
-  if (!currentUser) {
-    window.location.href = "index.html";
-    return false;
-  }
-
-  const { error: profileError } = await supabaseClient
-    .from("profiles")
-    .upsert({
-      id: currentUser.id,
-      email: currentUser.email,
-      display_name: currentUser.email,
-      role: "dispatcher"
-    });
-
-  if (profileError) {
-    console.error(profileError);
-    alert("profiles作成エラー: " + profileError.message);
-    return false;
-  }
-
-  if (els.userEmail) els.userEmail.value = currentUser.email || "";
-  return true;
-}
-
-async function logout() {
-  await supabaseClient.auth.signOut();
-  window.location.href = "index.html";
-}
-
 function openManual() {
   window.open(
     "https://drive.google.com/file/d/1LRTe2qcaef3dtItKcTAijadgHKpdmPAM/view?usp=drive_link",
@@ -2815,6 +695,14 @@ function activateTab(tabId) {
   document.querySelectorAll(".page-panel").forEach(panel => {
     panel.classList.toggle("active", panel.id === tabId);
   });
+
+  if (tabId === "vehiclesTab") {
+    const targetDate = els.dispatchDate?.value || todayStr();
+    forceResetMileageReportInputs(targetDate);
+    window.requestAnimationFrame(() => forceResetMileageReportInputs(els.dispatchDate?.value || todayStr()));
+    window.setTimeout(() => forceResetMileageReportInputs(els.dispatchDate?.value || todayStr()), 0);
+    window.setTimeout(() => forceResetMileageReportInputs(els.dispatchDate?.value || todayStr()), 120);
+  }
 }
 
 function setupTabs() {
@@ -2824,6 +712,28 @@ function setupTabs() {
 
   document.querySelectorAll(".go-tab-btn").forEach(btn => {
     btn.addEventListener("click", () => activateTab(btn.dataset.goTab));
+  });
+}
+
+function getSortedVehiclesForDisplay() {
+  const list = Array.isArray(allVehiclesCache) ? [...allVehiclesCache] : [];
+  return list.sort((a, b) => {
+    const plateA = String(a?.plate_number || "").trim();
+    const plateB = String(b?.plate_number || "").trim();
+
+    const matchA = plateA.match(/^([A-Za-z])(\d+)?$/);
+    const matchB = plateB.match(/^([A-Za-z])(\d+)?$/);
+
+    if (matchA && matchB) {
+      const alpha = matchA[1].localeCompare(matchB[1], "en", { sensitivity: "base" });
+      if (alpha !== 0) return alpha;
+      return Number(matchA[2] || 0) - Number(matchB[2] || 0);
+    }
+
+    const plain = plateA.localeCompare(plateB, "ja", { numeric: true, sensitivity: "base" });
+    if (plain !== 0) return plain;
+
+    return Number(a?.id || 0) - Number(b?.id || 0);
   });
 }
 
@@ -2839,11 +749,37 @@ function renderHomeSummary() {
   if (els.homeCancelCount) els.homeCancelCount.textContent = String(actualCancel);
 }
 
-function renderHomeMonthlyVehicleList() {
+function getMileageSelectedRange() {
+  const baseDate = els.dispatchDate?.value || todayStr();
+  return {
+    startDate: els.mileageReportStartDate?.value || getMonthStartStr(baseDate),
+    endDate: els.mileageReportEndDate?.value || baseDate
+  };
+}
+
+function getDashboardMonthlyRange() {
+  const baseDate = els.dispatchDate?.value || todayStr();
+  return {
+    startDate: getMonthStartStr(baseDate),
+    endDate: baseDate,
+    monthKey: getMonthKey(baseDate)
+  };
+}
+
+function getVehicleStatsMapForDashboardMonth(reportRows = currentDailyReportsCache) {
+  const rows = Array.isArray(reportRows) ? reportRows : [];
+  const { startDate, endDate, monthKey } = getDashboardMonthlyRange();
+  const filtered = rows.filter(row => {
+    const d = String(row?.report_date || "");
+    return d && d >= startDate && d <= endDate;
+  });
+  return getVehicleMonthlyStatsMap(filtered, monthKey);
+}
+
+function renderHomeMonthlyVehicleList(reportRows = currentDailyReportsCache) {
   if (!els.homeMonthlyVehicleList) return;
 
-  const monthKey = getMonthKey(els.dispatchDate?.value || todayStr());
-  const statsMap = getVehicleMonthlyStatsMap(currentDailyReportsCache, monthKey);
+  const statsMap = getVehicleStatsMapForDashboardMonth(reportRows);
 
   els.homeMonthlyVehicleList.innerHTML = "";
 
@@ -2852,7 +788,7 @@ function renderHomeMonthlyVehicleList() {
     return;
   }
 
-  allVehiclesCache.forEach(vehicle => {
+  getSortedVehiclesForDisplay().forEach(vehicle => {
     const stats = statsMap.get(Number(vehicle.id)) || {
       totalDistance: 0,
       workedDays: 0,
@@ -2871,6 +807,24 @@ function renderHomeMonthlyVehicleList() {
     `;
     els.homeMonthlyVehicleList.appendChild(row);
   });
+}
+
+async function refreshHomeMonthlyVehicleList() {
+  if (!els.homeMonthlyVehicleList) return;
+  const { startDate, endDate } = getDashboardMonthlyRange();
+
+  if (typeof fetchDriverMileageRows !== 'function') {
+    renderHomeMonthlyVehicleList(currentDailyReportsCache);
+    return;
+  }
+
+  try {
+    const freshRows = await fetchDriverMileageRows(startDate, endDate);
+    renderHomeMonthlyVehicleList(Array.isArray(freshRows) ? freshRows : currentDailyReportsCache);
+  } catch (error) {
+    console.error('refreshHomeMonthlyVehicleList error:', error);
+    renderHomeMonthlyVehicleList(currentDailyReportsCache);
+  }
 }
 function resetCastForm() {
   editingCastId = null;
@@ -2926,110 +880,6 @@ function isDuplicateCast(name, address) {
       String(c.address || "").trim() === normalizedAddress &&
       Number(c.id) !== Number(editingCastId)
   );
-}
-
-async function saveCast() {
-  const name = els.castName?.value.trim();
-  const address = els.castAddress?.value.trim();
-
-  if (!name) {
-    alert("氏名を入力してください");
-    return;
-  }
-
-  const duplicate = isDuplicateCast(name, address);
-  if (duplicate) {
-    alert("このキャストは既に登録されています");
-    return;
-  }
-
-  let lat = toNullableNumber(els.castLat?.value);
-  let lng = toNullableNumber(els.castLng?.value);
-
-  const addressKey = normalizeGeocodeAddressKey(address);
-  if (address && (!isValidLatLng(lat, lng) || addressKey !== lastCastGeocodeKey)) {
-    const geocoded = await fillCastLatLngFromAddress({ silent: true, force: addressKey !== lastCastGeocodeKey });
-    lat = geocoded?.lat ?? toNullableNumber(els.castLat?.value);
-    lng = geocoded?.lng ?? toNullableNumber(els.castLng?.value);
-  }
-
-  const manualArea = els.castArea?.value.trim() || "";
-  const autoArea = guessArea(lat, lng, address);
-  const autoDistance = await resolveDistanceKmFromOrigin(address, lat, lng);
-
-  const payload = {
-    name,
-    phone: els.castPhone?.value.trim() || "",
-    address,
-    area: normalizeAreaLabel(manualArea || autoArea || ""),
-    distance_km: toNullableNumber(els.castDistanceKm?.value) ?? autoDistance,
-    travel_minutes: getStoredTravelMinutes(els.castTravelMinutes?.value) || null,
-    latitude: lat,
-    longitude: lng,
-    memo: els.castMemo?.value.trim() || "",
-    is_active: true
-  };
-
-  let error;
-  if (editingCastId) {
-    ({ error } = await supabaseClient.from("casts").update(payload).eq("id", editingCastId));
-  } else {
-    payload.created_by = currentUser.id;
-    ({ error } = await supabaseClient.from("casts").insert(payload));
-  }
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(
-    null,
-    null,
-    editingCastId ? "update_cast" : "create_cast",
-    editingCastId ? "キャストを更新" : "キャストを作成"
-  );
-
-  resetCastForm();
-  await loadCasts();
-}
-
-async function deleteCast(castId) {
-  if (!window.confirm("このキャストを削除しますか？")) return;
-
-  const { error } = await supabaseClient
-    .from("casts")
-    .update({ is_active: false })
-    .eq("id", castId);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(null, null, "delete_cast", `キャストID ${castId} を削除`);
-  await loadCasts();
-}
-
-async function loadCasts() {
-  const { data, error } = await supabaseClient
-    .from("casts")
-    .select("*")
-    .eq("is_active", true);
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  allCastsCache = [...(data || [])].sort((a, b) =>
-    String(a.name || "").localeCompare(String(b.name || ""), "ja")
-  );
-
-  renderCastsTable();
-  renderCastSelects();
-  renderCastSearchResults();
-  renderHomeSummary();
 }
 
 function renderCastsTable() {
@@ -3126,91 +976,6 @@ function exportCastsCsv() {
   downloadTextFile(`casts_${todayStr()}.csv`, csv, "text/csv;charset=utf-8");
 }
 
-async function importCastCsvFile() {
-  const file = els.csvFileInput?.files?.[0];
-  if (!file) {
-    alert("CSVファイルを選択してください");
-    return;
-  }
-
-  try {
-    const text = await readCsvFileAsText(file);
-    let rows = parseCsv(text);
-    rows = normalizeCsvRows(rows);
-
-    if (!rows.length) {
-      alert("CSVデータが空です");
-      return;
-    }
-
-    const uniqueMap = new Map();
-
-    for (const row of rows) {
-      const name = String(row.name || "").trim();
-      const address = String(row.address || "").trim();
-      if (!name || !address) continue;
-
-      const key = `${name}__${address}`;
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, row);
-      }
-    }
-
-    const mergedRows = [...uniqueMap.values()];
-    const payloads = [];
-
-    for (const row of mergedRows) {
-      const name = String(row.name || "").trim();
-      const address = String(row.address || "").trim();
-      if (!name || !address) continue;
-
-      const lat = toNullableNumber(row.latitude);
-      const lng = toNullableNumber(row.longitude);
-      const autoArea = guessArea(lat, lng, address);
-
-      payloads.push({
-        name,
-        phone: String(row.phone || "").trim(),
-        address,
-        area: normalizeAreaLabel(String(row.area || "").trim() || autoArea || ""),
-        distance_km:
-          toNullableNumber(row.distance_km) ??
-          (isValidLatLng(lat, lng) ? estimateRoadKmFromStation(lat, lng) : null),
-        travel_minutes: getStoredTravelMinutes(row.travel_minutes) || null,
-        latitude: lat,
-        longitude: lng,
-        memo: String(row.memo || "").trim(),
-        is_active: true,
-        created_by: currentUser.id
-      });
-    }
-
-    if (!payloads.length) {
-      alert("取り込めるデータがありません");
-      els.csvFileInput.value = "";
-      return;
-    }
-
-    const { error } = await supabaseClient
-      .from("casts")
-      .upsert(payloads, { onConflict: "name,address" });
-
-    if (error) {
-      console.error("CSV import supabase error:", error);
-      alert("CSV取込エラー: " + error.message);
-      return;
-    }
-
-    els.csvFileInput.value = "";
-    await addHistory(null, null, "import_csv", `${payloads.length}件のキャストをCSV取込/更新`);
-    alert(`${payloads.length}件のキャストをCSV取込/更新しました`);
-    await loadCasts();
-  } catch (error) {
-    console.error("importCastCsvFile error:", error);
-    alert("CSV取込中にエラーが発生しました");
-  }
-}
-
 function applyCastLatLng() {
   const parsed = parseLatLngText(els.castLatLngText?.value || "");
   if (!parsed) {
@@ -3222,8 +987,10 @@ function applyCastLatLng() {
   if (els.castLng) els.castLng.value = parsed.lng;
 
   if (els.castArea) {
-    els.castArea.value = normalizeAreaLabel(
-      guessArea(parsed.lat, parsed.lng, els.castAddress?.value || "")
+    els.castArea.value = getCastManagementAreaLabel(
+      parsed.lat,
+      parsed.lng,
+      els.castAddress?.value || ""
     );
   }
 
@@ -3234,11 +1001,15 @@ function applyCastLatLng() {
   setCastGeoStatus("manual", "✔ 座標反映済（手動入力）");
 }
 
+function getCastManagementAreaLabel(lat, lng, address = "") {
+  return normalizeAreaLabel(guessArea(lat, lng, address));
+}
+
 function guessCastArea() {
   const lat = toNullableNumber(els.castLat?.value);
   const lng = toNullableNumber(els.castLng?.value);
   if (els.castArea) {
-    els.castArea.value = normalizeAreaLabel(guessArea(lat, lng, els.castAddress?.value || ""));
+    els.castArea.value = getCastManagementAreaLabel(lat, lng, els.castAddress?.value || "");
   }
 }
 
@@ -3387,95 +1158,10 @@ function isDuplicateVehicle(plateNumber) {
   );
 }
 
-async function saveVehicle() {
-  const plateNumber = els.vehiclePlateNumber?.value.trim();
-  if (!plateNumber) {
-    alert("車両IDを入力してください");
-    return;
-  }
-
-  const duplicate = isDuplicateVehicle(plateNumber);
-  if (duplicate) {
-    alert("この車両IDは既に登録されています");
-    return;
-  }
-
-  const payload = {
-    plate_number: plateNumber,
-    vehicle_area: normalizeAreaLabel(els.vehicleArea?.value.trim() || ""),
-    home_area: normalizeAreaLabel(els.vehicleHomeArea?.value.trim() || ""),
-    seat_capacity: Number(els.vehicleSeatCapacity?.value || 4),
-    driver_name: els.vehicleDriverName?.value.trim() || "",
-    line_id: els.vehicleLineId?.value.trim() || "",
-    status: els.vehicleStatus?.value || "waiting",
-    memo: els.vehicleMemo?.value.trim() || "",
-    is_active: true
-  };
-
-  let error;
-  if (editingVehicleId) {
-    ({ error } = await supabaseClient.from("vehicles").update(payload).eq("id", editingVehicleId));
-  } else {
-    payload.created_by = currentUser.id;
-    ({ error } = await supabaseClient.from("vehicles").insert(payload));
-  }
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(
-    null,
-    null,
-    editingVehicleId ? "update_vehicle" : "create_vehicle",
-    editingVehicleId ? "車両を更新" : "車両を登録"
-  );
-
-  resetVehicleForm();
-  await loadVehicles();
-}
-
-async function deleteVehicle(vehicleId) {
-  if (!window.confirm("この車両を削除しますか？")) return;
-
-  const { error } = await supabaseClient
-    .from("vehicles")
-    .update({ is_active: false })
-    .eq("id", vehicleId);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await addHistory(null, null, "delete_vehicle", `車両ID ${vehicleId} を削除`);
-  await loadVehicles();
-}
-
-async function loadVehicles() {
-  const { data, error } = await supabaseClient
-    .from("vehicles")
-    .select("*")
-    .eq("is_active", true)
-    .order("id", { ascending: true });
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  allVehiclesCache = data || [];
-  renderVehiclesTable();
-  renderDailyVehicleChecklist();
-  renderHomeSummary();
-}
-
 function renderVehiclesTable() {
   if (!els.vehiclesTableBody) return;
 
-  const monthKey = getMonthKey(els.dispatchDate?.value || todayStr());
-  const statsMap = getVehicleMonthlyStatsMap(currentDailyReportsCache, monthKey);
+  const statsMap = getVehicleStatsMapForDashboardMonth(currentDailyReportsCache);
 
   els.vehiclesTableBody.innerHTML = "";
 
@@ -3484,7 +1170,7 @@ function renderVehiclesTable() {
     return;
   }
 
-  allVehiclesCache.forEach(vehicle => {
+  getSortedVehiclesForDisplay().forEach(vehicle => {
     const stats = statsMap.get(Number(vehicle.id)) || {
       totalDistance: 0,
       workedDays: 0,
@@ -3520,31 +1206,6 @@ function renderVehiclesTable() {
   els.vehiclesTableBody.querySelectorAll(".vehicle-delete-btn").forEach(btn => {
     btn.addEventListener("click", async () => deleteVehicle(Number(btn.dataset.id)));
   });
-}
-
-async function fetchDriverMileageRows(startDate, endDate) {
-  const { data, error } = await supabaseClient
-    .from("vehicle_daily_reports")
-    .select(`
-      *,
-      vehicles (
-        id,
-        plate_number,
-        driver_name
-      )
-    `)
-    .gte("report_date", startDate)
-    .lte("report_date", endDate)
-    .order("report_date", { ascending: true })
-    .order("vehicle_id", { ascending: true });
-
-  if (error) {
-    console.error(error);
-    alert("走行実績の取得に失敗しました: " + error.message);
-    return [];
-  }
-
-  return data || [];
 }
 
 function normalizeMileageExportRows(rows) {
@@ -3743,6 +1404,62 @@ function renderMileageReportTable(rows) {
 }
 
 
+function syncMileageReportRange(dateStr = todayStr(), force = false) {
+  const targetDate = dateStr || todayStr();
+  const start = getMonthStartStr(targetDate);
+  const end = targetDate;
+
+  if (force) {
+    forceResetMileageReportInputs(targetDate);
+    return;
+  }
+
+  if (els.mileageReportStartDate && !els.mileageReportStartDate.value) {
+    applyMileageDateValue(els.mileageReportStartDate, start);
+  }
+  if (els.mileageReportEndDate && !els.mileageReportEndDate.value) {
+    applyMileageDateValue(els.mileageReportEndDate, end);
+  }
+}
+
+function initializeMileageReportDefaultDates() {
+  const today = todayStr();
+  forceResetMileageReportInputs(today);
+}
+
+function applyMileageDateValue(input, value) {
+  if (!input) return;
+  input.value = value;
+  input.defaultValue = value;
+  try { input.setAttribute("value", value); } catch (e) {}
+}
+
+function replaceMileageDateInput(inputId) {
+  const current = document.getElementById(inputId);
+  if (!current || !current.parentNode) return current;
+  const clone = current.cloneNode(true);
+  clone.value = "";
+  clone.defaultValue = "";
+  try { clone.removeAttribute("value"); } catch (e) {}
+  current.parentNode.replaceChild(clone, current);
+  return clone;
+}
+
+function forceResetMileageReportInputs(dateStr = todayStr()) {
+  const targetDate = dateStr || todayStr();
+  const start = getMonthStartStr(targetDate);
+  const end = targetDate;
+
+  const startInput = replaceMileageDateInput("mileageReportStartDate");
+  const endInput = replaceMileageDateInput("mileageReportEndDate");
+
+  els.mileageReportStartDate = startInput || document.getElementById("mileageReportStartDate");
+  els.mileageReportEndDate = endInput || document.getElementById("mileageReportEndDate");
+
+  applyMileageDateValue(els.mileageReportStartDate, start);
+  applyMileageDateValue(els.mileageReportEndDate, end);
+}
+
 async function previewDriverMileageReport() {
   const startDate = els.mileageReportStartDate?.value;
   const endDate = els.mileageReportEndDate?.value;
@@ -3760,24 +1477,6 @@ async function previewDriverMileageReport() {
   const rawRows = await fetchDriverMileageRows(startDate, endDate);
   currentMileageExportRows = normalizeMileageExportRows(rawRows);
   renderMileageReportTable(currentMileageExportRows);
-}
-function buildMileageDateRange(startDate, endDate) {
-  const dates = [];
-  const current = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-
-  while (current <= end) {
-    dates.push(new Date(current));
-    current.setDate(current.getDate() + 1);
-  }
-
-  return dates;
-}
-
-function formatMileageSheetDate(date) {
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${m}/${d}`;
 }
 function buildMileageCsvSectionRows(title, days, drivers, options = {}) {
   const showOverallColumns = Boolean(options.showOverallColumns);
@@ -3888,8 +1587,9 @@ async function exportDriverMileageReportCsv() {
     if (!currentMileageExportRows.length) return;
   }
 
-  const startDate = els.mileageReportStartDate?.value || todayStr();
-  const endDate = els.mileageReportEndDate?.value || todayStr();
+  const targetDate = todayStr();
+  const startDate = els.mileageReportStartDate?.value || getMonthStartStr(targetDate);
+  const endDate = els.mileageReportEndDate?.value || targetDate;
 
   const aoa = buildMileageMatrixCsvRows(currentMileageExportRows, startDate, endDate);
   const csv = aoa.map(row => row.map(value => csvEscape(value ?? "")).join(",")).join("\n");
@@ -4118,74 +1818,6 @@ async function importPlansCsvFile() {
   }
 }
 
-async function importVehicleCsvFile() {
-  const file = els.vehicleCsvFileInput?.files?.[0];
-  if (!file) {
-    alert("CSVファイルを選択してください");
-    return;
-  }
-
-  try {
-    const text = await readCsvFileAsText(file);
-    let rows = parseCsv(text);
-    rows = normalizeCsvRows(rows);
-
-    if (!rows.length) {
-      alert("CSVデータが空です");
-      return;
-    }
-
-    const inserts = [];
-
-    for (const row of rows) {
-      const plateNumber = String(row.plate_number || "").trim();
-      if (!plateNumber) continue;
-
-      const exists = allVehiclesCache.find(
-        v => String(v.plate_number || "").trim() === plateNumber
-      );
-      if (exists) {
-        console.log("車両重複スキップ:", plateNumber);
-        continue;
-      }
-
-      inserts.push({
-        plate_number: plateNumber,
-        vehicle_area: normalizeAreaLabel(String(row.vehicle_area || "").trim() || ""),
-        home_area: normalizeAreaLabel(String(row.home_area || "").trim() || ""),
-        seat_capacity: Number(row.seat_capacity || 4),
-        driver_name: String(row.driver_name || "").trim(),
-        line_id: String(row.line_id || "").trim(),
-        status: String(row.status || "waiting").trim() || "waiting",
-        memo: String(row.memo || "").trim(),
-        is_active: true,
-        created_by: currentUser.id
-      });
-    }
-
-    if (!inserts.length) {
-      alert("新規車両はありません");
-      els.vehicleCsvFileInput.value = "";
-      return;
-    }
-
-    const { error } = await supabaseClient.from("vehicles").insert(inserts);
-    if (error) {
-      console.error("Vehicle CSV import error:", error);
-      alert("車両CSV取込エラー: " + error.message);
-      return;
-    }
-
-    els.vehicleCsvFileInput.value = "";
-    await addHistory(null, null, "import_vehicle_csv", `${inserts.length}件の車両をCSV取込`);
-    alert(`${inserts.length}件の車両を取り込みました`);
-    await loadVehicles();
-  } catch (error) {
-    console.error("importVehicleCsvFile error:", error);
-    alert("車両CSV取込中にエラーが発生しました");
-  }
-}
-
 function clearPlanCastDerivedFields() {
   if (els.planAddress) els.planAddress.value = "";
   if (els.planArea) els.planArea.value = "";
@@ -4292,6 +1924,34 @@ async function fillPlanFormFromSelectedCast() {
   }
 }
 
+
+function syncScheduleRendererDeps() {
+  if (typeof window.setScheduleRendererDeps !== "function") return;
+
+  window.setScheduleRendererDeps({
+    els,
+    plans: currentPlansCache,
+    actuals: currentActualsCache,
+    actions: {
+      fillPlanForm,
+      openGoogleMap,
+      deletePlan
+    },
+    helpers: {
+      normalizeStatus,
+      buildMapLinkHtml,
+      escapeHtml,
+      normalizeAreaLabel,
+      getStatusText,
+      getHourLabel,
+      getAreaDisplayGroup,
+      getGroupedAreasByDisplay,
+      getGroupedAreaHeaderHtml,
+      todayStr
+    }
+  });
+}
+
 async function loadPlansByDate(dateStr) {
   const { data, error } = await supabaseClient
     .from("dispatch_plans")
@@ -4319,6 +1979,7 @@ async function loadPlansByDate(dateStr) {
   }
 
   currentPlansCache = data || [];
+  syncScheduleRendererDeps();
   renderPlanGroupedTable();
   renderPlansTimeAreaMatrix();
   renderPlanSelect();
@@ -4644,7 +2305,7 @@ async function savePlan() {
   if (editingPlanId) {
     ({ error } = await supabaseClient.from("dispatch_plans").update(payload).eq("id", editingPlanId));
   } else {
-    payload.created_by = currentUser.id;
+    payload.created_by = getCurrentUserIdSafe();
     ({ error } = await supabaseClient.from("dispatch_plans").insert(payload));
   }
 
@@ -4675,181 +2336,6 @@ async function deletePlan(planId) {
 
   await addHistory(null, null, "delete_plan", `予定ID ${planId} を削除`);
   await loadPlansByDate(els.planDate?.value || todayStr());
-}
-
-function renderPlanGroupedTable() {
-  if (!els.plansGroupedTable) return;
-
-  if (!currentPlansCache.length) {
-    els.plansGroupedTable.innerHTML = `<div class="muted" style="padding:14px;">予定がありません</div>`;
-    return;
-  }
-
-  const hours = [...new Set(currentPlansCache.map(x => Number(x.plan_hour)))].sort((a, b) => a - b);
-  let html = `<div class="grouped-plan-list">`;
-
-  hours.forEach(hour => {
-    const hourItems = currentPlansCache.filter(x => Number(x.plan_hour) === hour);
-    const groupedAreas = getGroupedAreasByDisplay(hourItems, x => x.planned_area || "無し");
-
-    html += `<div class="grouped-section">`;
-    html += `<div class="grouped-hour-title">${getHourLabel(hour)}</div>`;
-
-    groupedAreas.forEach(({ detailArea }) => {
-      const areaItems = hourItems.filter(
-        x => normalizeAreaLabel(x.planned_area || "無し") === detailArea
-      );
-
-      html += `<div class="grouped-area-title">${getGroupedAreaHeaderHtml(detailArea)}</div>`;
-
-      areaItems.forEach(plan => {
-        html += `
-          <div class="grouped-row">
-            <div>${getHourLabel(hour)}</div>
-            <div><strong>${buildMapLinkHtml({
-             name: plan.casts?.name,
-             address: plan.destination_address || plan.casts?.address,
-             lat: plan.casts?.latitude,
-             lng: plan.casts?.longitude
-             })}</strong></div>
-             <div>${escapeHtml(normalizeAreaLabel(plan.planned_area || "無し"))}</div>
-             <div>${plan.distance_km ?? ""}</div>
-             <div class="op-cell">
-              <span class="badge-status ${normalizeStatus(plan.status)}">${escapeHtml(getStatusText(plan.status))}</span>
-              <button class="btn ghost plan-edit-btn" data-id="${plan.id}">編集</button>
-              <button class="btn ghost plan-route-btn" data-address="${escapeHtml(plan.destination_address || plan.casts?.address || "")}">ルート</button>
-              <button class="btn danger plan-delete-btn" data-id="${plan.id}">削除</button>
-            </div>
-          </div>
-        `;
-      });
-    });
-
-    html += `</div>`;
-  });
-
-  html += `</div>`;
-  els.plansGroupedTable.innerHTML = html;
-
-  els.plansGroupedTable.querySelectorAll(".plan-edit-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const plan = currentPlansCache.find(x => Number(x.id) === Number(btn.dataset.id));
-      if (plan) fillPlanForm(plan);
-    });
-  });
-
-  els.plansGroupedTable.querySelectorAll(".plan-route-btn").forEach(btn => {
-    btn.addEventListener("click", () => openGoogleMap(btn.dataset.address || ""));
-  });
-
-  els.plansGroupedTable.querySelectorAll(".plan-delete-btn").forEach(btn => {
-    btn.addEventListener("click", async () => deletePlan(Number(btn.dataset.id)));
-  });
-}
-
-
-function getMatrixLegendHtml() {
-  return `
-    <div class="matrix-legend" aria-label="色の説明">
-      <span class="matrix-legend-item"><span class="matrix-dot pending"></span>黄色 = 未完了</span>
-      <span class="matrix-legend-item"><span class="matrix-dot done"></span>緑 = 完了</span>
-      <span class="matrix-legend-item"><span class="matrix-dot cancel"></span>赤 = キャンセル</span>
-    </div>
-  `;
-}
-
-function getPlanLinkedActualStatus(planRow) {
-  const linked = currentActualsCache.find(
-    item =>
-      Number(item.cast_id) === Number(planRow.cast_id) &&
-      (item.actual_date || els.actualDate?.value || todayStr()) === (planRow.plan_date || els.planDate?.value || todayStr()) &&
-      Number(item.actual_hour ?? -1) === Number(planRow.plan_hour ?? -1)
-  );
-  if (linked) return normalizeStatus(linked.status);
-  return normalizeStatus(planRow.status);
-}
-
-function buildMatrixMetaText(distanceKm, travelMinutes) {
-  const parts = [];
-  const distance = Number(distanceKm || 0);
-  const minutes = Number(travelMinutes || 0);
-  if (Number.isFinite(distance) && distance > 0) parts.push(`${distance.toFixed(1)}km`);
-  if (Number.isFinite(minutes) && minutes > 0) parts.push(`片道${minutes}分`);
-  return parts.length ? ` (${parts.join(" / ")})` : "";
-}
-
-function buildMatrixNameLine(row, status, addressKey = "destination_address") {
-  const safeStatus = normalizeStatus(status);
-  const nameHtml = buildMapLinkHtml({
-    name: row.casts?.name,
-    address: row[addressKey] || row.casts?.address,
-    lat: row.casts?.latitude,
-    lng: row.casts?.longitude,
-    className: `map-name-link matrix-name status-${safeStatus}`
-  });
-  const metaText = buildMatrixMetaText(row.distance_km, row.casts?.travel_minutes || row.travel_minutes);
-  return `<span class="matrix-line">${nameHtml}<span class="matrix-meta">${escapeHtml(metaText)}</span></span>`;
-}
-
-function renderPlansTimeAreaMatrix() {
-  if (!els.plansTimeAreaMatrix) return;
-
-  const hours = [0, 1, 2, 3, 4, 5];
-  const areas = [
-    ...new Set(
-      currentPlansCache.map(x => getAreaDisplayGroup(normalizeAreaLabel(x.planned_area || "無し")))
-    )
-  ];
-
-  if (!areas.length) {
-    els.plansTimeAreaMatrix.innerHTML = `<div class="muted" style="padding:14px;">一覧がありません</div>`;
-    return;
-  }
-
-  let html = `
-    ${getMatrixLegendHtml()}
-    <table class="matrix-table">
-      <thead>
-        <tr>
-          <th>時間</th>
-          ${areas.map(area => `<th>${escapeHtml(area)}</th>`).join("")}
-        </tr>
-      </thead>
-      <tbody>
-  `;
-
-  hours.forEach(hour => {
-    html += `<tr><td>${getHourLabel(hour)}</td>`;
-
-    areas.forEach(area => {
-      const rows = currentPlansCache.filter(
-        plan =>
-          Number(plan.plan_hour ?? 0) === hour &&
-          getAreaDisplayGroup(normalizeAreaLabel(plan.planned_area || "無し")) === area
-      );
-
-      if (!rows.length) {
-        html += `<td>-</td>`;
-      } else {
-        html += `
-          <td>
-            <div class="matrix-card">
-              ${rows.map(row => `
-                <div class="matrix-item">
-                  ${buildMatrixNameLine(row, getPlanLinkedActualStatus(row), "destination_address")}
-                </div>
-              `).join("")}
-            </div>
-          </td>
-        `;
-      }
-    });
-
-    html += `</tr>`;
-  });
-
-  html += `</tbody></table>`;
-  els.plansTimeAreaMatrix.innerHTML = html;
 }
 
 function guessPlanArea() {
@@ -4998,7 +2484,7 @@ async function loadActualsByDate(dateStr) {
       .insert({
         dispatch_date: dateStr,
         status: "draft",
-        created_by: currentUser.id
+        created_by: getCurrentUserIdSafe()
       })
       .select()
       .single();
@@ -5037,6 +2523,7 @@ async function loadActualsByDate(dateStr) {
   }
 
   currentActualsCache = data || [];
+  syncScheduleRendererDeps();
   renderActualTable();
   renderActualTimeAreaMatrix();
   renderHomeSummary();
@@ -5243,156 +2730,6 @@ async function addPlanToActual() {
   if (els.planSelect) els.planSelect.value = "";
   renderPlanSelect();
 }
-function renderActualTable() {
-  if (!els.actualTableWrap) return;
-
-  const actionableItems = currentActualsCache.filter(item => {
-    const status = normalizeStatus(item.status);
-    return status !== "done" && status !== "cancel";
-  });
-
-  if (!actionableItems.length) {
-    els.actualTableWrap.innerHTML = `<div class="muted" style="padding:14px;">配車決定で対応待ちのActualはありません</div>`;
-    return;
-  }
-
-  const hours = [...new Set(actionableItems.map(x => Number(x.actual_hour ?? 0)))].sort((a, b) => a - b);
-  let html = `<div class="grouped-actual-list">`;
-
-  hours.forEach(hour => {
-    const hourItems = actionableItems.filter(x => Number(x.actual_hour ?? 0) === hour);
-    const groupedAreas = getGroupedAreasByDisplay(hourItems, x => x.destination_area || "無し");
-
-    html += `<div class="grouped-section">`;
-    html += `<div class="grouped-hour-title">${getHourLabel(hour)}</div>`;
-
-    groupedAreas.forEach(({ detailArea }) => {
-      const areaItems = hourItems.filter(
-        item => normalizeAreaLabel(item.destination_area || "無し") === detailArea
-      );
-
-      if (!areaItems.length) return;
-
-      html += `<div class="grouped-area-title">${getGroupedAreaHeaderHtml(detailArea)}</div>`;
-
-      areaItems.forEach(item => {
-        html += `
-          <div class="grouped-row">
-            <div>${getHourLabel(hour)}</div>
-            <div><strong>${buildMapLinkHtml({
-             name: item.casts?.name,
-             address: item.destination_address || item.casts?.address,
-             lat: item.casts?.latitude,
-             lng: item.casts?.longitude
-             })}</strong></div>
-            <div>${escapeHtml(normalizeAreaLabel(item.destination_area || "無し"))}</div>
-            <div>${item.distance_km ?? ""}</div>
-            <div class="op-cell">
-              <div class="state-stack">
-                <button class="btn primary actual-done-btn" data-id="${item.id}">完了</button>
-                <button class="btn danger actual-cancel-btn" data-id="${item.id}">キャンセル</button>
-                <span class="badge-status ${normalizeStatus(item.status)}">${escapeHtml(getStatusText(item.status))}</span>
-              </div>
-              <button class="btn ghost actual-edit-btn" data-id="${item.id}">編集</button>
-              <button class="btn ghost actual-route-btn" data-address="${escapeHtml(item.destination_address || item.casts?.address || "")}">ルート</button>
-              <button class="btn danger actual-delete-btn" data-id="${item.id}">削除</button>
-            </div>
-          </div>
-        `;
-      });
-    });
-
-    html += `</div>`;
-  });
-
-  html += `</div>`;
-  els.actualTableWrap.innerHTML = html;
-
-  els.actualTableWrap.querySelectorAll(".actual-edit-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const item = currentActualsCache.find(x => Number(x.id) === Number(btn.dataset.id));
-      if (item) fillActualForm(item);
-    });
-  });
-
-  els.actualTableWrap.querySelectorAll(".actual-route-btn").forEach(btn => {
-    btn.addEventListener("click", () => openGoogleMap(btn.dataset.address || ""));
-  });
-
-  els.actualTableWrap.querySelectorAll(".actual-delete-btn").forEach(btn => {
-    btn.addEventListener("click", async () => deleteActual(Number(btn.dataset.id)));
-  });
-
-  els.actualTableWrap.querySelectorAll(".actual-done-btn").forEach(btn => {
-    btn.addEventListener("click", async () => updateActualStatus(Number(btn.dataset.id), "done"));
-  });
-
-  els.actualTableWrap.querySelectorAll(".actual-cancel-btn").forEach(btn => {
-    btn.addEventListener("click", async () => updateActualStatus(Number(btn.dataset.id), "cancel"));
-  });
-}
-
-function renderActualTimeAreaMatrix() {
-  if (!els.actualTimeAreaMatrix) return;
-
-  const hours = [0, 1, 2, 3, 4, 5];
-  const areas = [
-    ...new Set(
-      currentActualsCache.map(x => getAreaDisplayGroup(normalizeAreaLabel(x.destination_area || "無し")))
-    )
-  ];
-
-  if (!areas.length) {
-    els.actualTimeAreaMatrix.innerHTML = `<div class="muted" style="padding:14px;">一覧がありません</div>`;
-    return;
-  }
-
-  let html = `
-    ${getMatrixLegendHtml()}
-    <table class="matrix-table">
-      <thead>
-        <tr>
-          <th>時間</th>
-          ${areas.map(a => `<th>${escapeHtml(a)}</th>`).join("")}
-        </tr>
-      </thead>
-      <tbody>
-  `;
-
-  hours.forEach(hour => {
-    html += `<tr><td>${getHourLabel(hour)}</td>`;
-
-    areas.forEach(area => {
-      const rows = currentActualsCache.filter(
-        x =>
-          Number(x.actual_hour ?? 0) === hour &&
-          getAreaDisplayGroup(normalizeAreaLabel(x.destination_area || "無し")) === area
-      );
-
-      if (!rows.length) {
-        html += `<td>-</td>`;
-      } else {
-        html += `
-          <td>
-            <div class="matrix-card">
-              ${rows.map(row => `
-                <div class="matrix-item">
-                  ${buildMatrixNameLine(row, normalizeStatus(row.status), "destination_address")}
-                </div>
-              `).join("")}
-            </div>
-          </td>
-        `;
-      }
-    });
-
-    html += `</tr>`;
-  });
-
-  html += `</tbody></table>`;
-  els.actualTimeAreaMatrix.innerHTML = html;
-}
-
 function guessActualArea() {
   if (els.actualArea) {
     els.actualArea.value = normalizeAreaLabel(
@@ -5423,7 +2760,7 @@ function renderDailyVehicleChecklist() {
   `;
   els.dailyVehicleChecklist.appendChild(header);
 
-  allVehiclesCache.forEach(vehicle => {
+  getSortedVehiclesForDisplay().forEach(vehicle => {
     const stats = monthlyStatsMap.get(Number(vehicle.id)) || {
       totalDistance: 0,
       workedDays: 0,
@@ -5482,7 +2819,7 @@ function renderDailyVehicleChecklist() {
 }
 
 function getSelectedVehiclesForToday() {
-  return allVehiclesCache.filter(v => activeVehicleIdsForToday.has(Number(v.id)));
+  return getSortedVehiclesForDisplay().filter(v => activeVehicleIdsForToday.has(Number(v.id)));
 }
 
 function toggleAllVehicles(checked) {
@@ -5502,191 +2839,6 @@ function getActiveDispatchItemsForAutoAssign() {
     item => !["done", "cancel"].includes(normalizeStatus(item.status))
   );
 }
-
-function sortItemsForFallbackDispatch(items) {
-  return [...items].sort((a, b) => {
-    const ah = Number(a.actual_hour ?? 0);
-    const bh = Number(b.actual_hour ?? 0);
-    if (ah !== bh) return ah - bh;
-
-    const aa = normalizeAreaLabel(a.destination_area || "");
-    const ba = normalizeAreaLabel(b.destination_area || "");
-    if (aa !== ba) return aa.localeCompare(ba, "ja");
-
-    return Number(a.stop_order || 0) - Number(b.stop_order || 0);
-  });
-}
-
-function buildFallbackAssignments(items, vehicles) {
-  const orderedItems = sortItemsForFallbackDispatch(items);
-  if (!orderedItems.length || !vehicles.length) return [];
-
-  const assignments = [];
-  const seatLoads = new Map();
-
-  function getLoad(vehicleId, hour) {
-    return Number(seatLoads.get(`${vehicleId}_${hour}`) || 0);
-  }
-
-  function addLoad(vehicleId, hour) {
-    const key = `${vehicleId}_${hour}`;
-    seatLoads.set(key, getLoad(vehicleId, hour) + 1);
-  }
-
-  orderedItems.forEach((item, index) => {
-    const hour = Number(item.actual_hour ?? 0);
-    let selectedVehicle =
-      vehicles.find(v => getLoad(v.id, hour) < Number(v.seat_capacity || 4)) ||
-      vehicles[index % vehicles.length];
-
-    if (!selectedVehicle) selectedVehicle = vehicles[0];
-
-    assignments.push({
-      item_id: item.id,
-      actual_hour: hour,
-      vehicle_id: selectedVehicle.id,
-      driver_name: selectedVehicle.driver_name || "",
-      distance_km: Number(item.distance_km || 0)
-    });
-
-    addLoad(selectedVehicle.id, hour);
-  });
-
-  return assignments;
-}
-
-function applyManualLastVehicleToAssignments(assignments, vehicles) {
-  if (!assignments.length || !vehicles.length) return assignments;
-
-  const dateStr = els.actualDate?.value || todayStr();
-  const defaultLastHour = getDefaultLastHour(dateStr);
-  const manualLastVehicleId = getManualLastVehicleId();
-  const manualVehicle = vehicles.find(v => Number(v.id) === Number(manualLastVehicleId)) || null;
-  const vehicleMap = new Map(vehicles.map(v => [Number(v.id), v]));
-  const itemMap = new Map(currentActualsCache.map(item => [Number(item.id), item]));
-
-  const hourCounts = new Map();
-  assignments.forEach(a => {
-    const key = `${Number(a.vehicle_id)}__${Number(a.actual_hour ?? 0)}`;
-    hourCounts.set(key, Number(hourCounts.get(key) || 0) + 1);
-  });
-
-  const lastHourAssignments = assignments.filter(a => Number(a.actual_hour ?? 0) === Number(defaultLastHour));
-  if (lastHourAssignments.length) {
-    const optimizedLastHour = assignments.map(a => ({ ...a }));
-
-    for (const target of optimizedLastHour) {
-      if (Number(target.actual_hour ?? 0) !== Number(defaultLastHour)) continue;
-
-      const item = itemMap.get(Number(target.item_id));
-      if (!item) continue;
-      const area = normalizeAreaLabel(item.destination_area || item.cluster_area || '無し');
-
-      let bestCandidate = null;
-      for (const vehicle of vehicles) {
-        const seatCapacity = Number(vehicle.seat_capacity || 4);
-        const currentKey = `${Number(vehicle.id)}__${Number(defaultLastHour)}`;
-        const currentLoad = Number(hourCounts.get(currentKey) || 0);
-        const isSameVehicle = Number(vehicle.id) === Number(target.vehicle_id);
-        if (!isSameVehicle && currentLoad >= seatCapacity) continue;
-
-        const currentVehicle = vehicleMap.get(Number(target.vehicle_id));
-        const currentHome = normalizeAreaLabel(currentVehicle?.home_area || '');
-        const candidateHome = normalizeAreaLabel(vehicle.home_area || '');
-        const candidateAffinity = getAreaAffinityScore(area, candidateHome);
-        const currentAffinity = getAreaAffinityScore(area, currentHome);
-        const candidateDirection = getDirectionAffinityScore(area, candidateHome);
-        const currentDirection = getDirectionAffinityScore(area, currentHome);
-        const candidateStrict = getStrictHomeCompatibilityScore(area, candidateHome);
-        const currentStrict = getStrictHomeCompatibilityScore(area, currentHome);
-        const candidateReverse = isHardReverseForHome(area, candidateHome);
-        const vehicleAreaScore = getVehicleAreaMatchScore(vehicle, area);
-        const manualBonus = manualVehicle && Number(vehicle.id) === Number(manualVehicle.id) ? 6 : 0;
-        const reversePenalty = candidateReverse ? 240 : 0;
-        const score = candidateAffinity * 8 + Math.max(candidateDirection, 0) * 4 + candidateStrict * 5 + vehicleAreaScore + manualBonus - currentLoad * 8 - reversePenalty;
-
-        if (!bestCandidate || score > bestCandidate.score) {
-          bestCandidate = { vehicle, score, candidateAffinity, currentAffinity };
-        }
-      }
-
-      if (!bestCandidate) continue;
-      const currentVehicle = vehicleMap.get(Number(target.vehicle_id));
-      const currentHome = normalizeAreaLabel(currentVehicle?.home_area || '');
-      const currentAffinity = getAreaAffinityScore(area, currentHome);
-      const currentDirection = getDirectionAffinityScore(area, currentHome);
-      const currentStrict = getStrictHomeCompatibilityScore(area, currentHome);
-      const bestDirection = getDirectionAffinityScore(area, bestCandidate.vehicle.home_area || '');
-      const bestStrict = getStrictHomeCompatibilityScore(area, bestCandidate.vehicle.home_area || '');
-      const shouldMove =
-        Number(bestCandidate.vehicle.id) !== Number(target.vehicle_id) &&
-        (
-          bestStrict > currentStrict ||
-          (bestStrict === currentStrict && bestDirection > currentDirection) ||
-          (bestStrict === currentStrict && bestDirection === currentDirection && bestCandidate.candidateAffinity > currentAffinity) ||
-          (bestStrict === currentStrict && bestDirection === currentDirection && bestCandidate.candidateAffinity === currentAffinity && manualVehicle && Number(bestCandidate.vehicle.id) === Number(manualVehicle.id))
-        );
-
-      if (!shouldMove) continue;
-
-      const fromKey = `${Number(target.vehicle_id)}__${Number(defaultLastHour)}`;
-      const toKey = `${Number(bestCandidate.vehicle.id)}__${Number(defaultLastHour)}`;
-      hourCounts.set(fromKey, Math.max(0, Number(hourCounts.get(fromKey) || 0) - 1));
-      hourCounts.set(toKey, Number(hourCounts.get(toKey) || 0) + 1);
-
-      target.vehicle_id = bestCandidate.vehicle.id;
-      target.driver_name = bestCandidate.vehicle.driver_name || '';
-      target.manual_last_vehicle = manualVehicle && Number(bestCandidate.vehicle.id) === Number(manualVehicle.id);
-    }
-
-    return optimizedLastHour;
-  }
-
-  if (!manualVehicle) return assignments;
-
-  const sorted = [...assignments].sort((a, b) => {
-    const ah = Number(a.actual_hour ?? 0);
-    const bh = Number(b.actual_hour ?? 0);
-    if (ah !== bh) return ah - bh;
-    return Number(a.item_id || 0) - Number(b.item_id || 0);
-  });
-
-  const last = sorted[sorted.length - 1];
-  if (!last) return assignments;
-
-  const lastItem = itemMap.get(Number(last.item_id));
-  const lastArea = normalizeAreaLabel(lastItem?.destination_area || '');
-  const manualAffinity = getAreaAffinityScore(lastArea, manualVehicle.home_area || '');
-  const currentVehicle = vehicleMap.get(Number(last.vehicle_id));
-  const currentAffinity = getAreaAffinityScore(lastArea, currentVehicle?.home_area || '');
-  const manualDirection = getDirectionAffinityScore(lastArea, manualVehicle.home_area || '');
-  const currentDirection = getDirectionAffinityScore(lastArea, currentVehicle?.home_area || '');
-  const manualStrict = getStrictHomeCompatibilityScore(lastArea, manualVehicle.home_area || '');
-  const currentStrict = getStrictHomeCompatibilityScore(lastArea, currentVehicle?.home_area || '');
-
-  if (isHardReverseForHome(lastArea, manualVehicle.home_area || '')) return assignments;
-  if (manualStrict < currentStrict) return assignments;
-  if (manualStrict === currentStrict && manualDirection < currentDirection) return assignments;
-  if (manualStrict === currentStrict && manualDirection === currentDirection && manualAffinity < currentAffinity) return assignments;
-
-  return assignments.map(a =>
-    Number(a.item_id) === Number(last.item_id)
-      ? {
-          ...a,
-          vehicle_id: manualVehicle.id,
-          driver_name: manualVehicle.driver_name || '',
-          manual_last_vehicle: true
-        }
-      : a
-  );
-}
-
-
-function buildMonthlyDistanceMapForCurrentMonth() {
-  const monthKey = getMonthKey(els.dispatchDate?.value || todayStr());
-  return getVehicleMonthlyStatsMap(currentDailyReportsCache, monthKey);
-}
-
 
 function getCurrentClockMinutes() {
   const now = new Date();
@@ -5953,981 +3105,6 @@ function calcVehicleRotationForecastGlobal(vehicle, orderedRows) {
     stopCount: rows.length,
     returnAfterLabel: `${predictedReturnMinutes}分後`
   };
-}function optimizeAssignments(items, vehicles, monthlyMap) {
-  const workingVehicles = vehicles.filter(v => v.status !== "maintenance");
-  const manualLastVehicleId = getManualLastVehicleId();
-  const clusters = buildDispatchClusters(items);
-  const assignments = [];
-  const itemById = new Map((items || []).map(item => [Number(item.id), item]));
-  const itemMetaMap = new Map((items || []).map(item => [Number(item.id), {
-    distanceKm: Number(item.distance_km || 0),
-    area: normalizeAreaLabel(item.destination_area || item.cluster_area || "無し")
-  }]));
-
-  if (!workingVehicles.length || !clusters.length) return assignments;
-
-  const LONG_BUNDLE_ROUND_TRIP_MINUTES = 55;
-  const actualLastHour = clusters.reduce((max, cluster) => Math.max(max, Number(cluster?.hour ?? -Infinity)), -Infinity);
-  const vehicleUsage = new Map();
-  const vehicleLongClusterLocks = new Map();
-
-  function getVehicleState(vehicleId) {
-    if (!vehicleUsage.has(vehicleId)) {
-      vehicleUsage.set(vehicleId, {
-        totalAssigned: 0,
-        totalDistance: 0,
-        hourLoads: new Map(),
-        hourAreas: new Map()
-      });
-    }
-    return vehicleUsage.get(vehicleId);
-  }
-
-  function getHourLoad(vehicleId, hour) {
-    const state = getVehicleState(vehicleId);
-    return Number(state.hourLoads.get(hour) || 0);
-  }
-
-  function getHourAreas(vehicleId, hour) {
-    const state = getVehicleState(vehicleId);
-    return [...(state.hourAreas.get(hour) || [])];
-  }
-
-  function addHourLoad(vehicleId, hour, count, distance, area) {
-    const state = getVehicleState(vehicleId);
-    state.totalAssigned += count;
-    state.totalDistance += distance;
-    state.hourLoads.set(hour, getHourLoad(vehicleId, hour) + count);
-    if (area) {
-      const existing = state.hourAreas.get(hour) || [];
-      state.hourAreas.set(hour, [...existing, normalizeAreaLabel(area)]);
-    }
-  }
-
-  function getVehicleLockedAreas(vehicleId) {
-    return [...(vehicleLongClusterLocks.get(Number(vehicleId)) || [])];
-  }
-
-  function lockVehicleClusterArea(vehicleId, area) {
-    const normalized = normalizeAreaLabel(area);
-    if (!normalized || normalized === "無し") return;
-    const key = Number(vehicleId);
-    const existing = vehicleLongClusterLocks.get(key) || [];
-    if (!existing.includes(normalized)) {
-      vehicleLongClusterLocks.set(key, [...existing, normalized]);
-    }
-  }
-
-  function shouldClusterLock(cluster) {
-    return Number(cluster?.count || 0) >= 2 && getClusterRoundTripMinutes(cluster) >= LONG_BUNDLE_ROUND_TRIP_MINUTES;
-  }
-
-  function isClusterLockHardMismatch(clusterArea, lockedAreas = []) {
-    const normalized = normalizeAreaLabel(clusterArea);
-    const areas = Array.isArray(lockedAreas) ? lockedAreas.filter(Boolean).map(normalizeAreaLabel) : [];
-    if (!areas.length || !normalized || normalized === "無し") return false;
-    if (hasHardReverseMix(normalized, areas)) return true;
-
-    const canonical = getCanonicalArea(normalized);
-    const group = getAreaDisplayGroup(normalized);
-    const sameCanonical = areas.some(area => getCanonicalArea(area) && canonical && getCanonicalArea(area) === canonical);
-    const sameGroup = areas.some(area => getAreaDisplayGroup(area) === group);
-    if (sameCanonical || sameGroup) return false;
-
-    const bestAffinity = Math.max(...areas.map(area => getAreaAffinityScore(normalized, area)), 0);
-    const bestDirection = Math.max(...areas.map(area => getDirectionAffinityScore(normalized, area)), -999);
-    return bestAffinity < 64 && bestDirection < 24;
-  }
-
-  function getClusterLockPenalty(clusterArea, lockedAreas = []) {
-    const normalized = normalizeAreaLabel(clusterArea);
-    const areas = Array.isArray(lockedAreas) ? lockedAreas.filter(Boolean).map(normalizeAreaLabel) : [];
-    if (!areas.length || !normalized || normalized === "無し") return 0;
-    if (hasHardReverseMix(normalized, areas)) return 1200;
-
-    const canonical = getCanonicalArea(normalized);
-    const group = getAreaDisplayGroup(normalized);
-    const bestAffinity = Math.max(...areas.map(area => getAreaAffinityScore(normalized, area)), 0);
-    const bestDirection = Math.max(...areas.map(area => getDirectionAffinityScore(normalized, area)), -999);
-    const sameCanonical = areas.some(area => getCanonicalArea(area) && canonical && getCanonicalArea(area) === canonical);
-    const sameGroup = areas.some(area => getAreaDisplayGroup(area) === group);
-
-    if (sameCanonical) return -260;
-    if (sameGroup) return -140;
-    if (bestAffinity >= 72 && bestDirection >= 20) return -80;
-    if (bestAffinity >= 64 && bestDirection >= 18) return 120;
-    if (bestAffinity >= 56) return 260;
-    return 520;
-  }
-
-  function getIdleVehicleCountForHour(hour) {
-    return workingVehicles.filter(vehicle => getHourLoad(vehicle.id, hour) === 0).length;
-  }
-
-  function shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) {
-    const roundTripMinutes = getClusterRoundTripMinutes(cluster);
-    if (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES) return false;
-    if (cluster.count <= 1) return true;
-    if (sameHourLoad <= 0) return true;
-    const strongRouteLink = routeFlowScore >= 90 && routeContinuityPenalty <= 45;
-    const reasonableRideShare = routeFlowScore >= 70 && routeContinuityPenalty <= 60;
-    if (strongRouteLink) return false;
-    if (cluster.count <= 2 && reasonableRideShare) return false;
-    return true;
-  }
-
-  function getClusterRepresentativeTravelMinutes(cluster) {
-    const items = Array.isArray(cluster?.items) ? cluster.items : [];
-    const minutesList = items
-      .map(item => getStoredTravelMinutes(item?.casts?.travel_minutes || item?.travel_minutes))
-      .filter(val => Number(val) > 0);
-    if (minutesList.length) return Math.max(...minutesList);
-    return Math.max(1, estimateTravelMinutesByDistance(Number(cluster?.totalDistance || 0), normalizeAreaLabel(cluster?.area || "")));
-  }
-
-  function getClusterRoundTripMinutes(cluster) {
-    return getClusterRepresentativeTravelMinutes(cluster) * 2;
-  }
-
-  function getBundleCompatibilityScore(targetArea, existingAreas = []) {
-    const targetCanonical = getCanonicalArea(targetArea);
-    const targetGroup = getAreaDisplayGroup(targetArea);
-    const areas = Array.isArray(existingAreas) ? existingAreas.filter(Boolean) : [];
-    let best = 0;
-
-    for (const rawArea of areas) {
-      const area = normalizeAreaLabel(rawArea);
-      const canonical = getCanonicalArea(area);
-      const group = getAreaDisplayGroup(area);
-      const affinity = getAreaAffinityScore(targetArea, area);
-      const direction = getDirectionAffinityScore(targetArea, area);
-      let score = 0;
-
-      if (targetCanonical && canonical && targetCanonical === canonical) score += 130;
-      else if (targetGroup && group && targetGroup === group) score += 95;
-      else if (affinity >= 72) score += 80;
-      else if (affinity >= 54) score += 48;
-
-      if (direction >= 72) score += 18;
-      else if (direction >= 28) score += 8;
-      else if (direction <= -38) score -= 60;
-
-      best = Math.max(best, score);
-    }
-
-    return best;
-  }
-
-  function shouldForceBundleCluster(cluster, existingAreas = []) {
-    const roundTripMinutes = getClusterRoundTripMinutes(cluster);
-    const bundleScore = getBundleCompatibilityScore(normalizeAreaLabel(cluster?.area || ""), existingAreas);
-    return roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES && bundleScore >= 70;
-  }
-
-  function getDistanceZoneForAi(distanceKm) {
-    const km = Number(distanceKm || 0);
-    if (km <= 10) return "near";
-    if (km <= 25) return "mid";
-    return "far";
-  }
-
-  function isShortLayerDistance(distanceKm) {
-    return Number(distanceKm || 0) < 15;
-  }
-
-  function isLongLayerDistance(distanceKm) {
-    return Number(distanceKm || 0) > 35;
-  }
-
-  function getHourAssignedDistanceValues(vehicleId, hour) {
-    return assignments
-      .filter(a => Number(a.vehicle_id) === Number(vehicleId) && Number(a.actual_hour) === Number(hour))
-      .map(a => Number(itemMetaMap.get(Number(a.item_id))?.distanceKm || a.distance_km || 0))
-      .filter(v => v > 0);
-  }
-
-  function getHourAssignedRows(vehicleId, hour) {
-    return assignments
-      .filter(a => Number(a.vehicle_id) === Number(vehicleId) && Number(a.actual_hour) === Number(hour))
-      .map(a => itemById.get(Number(a.item_id)))
-      .filter(Boolean);
-  }
-
-  function getDistinctAreaGroupCountForHour(hour) {
-    const groups = new Set(
-      clusters
-        .filter(cluster => Number(cluster?.hour) === Number(hour))
-        .map(cluster => getAreaDisplayGroup(normalizeAreaLabel(cluster?.area || "無し")))
-        .filter(Boolean)
-    );
-    return groups.size;
-  }
-
-  function hasAreaVehicleShortageForHour(hour) {
-    return getDistinctAreaGroupCountForHour(hour) > workingVehicles.length;
-  }
-
-  function buildForecastRowsForVehicle(vehicleId, hour, extraItems = []) {
-    const baseRows = getHourAssignedRows(vehicleId, hour);
-    const rows = [...baseRows, ...(Array.isArray(extraItems) ? extraItems.filter(Boolean) : [])];
-    return sortItemsByNearestRoute(rows);
-  }
-
-  function getVehicleCandidateReturnMetrics(vehicle, hour, extraItems = []) {
-    const rows = buildForecastRowsForVehicle(vehicle?.id, hour, extraItems);
-    const forecast = calcVehicleRotationForecast(vehicle, rows);
-    return {
-      rows,
-      forecast,
-      predictedReturnMinutes: Number(forecast?.predictedReturnMinutes || 0),
-      extraSharedDelayMinutes: Number(forecast?.extraSharedDelayMinutes || 0),
-      routeDistanceKm: Number(forecast?.routeDistanceKm || 0)
-    };
-  }
-
-  function getVehicleItemProximityScore(vehicle, hour, item) {
-    const point = getItemLatLng(item);
-    if (!point) return 0;
-
-    const existingRows = getHourAssignedRows(vehicle?.id, hour);
-    if (!existingRows.length) {
-      const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-      const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || "無し");
-      return Math.max(0, getAreaAffinityScore(area, homeArea)) * 0.35;
-    }
-
-    let bestKm = Infinity;
-    existingRows.forEach(row => {
-      const rowPoint = getItemLatLng(row);
-      if (!rowPoint) return;
-      const km = estimateRoadKmBetweenPoints(point.lat, point.lng, rowPoint.lat, rowPoint.lng);
-      if (km < bestKm) bestKm = km;
-    });
-
-    if (!Number.isFinite(bestKm)) {
-      return 0;
-    }
-
-    if (bestKm <= 4) return 140;
-    if (bestKm <= 8) return 96;
-    if (bestKm <= 12) return 58;
-    if (bestKm <= 18) return 24;
-    return -Math.min(90, Math.round((bestKm - 18) * 3.5));
-  }
-
-  function isEastNearArea(areaInput = "") {
-    const area = normalizeAreaLabel(areaInput);
-    return ["市川", "船橋", "習志野", "鎌ヶ谷", "鎌ケ谷", "新鎌ヶ谷"].some(k => area.includes(k));
-  }
-
-  function isNorthEastLongArea(areaInput = "") {
-    const area = normalizeAreaLabel(areaInput);
-    return ["牛久", "ひたち野", "取手", "藤代", "宮和田", "守谷", "我孫子"].some(k => area.includes(k));
-  }
-
-  function isKashiwaFlexibleArea(areaInput = "") {
-    const area = normalizeAreaLabel(areaInput);
-    return ["柏", "あけぼの"].some(k => area.includes(k));
-  }
-
-  function getLongMixedPenalty(clusterDistanceKm, existingDistanceValues = [], clusterArea = "", existingAreas = []) {
-    const clusterKm = Number(clusterDistanceKm || 0);
-    const allDistances = [...(existingDistanceValues || []).map(v => Number(v || 0)).filter(v => v > 0), clusterKm].filter(v => v > 0);
-    const shortCount = allDistances.filter(isShortLayerDistance).length;
-    const longCount = allDistances.filter(isLongLayerDistance).length;
-    if (!shortCount || !longCount) return 0;
-
-    const normalizedArea = normalizeAreaLabel(clusterArea);
-    const areas = [normalizedArea, ...(existingAreas || []).map(normalizeAreaLabel)].filter(Boolean);
-    const hasEast = areas.some(isEastNearArea);
-    const hasNorthEastLong = areas.some(isNorthEastLongArea);
-    const hasKashiwa = areas.some(isKashiwaFlexibleArea);
-
-    let penalty = 0;
-    if (longCount >= 1 && shortCount >= 2) penalty += 220;
-    else if (longCount >= 1 && shortCount >= 1) penalty += 120;
-
-    if (hasEast && hasNorthEastLong) penalty += 260;
-    if (hasEast && hasKashiwa && hasNorthEastLong) penalty += 80;
-
-    return penalty;
-  }
-
-  function getLongIsolationBonus(clusterDistanceKm, existingDistanceValues = [], clusterArea = "", existingAreas = []) {
-    const clusterKm = Number(clusterDistanceKm || 0);
-    if (!isLongLayerDistance(clusterKm)) return 0;
-    const distances = (existingDistanceValues || []).map(v => Number(v || 0)).filter(v => v > 0);
-    if (!distances.length) return 0;
-
-    const normalizedArea = normalizeAreaLabel(clusterArea);
-    const areas = (existingAreas || []).map(normalizeAreaLabel).filter(Boolean);
-    const allAreas = [normalizedArea, ...areas];
-
-    const shortCount = distances.filter(isShortLayerDistance).length;
-    const hasEast = allAreas.some(isEastNearArea);
-    const hasNorthEastLong = allAreas.some(isNorthEastLongArea);
-
-    if (shortCount >= 2 && hasEast && hasNorthEastLong) return 180;
-    if (shortCount >= 1 && hasEast && hasNorthEastLong) return 90;
-    return 0;
-  }
-
-  function getBaseDispatchDelayMinutes(hour) {
-    const h = Number(hour || 0);
-    if (h <= 1) return 20;
-    if (h === 2) return 20;
-    if (h === 3) return 18;
-    if (h === 4) return 12;
-    return 8;
-  }
-
-  function estimateTravelMinutesByDistance(distanceKm, areaInput = "") {
-    return estimateTravelMinutesByAreaSpeed(distanceKm, areaInput);
-  }
-
-  function estimateDropoffMinutes(stopCount) {
-    return Math.max(1, Number(stopCount || 1)) * 1;
-  }
-
-  function estimateRotationReadyMinutes(hour, distanceKm, stopCount, areaInput = "") {
-    const travelOut = estimateTravelMinutesByDistance(distanceKm, areaInput);
-    const dropoff = estimateDropoffMinutes(stopCount);
-    const returnTrip = estimateTravelMinutesByDistance(distanceKm, areaInput);
-    return getBaseDispatchDelayMinutes(hour) + travelOut + dropoff + returnTrip;
-  }
-
-  function estimateRideShareExtraDelay(distanceKm, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty) {
-    if (Number(sameHourLoad || 0) <= 0) return 0;
-
-    const zone = getDistanceZoneForAi(distanceKm);
-    const zoneBase =
-      zone === "near" ? 2 :
-      zone === "mid" ? 5 : 8;
-
-    const raw =
-      zoneBase +
-      Number(sameHourLoad || 0) * 2 +
-      Number(stopCount || 1) * 1 +
-      Number(routeContinuityPenalty || 0) / 30 -
-      Number(routeFlowScore || 0) / 40;
-
-    return Math.max(0, Math.round(raw));
-  }
-
-  function getRotationPredictionScore(hour, distanceKm, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount, areaInput = "") {
-    const predictedReadyMinutes = estimateRotationReadyMinutes(hour, distanceKm, stopCount, areaInput);
-    const extraDelay = estimateRideShareExtraDelay(
-      distanceKm,
-      stopCount,
-      sameHourLoad,
-      routeFlowScore,
-      routeContinuityPenalty
-    );
-    const canShare = extraDelay <= 8;
-
-    let score = predictedReadyMinutes * 0.65 + extraDelay * 1.8;
-
-    if (Number(sameHourLoad || 0) === 0 && Number(idleVehicleCount || 0) > 0) {
-      score -= 24;
-    }
-
-    if (Number(sameHourLoad || 0) > 0 && !canShare) {
-      score += 42;
-    } else if (Number(sameHourLoad || 0) > 0 && canShare) {
-      score -= 10;
-    }
-
-    return {
-      predictedReadyMinutes,
-      extraDelay,
-      canShare,
-      score
-    };
-  }
-
-  function getNormalRunReturnPenalty(hour, addedDistance, stopCount, sameHourLoad, routeFlowScore, routeContinuityPenalty, idleVehicleCount, areaInput = "") {
-    const rotation = getRotationPredictionScore(
-      hour,
-      addedDistance,
-      stopCount,
-      sameHourLoad,
-      routeFlowScore,
-      routeContinuityPenalty,
-      idleVehicleCount,
-      areaInput
-    );
-    return rotation.score;
-  }
-
-  function formatClockTimeFromMinutes(totalMinutes) {
-    const safe = Math.max(0, Math.round(Number(totalMinutes || 0)));
-    const h = Math.floor(safe / 60) % 24;
-    const m = safe % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  }
-
-  function getDistanceZoneInfo(distanceKm, areaInput = "") {
-    const km = Number(distanceKm || 0);
-    const speedKmh = getAreaAverageSpeedKmh(areaInput, km);
-    const canonical = getCanonicalArea(normalizeAreaSpeedLookupInput(areaInput));
-    return {
-      key: canonical || (km <= 10 ? "short" : km <= 25 ? "middle" : "long"),
-      label: canonical || "-",
-      speedKmh
-    };
-  }
-
-  function getExpectedDepartureDelayMinutes(baseHour) {
-    const hour = Number(baseHour || 0);
-    if (hour <= 2) return 20;
-    if (hour === 3) return 18;
-    if (hour === 4) return 12;
-    if (hour >= 5) return 8;
-    return 20;
-  }
-
-  function calcVehicleRotationForecast(vehicle, orderedRows) {
-    const rows = Array.isArray(orderedRows) ? orderedRows.filter(Boolean) : [];
-    if (!rows.length) {
-      return {
-        routeDistanceKm: 0,
-        returnDistanceKm: 0,
-        zoneLabel: "-",
-        predictedDepartureTime: "-",
-        predictedReturnTime: "-",
-        predictedReadyTime: "-",
-        predictedReturnMinutes: 0,
-        extraSharedDelayMinutes: 0,
-        stopCount: 0
-      };
-    }
-  
-    const firstHour = rows.reduce((min, row) => {
-      const val = Number(row.actual_hour ?? row.plan_hour ?? 0);
-      return Number.isFinite(val) ? Math.min(min, val) : min;
-    }, 99);
-  
-    const baseHour = firstHour === 99 ? 0 : firstHour;
-    const routeDistanceKm = Number(calculateRouteDistance(rows) || 0);
-    const lastRow = rows[rows.length - 1] || {};
-    const returnDistanceKm = Number(lastRow.distance_km || 0);
-        const representativeArea = getRepresentativeAreaFromRows(rows);
-    const returnArea = normalizeAreaLabel(lastRow.destination_area || lastRow.casts?.area || representativeArea || "");
-    const primaryZone = getDistanceZoneInfo(Math.max(routeDistanceKm, returnDistanceKm), representativeArea);
-  
-    const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
-    const outboundMinutes = estimateTravelMinutesByDistance(routeDistanceKm, representativeArea);
-    const returnMinutes = estimateTravelMinutesByDistance(returnDistanceKm, returnArea || representativeArea);
-    const dropoffMinutes = rows.length * 1;
-  
-    const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
-    const predictedReturnAbs = predictedDepartureAbs + outboundMinutes + dropoffMinutes + returnMinutes;
-    const predictedReadyAbs = predictedReturnAbs + 1;
-  
-    let extraSharedDelayMinutes = 0;
-    if (rows.length >= 2) {
-      const firstOnly = [rows[0]];
-      const singleRouteDistanceKm = Number(calculateRouteDistance(firstOnly) || rows[0].distance_km || 0);
-      const singleReturnDistanceKm = Number(rows[0].distance_km || 0);
-      const singleArea = normalizeAreaLabel(rows[0]?.destination_area || rows[0]?.casts?.area || representativeArea || "");
-      const singleOutbound = estimateTravelMinutesByDistance(singleRouteDistanceKm, singleArea);
-      const singleReturn = estimateTravelMinutesByDistance(singleReturnDistanceKm, singleArea);
-      const singleDropoff = 1;
-      const singlePredictedReturnAbs = predictedDepartureAbs + singleOutbound + singleDropoff + singleReturn;
-      extraSharedDelayMinutes = Math.max(0, predictedReturnAbs - singlePredictedReturnAbs);
-    }
-  
-    return {
-      routeDistanceKm,
-      returnDistanceKm,
-      zoneLabel: primaryZone.label,
-      predictedDepartureTime: formatClockTimeFromMinutes(predictedDepartureAbs),
-      predictedReturnTime: formatClockTimeFromMinutes(predictedReturnAbs),
-      predictedReadyTime: formatClockTimeFromMinutes(predictedReadyAbs),
-      predictedReturnMinutes: Math.round(predictedReturnAbs - predictedDepartureAbs),
-      extraSharedDelayMinutes: Math.round(extraSharedDelayMinutes),
-      stopCount: rows.length
-    };
-  }
-
-    function isDirectionSplitPair(baseArea, compareArea) {
-    const a = normalizeAreaLabel(baseArea);
-    const b = normalizeAreaLabel(compareArea);
-    if (!a || !b) return false;
-    const affinity = getDirectionAffinityScore(a, b);
-    return affinity <= -38;
-  }
-
-  function getDirectionSplitGuardScore(clusterArea, existingAreas, distanceKm, isLastRun, isDefaultLastHourCluster) {
-    if (isLastRun || isDefaultLastHourCluster) return 0;
-
-    const zone = getDistanceZoneForAi(distanceKm);
-    const areas = (existingAreas || []).map(normalizeAreaLabel).filter(Boolean);
-    if (!areas.length) return 0;
-
-    let score = 0;
-    for (const area of areas) {
-      if (!isDirectionSplitPair(clusterArea, area)) continue;
-
-      if (zone === 'long') score += 260;
-      else if (zone === 'mid') score += 120;
-      else score += 40;
-    }
-
-    return score;
-  }
-
-  function isHardDirectionSplitBlocked(clusterArea, existingAreas, distanceKm, isLastRun, isDefaultLastHourCluster) {
-    if (isLastRun || isDefaultLastHourCluster) return false;
-
-    const zone = getDistanceZoneForAi(distanceKm);
-    if (zone !== 'long') return false;
-
-    const areas = (existingAreas || []).map(normalizeAreaLabel).filter(Boolean);
-    if (!areas.length) return false;
-
-    return areas.some(area => isDirectionSplitPair(clusterArea, area));
-  }
-
-  for (const cluster of clusters) {
-    const dateStr = els.actualDate?.value || todayStr();
-    const isLastRun = isLastClusterOfTheDay(cluster, dateStr);
-    const defaultLastHour = getDefaultLastHour(dateStr);
-    const isDefaultLastHourCluster =
-      Number(cluster.hour) === Number(defaultLastHour) &&
-      Number(cluster.hour) === Number(actualLastHour);
-
-    const candidateScores = workingVehicles
-      .map(vehicle => {
-        const seatCapacity = Number(vehicle.seat_capacity || 4);
-        const sameHourLoad = getHourLoad(vehicle.id, cluster.hour);
-
-        if (sameHourLoad >= seatCapacity) return null;
-        if (sameHourLoad + cluster.count > seatCapacity) return null;
-
-        const monthly = monthlyMap.get(Number(vehicle.id)) || {
-          totalDistance: 0,
-          workedDays: 0,
-          avgDistance: 0
-        };
-
-        const normalizedClusterArea = normalizeAreaLabel(cluster.area);
-        const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-
-        const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
-        const projectedAvg =
-          (Number(monthly.totalDistance || 0) + Number(cluster.totalDistance || 0)) /
-          projectedWorkedDays;
-
-        let score = 1000;
-
-        const vehicleAreaMatch = getVehicleAreaMatchScore(vehicle, cluster.area);
-        const directionAffinity = getDirectionAffinityScore(normalizedClusterArea, homeArea);
-        const strictHomeScore = getStrictHomeCompatibilityScore(normalizedClusterArea, homeArea);
-        const hardReverse = isHardReverseForHome(normalizedClusterArea, homeArea);
-        const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
-        const existingHourDistanceValues = getHourAssignedDistanceValues(vehicle.id, cluster.hour);
-        const hardReverseMixBlocked = existingHourAreas.length && hasHardReverseMix(normalizedClusterArea, existingHourAreas);
-        const lockedAreas = getVehicleLockedAreas(vehicle.id);
-        const clusterLockPenalty = getClusterLockPenalty(normalizedClusterArea, lockedAreas);
-        const areaMixGuardScore = getAreaMixGuardScore(normalizedClusterArea, existingHourAreas, isLastRun || isDefaultLastHourCluster);
-        const routeFlowScore = getRouteFlowVehicleScore(normalizedClusterArea, existingHourAreas, homeArea);
-        const routeContinuityPenalty = getRouteContinuityPenalty(normalizedClusterArea, existingHourAreas, homeArea);
-        const directionSplitGuardScore = getDirectionSplitGuardScore(
-          normalizedClusterArea,
-          existingHourAreas,
-          Number(cluster.totalDistance || 0),
-          isLastRun,
-          isDefaultLastHourCluster
-        );
-        const hardDirectionSplitBlocked = isHardDirectionSplitBlocked(
-          normalizedClusterArea,
-          existingHourAreas,
-          Number(cluster.totalDistance || 0),
-          isLastRun,
-          isDefaultLastHourCluster
-        );
-
-        // 方面一致 + 方向クラスタ + 帰宅適合 + 経由ルート相性を優先
-        score -= vehicleAreaMatch;
-        score -= routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 2.25 : 1.55);
-        score += routeContinuityPenalty * (isLastRun || isDefaultLastHourCluster ? 2.45 : 1.55);
-        score += areaMixGuardScore;
-        score += clusterLockPenalty;
-        score -= Math.max(directionAffinity, 0) * (isLastRun || isDefaultLastHourCluster ? 2.2 : 0.45);
-        score -= strictHomeScore * (isLastRun || isDefaultLastHourCluster ? 2.8 : 0.55);
-
-        // 同時間帯の過積載を避ける
-        score += sameHourLoad * 35;
-
-        // 今日の割当数の偏りを抑える
-        score += getVehicleState(vehicle.id).totalAssigned * 8;
-
-        // 今日の車両負荷が高すぎる車両を少し避ける
-        score += getVehicleState(vehicle.id).totalDistance * 0.18;
-
-        // 月間平均距離が高い車両に積みすぎない
-        score += projectedAvg * 0.55;
-
-        // 通常便は、往復55分以上なら同方向クラスターを優先し、近距離だけ分散を許容する
-        if (!(isLastRun || isDefaultLastHourCluster)) {
-          const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-          const roundTripMinutes = getClusterRoundTripMinutes(cluster);
-          const bundleCompatibility = getBundleCompatibilityScore(normalizedClusterArea, existingHourAreas);
-          const forceBundle = shouldForceBundleCluster(cluster, existingHourAreas);
-          const rotationPrediction = getRotationPredictionScore(
-            cluster.hour,
-            Number(cluster.totalDistance || 0),
-            Number(cluster.count || 1),
-            sameHourLoad,
-            routeFlowScore,
-            routeContinuityPenalty,
-            idleVehicleCount,
-            normalizedClusterArea
-          );
-          const preferSpread =
-            (!forceBundle) &&
-            (shouldPreferSpread(cluster, routeFlowScore, routeContinuityPenalty, sameHourLoad) ||
-            !rotationPrediction.canShare);
-
-          if (sameHourLoad === 0) {
-            if (roundTripMinutes < LONG_BUNDLE_ROUND_TRIP_MINUTES) {
-              score -= idleVehicleCount > 1 ? 150 : 95;
-            } else {
-              score += idleVehicleCount > 1 ? 35 : 12;
-            }
-          } else if (preferSpread && idleVehicleCount > 0) {
-            score += 165 + sameHourLoad * 38;
-          } else if (!preferSpread && rotationPrediction.canShare) {
-            score -= Math.min(routeFlowScore, 120) * 0.40;
-            score += routeContinuityPenalty * 0.15;
-            score -= 18;
-          }
-
-          score -= bundleCompatibility * (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES ? 1.45 : 0.65);
-          if (forceBundle && sameHourLoad > 0) {
-            score -= 180;
-          }
-          if (roundTripMinutes < LONG_BUNDLE_ROUND_TRIP_MINUTES && sameHourLoad > 0 && bundleCompatibility < 50 && idleVehicleCount > 0) {
-            score += 75;
-          }
-
-          score += getNormalRunReturnPenalty(
-            cluster.hour,
-            Number(cluster.totalDistance || 0),
-            Number(cluster.count || 1),
-            sameHourLoad,
-            routeFlowScore,
-            routeContinuityPenalty,
-            idleVehicleCount,
-            normalizedClusterArea
-          );
-        }
-
-        // ラスト便で逆方向は強く除外
-        if ((isLastRun || isDefaultLastHourCluster) && hardReverse) {
-          score += isLastRun ? 560 : 320;
-        }
-
-        // ラスト便時間帯では適合の弱い車両を避ける
-        if ((isLastRun || isDefaultLastHourCluster) && strictHomeScore < 50) {
-          score += 110;
-        }
-
-        // 長距離ゾーンで方向が割れる組み合わせを強く避ける
-        score += directionSplitGuardScore;
-        if (hardDirectionSplitBlocked) {
-          score += 420;
-        }
-        if (hardReverseMixBlocked) {
-          score += isLastRun || isDefaultLastHourCluster ? 880 : 620;
-        }
-
-        // v6.9.6: ロング案件が近距離群へ混ざるのを強く避ける
-        score += getLongMixedPenalty(
-          Number(cluster.totalDistance || 0),
-          existingHourDistanceValues,
-          normalizedClusterArea,
-          existingHourAreas
-        );
-        score += getLongIsolationBonus(
-          Number(cluster.totalDistance || 0),
-          existingHourDistanceValues,
-          normalizedClusterArea,
-          existingHourAreas
-        );
-
-        // 同一ルートの折れ返しが大きい組み合わせを避ける
-        if (routeContinuityPenalty >= 260) {
-          score += isLastRun || isDefaultLastHourCluster ? 280 : 180;
-        } else if (routeContinuityPenalty >= 170) {
-          score += isLastRun || isDefaultLastHourCluster ? 180 : 95;
-        } else if (routeContinuityPenalty >= 95) {
-          score += isLastRun || isDefaultLastHourCluster ? 90 : 42;
-        }
-
-        // 手動ラスト便車両は適合している時だけ優遇
-        if (manualLastVehicleId && (isLastRun || isDefaultLastHourCluster)) {
-          if (Number(vehicle.id) === Number(manualLastVehicleId) && !hardReverse && strictHomeScore >= 50) score -= 180;
-          else if (Number(vehicle.id) === Number(manualLastVehicleId) && hardReverse) score += 220;
-          else score += 35;
-        }
-
-        // ラスト便は帰宅方面の近接スコアを強く優遇
-        const homePriorityWeight = getLastTripHomePriorityWeight(
-          normalizedClusterArea,
-          homeArea,
-          isLastRun,
-          isDefaultLastHourCluster
-        );
-        score -= homePriorityWeight * 0.42;
-
-        const driverLastTripChecked = isDriverLastTripChecked(vehicle.id);
-        if (driverLastTripChecked && (isLastRun || isDefaultLastHourCluster)) {
-          score -= 90;
-          score -= Math.max(0, homePriorityWeight) * 0.28;
-          if (strictHomeScore >= 78) score -= 48;
-          else if (strictHomeScore >= 52) score -= 24;
-          if (hardReverse) score += isLastRun ? 260 : 140;
-        } else if (!driverLastTripChecked && hasAnyDriverLastTripChecked() && (isLastRun || isDefaultLastHourCluster)) {
-          score += 12;
-        }
-
-        if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
-          score += isLastRun ? 80 : 28;
-        }
-
-        return { vehicle, score };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.score - b.score);
-
-    if (candidateScores.length) {
-      const bestVehicle = candidateScores[0].vehicle;
-      const sortedItems = sortItemsByNearestRoute(cluster.items);
-      const bestHourLoad = getHourLoad(bestVehicle.id, cluster.hour);
-      const bestExistingAreas = getHourAreas(bestVehicle.id, cluster.hour);
-      const bestRouteFlowScore = getRouteFlowVehicleScore(normalizeAreaLabel(cluster.area), bestExistingAreas, normalizeAreaLabel(bestVehicle?.home_area || ""));
-      const bestRouteContinuityPenalty = getRouteContinuityPenalty(normalizeAreaLabel(cluster.area), bestExistingAreas, normalizeAreaLabel(bestVehicle?.home_area || ""));
-      const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-      const forceBundle = shouldForceBundleCluster(cluster, bestExistingAreas);
-      const clusterLocked = shouldClusterLock(cluster);
-      const areaVehicleShortage = hasAreaVehicleShortageForHour(cluster.hour);
-      const keepTogether = clusterLocked || ((isLastRun || isDefaultLastHourCluster)
-        ? true
-        : (!areaVehicleShortage && (forceBundle || !shouldPreferSpread(cluster, bestRouteFlowScore, bestRouteContinuityPenalty, bestHourLoad) || idleVehicleCount <= 1)));
-
-      if (keepTogether) {
-        sortedItems.forEach(item => {
-          assignments.push({
-            item_id: item.id,
-            actual_hour: cluster.hour,
-            vehicle_id: bestVehicle.id,
-            driver_name: bestVehicle.driver_name || "",
-            distance_km: Number(item.distance_km || 0)
-          });
-        });
-
-        addHourLoad(
-          bestVehicle.id,
-          cluster.hour,
-          cluster.count,
-          calculateRouteDistance(sortedItems),
-          cluster.area
-        );
-        if (clusterLocked || forceBundle) {
-          lockVehicleClusterArea(bestVehicle.id, cluster.area);
-        }
-        continue;
-      }
-    }
-
-    const splitItems = sortItemsByNearestRoute(cluster.items);
-
-    for (const item of splitItems) {
-      const perItemCandidates = workingVehicles
-        .map(vehicle => {
-          const seatCapacity = Number(vehicle.seat_capacity || 4);
-          const sameHourLoad = getHourLoad(vehicle.id, cluster.hour);
-
-          if (sameHourLoad >= seatCapacity) return null;
-
-          const monthly = monthlyMap.get(Number(vehicle.id)) || {
-            totalDistance: 0,
-            workedDays: 0,
-            avgDistance: 0
-          };
-
-          const normalizedClusterArea = normalizeAreaLabel(cluster.area);
-          const normalizedItemArea = normalizeAreaLabel(item?.destination_area || normalizedClusterArea || "無し");
-          const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
-          const existingHourAreas = getHourAreas(vehicle.id, cluster.hour);
-          const hardReverseMixBlocked = existingHourAreas.length && hasHardReverseMix(normalizedClusterArea, existingHourAreas);
-          const lockedAreas = getVehicleLockedAreas(vehicle.id);
-          const clusterLockPenalty = getClusterLockPenalty(normalizedClusterArea, lockedAreas);
-          if (isClusterLockHardMismatch(normalizedClusterArea, lockedAreas)) return null;
-          const areaMixGuardScore = getAreaMixGuardScore(normalizedItemArea, existingHourAreas, isLastRun || isDefaultLastHourCluster);
-          const routeFlowScore = getRouteFlowVehicleScore(normalizedItemArea, existingHourAreas, homeArea);
-          const routeContinuityPenalty = getRouteContinuityPenalty(normalizedItemArea, existingHourAreas, homeArea);
-          const directionSplitGuardScore = getDirectionSplitGuardScore(
-            normalizedItemArea,
-            existingHourAreas,
-            Number(item.distance_km || 0),
-            isLastRun,
-            isDefaultLastHourCluster
-          );
-          const hardDirectionSplitBlocked = isHardDirectionSplitBlocked(
-            normalizedItemArea,
-            existingHourAreas,
-            Number(item.distance_km || 0),
-            isLastRun,
-            isDefaultLastHourCluster
-          );
-
-          const projectedWorkedDays = Math.max(Number(monthly.workedDays || 0), 1);
-          const projectedAvg =
-            (Number(monthly.totalDistance || 0) + Number(item.distance_km || 0)) /
-            projectedWorkedDays;
-
-          let score = 1000;
-
-          // 方面一致 + 経由ルート相性を優先
-          score -= getVehicleAreaMatchScore(vehicle, cluster.area);
-          score -= routeFlowScore * (isLastRun || isDefaultLastHourCluster ? 2.0 : 1.4);
-          score += routeContinuityPenalty * (isLastRun || isDefaultLastHourCluster ? 2.2 : 1.4);
-          score += areaMixGuardScore;
-          score += clusterLockPenalty;
-
-          // 同時間帯負荷
-          score += sameHourLoad * 35;
-
-          // 今日の割当数偏り
-          score += getVehicleState(vehicle.id).totalAssigned * 8;
-
-          // 今日の累積ルート距離偏り
-          score += getVehicleState(vehicle.id).totalDistance * 0.18;
-
-          // 月間平均の高い車両へ積みすぎない
-          score += projectedAvg * 0.55;
-
-          // 長距離ゾーンで方向が割れる組み合わせを強く避ける
-          score += directionSplitGuardScore;
-          if (hardDirectionSplitBlocked) {
-            score += 420;
-          }
-          if (hardReverseMixBlocked) {
-            score += isLastRun || isDefaultLastHourCluster ? 880 : 620;
-          }
-
-          // 通常便は往復55分以上なら同方向束ね、近距離だけ分散を優先
-          if (!(isLastRun || isDefaultLastHourCluster)) {
-            const idleVehicleCount = getIdleVehicleCountForHour(cluster.hour);
-            const pseudoCluster = { ...cluster, count: 1, totalDistance: Number(item.distance_km || 0), items: [item] };
-            const roundTripMinutes = getClusterRoundTripMinutes(pseudoCluster);
-            const bundleCompatibility = getBundleCompatibilityScore(normalizedItemArea, existingHourAreas);
-            const forceBundle = shouldForceBundleCluster(pseudoCluster, existingHourAreas);
-            const rotationPrediction = getRotationPredictionScore(
-              cluster.hour,
-              Number(item.distance_km || 0),
-              1,
-              sameHourLoad,
-              routeFlowScore,
-              routeContinuityPenalty,
-              idleVehicleCount,
-              normalizedItemArea
-            );
-            const preferSpread =
-              sameHourLoad > 0 &&
-              (!forceBundle) &&
-              (!(routeFlowScore >= 85 && routeContinuityPenalty <= 45) || !rotationPrediction.canShare);
-
-            if (sameHourLoad === 0) {
-              if (roundTripMinutes < LONG_BUNDLE_ROUND_TRIP_MINUTES) score -= idleVehicleCount > 1 ? 135 : 84;
-              else score += idleVehicleCount > 1 ? 35 : 12;
-            } else if (preferSpread && idleVehicleCount > 0) {
-              score += 130 + sameHourLoad * 30;
-            } else if (rotationPrediction.canShare) {
-              score -= Math.min(routeFlowScore, 120) * 0.26;
-              score -= 10;
-            }
-
-            score -= bundleCompatibility * (roundTripMinutes >= LONG_BUNDLE_ROUND_TRIP_MINUTES ? 1.35 : 0.55);
-            if (forceBundle && sameHourLoad > 0) score -= 150;
-            if (roundTripMinutes < LONG_BUNDLE_ROUND_TRIP_MINUTES && sameHourLoad > 0 && bundleCompatibility < 50 && idleVehicleCount > 0) score += 60;
-
-            score += getNormalRunReturnPenalty(
-              cluster.hour,
-              Number(item.distance_km || 0),
-              1,
-              sameHourLoad,
-              routeFlowScore,
-              routeContinuityPenalty,
-              idleVehicleCount,
-              normalizedItemArea
-            );
-          }
-
-          const homePriorityWeight = getLastTripHomePriorityWeight(
-            normalizedItemArea,
-            homeArea,
-            isLastRun,
-            isDefaultLastHourCluster
-          );
-          score -= homePriorityWeight * 0.42;
-
-          if ((isLastRun || isDefaultLastHourCluster) && homePriorityWeight <= 0) {
-            score += isLastRun ? 36 : 10;
-          }
-
-          if (routeContinuityPenalty >= 170) {
-            score += isLastRun || isDefaultLastHourCluster ? 160 : 80;
-          } else if (routeContinuityPenalty >= 95) {
-            score += isLastRun || isDefaultLastHourCluster ? 72 : 30;
-          }
-
-          if (!(isLastRun || isDefaultLastHourCluster) && hasAreaVehicleShortageForHour(cluster.hour)) {
-            const returnMetrics = getVehicleCandidateReturnMetrics(vehicle, cluster.hour, [item]);
-            const proximityScore = getVehicleItemProximityScore(vehicle, cluster.hour, item);
-            score += returnMetrics.predictedReturnMinutes * 0.85;
-            score += returnMetrics.extraSharedDelayMinutes * 2.4;
-            score += returnMetrics.routeDistanceKm * 0.16;
-            score -= proximityScore;
-            if (sameHourLoad === 0) {
-              score -= 32;
-            }
-          }
-
-          return { vehicle, score };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.score - b.score);
-
-      if (!perItemCandidates.length) continue;
-
-      const bestVehicle = perItemCandidates[0].vehicle;
-
-      assignments.push({
-        item_id: item.id,
-        actual_hour: cluster.hour,
-        vehicle_id: bestVehicle.id,
-        driver_name: bestVehicle.driver_name || "",
-        distance_km: Number(item.distance_km || 0)
-      });
-
-      addHourLoad(
-        bestVehicle.id,
-        cluster.hour,
-        1,
-        Number(item.distance_km || 0),
-        cluster.area
-      );
-      if (shouldClusterLock({ ...cluster, count: 1, totalDistance: Number(item.distance_km || 0), items: [item] })) {
-        lockVehicleClusterArea(bestVehicle.id, cluster.area);
-      }
-    }
-  }
-
-  return assignments;
 }
 
 async function applyAutoDispatchAssignments(assignments) {
@@ -6967,6 +3144,7 @@ function __getDisplayGroupAreaLabel(item) {
 }
 
 function __hasEnoughVehiclesForDisplayGroups(items, vehicles) {
+  if (!ENABLE_DISPLAY_GROUP_FORCE_BRANCH) return false;
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
   const safeVehicles = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
   if (!safeItems.length || !safeVehicles.length) return false;
@@ -7123,7 +3301,9 @@ async function assignUnassignedActualsForToday() {
   if (__hasEnoughVehiclesForDisplayGroups(unassignedItems, selectedVehicles)) {
     assignments = __buildAssignmentsPreserveDisplayGroups(unassignedItems, selectedVehicles, monthlyMap);
   } else {
-    assignments = optimizeAssignmentsByRouteFlow(assignments, unassignedItems, selectedVehicles);
+    if (typeof optimizeAssignmentsByRouteFlow === "function") {
+      assignments = optimizeAssignmentsByRouteFlow(assignments, unassignedItems, selectedVehicles);
+    }
 
     if (!assignments.length) {
       assignments = buildFallbackAssignments(unassignedItems, selectedVehicles);
@@ -7137,6 +3317,111 @@ async function assignUnassignedActualsForToday() {
   if (!assignments.length) return;
 
   await applyAutoDispatchAssignments(assignments);
+}
+
+function __buildEmergencyAssignments(activeItems, selectedVehicles) {
+  const items = Array.isArray(activeItems) ? activeItems.filter(Boolean) : [];
+  const vehicles = Array.isArray(selectedVehicles) ? selectedVehicles.filter(Boolean) : [];
+  if (!items.length || !vehicles.length) return [];
+
+  const sortedItems = typeof sortItemsByNearestRoute === "function"
+    ? sortItemsByNearestRoute(items)
+    : [...items].sort((a, b) => Number(a?.actual_hour || 0) - Number(b?.actual_hour || 0));
+
+  const seatMap = new Map(
+    vehicles.map(v => [Number(v.id), Math.max(1, Number(v?.seat_capacity || 4))])
+  );
+
+  const hourVehicleLoads = new Map();
+  const assignments = [];
+
+  function getLoad(hour, vehicleId) {
+    return hourVehicleLoads.get(`${hour}__${vehicleId}`) || 0;
+  }
+  function addLoad(hour, vehicleId) {
+    const key = `${hour}__${vehicleId}`;
+    hourVehicleLoads.set(key, getLoad(hour, vehicleId) + 1);
+  }
+
+  sortedItems.forEach((item, index) => {
+    const hour = Number(item?.actual_hour ?? item?.plan_hour ?? 0);
+    const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || item?.casts?.area || "無し");
+
+    let bestVehicle = null;
+    let bestScore = -Infinity;
+
+    vehicles.forEach((vehicle, vehicleIndex) => {
+      const vehicleId = Number(vehicle.id);
+      const currentLoad = getLoad(hour, vehicleId);
+      const seatCapacity = seatMap.get(vehicleId) || 4;
+      if (currentLoad >= seatCapacity) return;
+
+      const homeArea = normalizeAreaLabel(vehicle?.home_area || "");
+      const vehicleArea = normalizeAreaLabel(vehicle?.vehicle_area || "");
+
+      let score = 0;
+      if (typeof getVehicleAreaMatchScore === "function") {
+        score += Number(getVehicleAreaMatchScore(vehicle, area) || 0);
+      }
+      if (typeof getAreaAffinityScore === "function") {
+        score += Number(getAreaAffinityScore(vehicleArea, area) || 0) * 0.6;
+        score += Number(getAreaAffinityScore(homeArea, area) || 0) * 0.35;
+      }
+      if (typeof getDirectionAffinityScore === "function") {
+        score += Number(getDirectionAffinityScore(vehicleArea, area) || 0) * 0.25;
+      }
+
+      const siblingAssignments = assignments.filter(a => Number(a.actual_hour ?? 0) === Number(hour) && Number(a.vehicle_id) === Number(vehicleId));
+      const siblingAreas = siblingAssignments.map(a => {
+        const existing = items.find(x => Number(x.id) === Number(a.item_id));
+        return normalizeAreaLabel(existing?.destination_area || existing?.cluster_area || existing?.casts?.area || '');
+      }).filter(Boolean);
+      const siblingAnchor = siblingAssignments
+        .map(a => items.find(x => Number(x.id) === Number(a.item_id)))
+        .filter(Boolean)
+        .sort((a, b) => Number(b?.distance_km || 0) - Number(a?.distance_km || 0))[0] || null;
+      const siblingAnchorArea = normalizeAreaLabel(siblingAnchor?.destination_area || siblingAnchor?.cluster_area || siblingAnchor?.casts?.area || '');
+      const siblingAnchorDistance = Number(siblingAnchor?.distance_km || 0);
+      const itemDistance = Number(item?.distance_km || 0);
+      let bundlePenalty = 0;
+      siblingAreas.forEach(existingArea => {
+        const direction = Number(getDirectionAffinityScore(existingArea, area) || 0);
+        if (direction <= -38 || isHardReverseMixForRoute(existingArea, area)) bundlePenalty += 1400;
+        else bundlePenalty += Math.max(0, 34 - direction) * 7;
+      });
+      if (siblingAnchorArea) {
+        const anchorDirection = Number(getDirectionAffinityScore(siblingAnchorArea, area) || 0);
+        if (anchorDirection <= -38 || isHardReverseMixForRoute(siblingAnchorArea, area)) bundlePenalty += 1800;
+        else bundlePenalty += Math.max(0, 40 - anchorDirection) * 9;
+        bundlePenalty += Math.abs(siblingAnchorDistance - itemDistance) * 0.7;
+      }
+
+      score -= bundlePenalty;
+      score -= currentLoad * 18;
+      score -= vehicleIndex * 0.01;
+      score -= index * 0.001;
+
+      if (bestVehicle === null || score > bestScore) {
+        bestVehicle = vehicle;
+        bestScore = score;
+      }
+    });
+
+    if (!bestVehicle) return;
+
+    addLoad(hour, Number(bestVehicle.id));
+    assignments.push({
+      item_id: Number(item.id),
+      vehicle_id: Number(bestVehicle.id),
+      driver_name: bestVehicle.driver_name || "",
+      actual_hour: hour,
+      manual_last_vehicle: typeof isManualLastVehicle === "function"
+        ? Boolean(isManualLastVehicle(bestVehicle.id))
+        : false
+    });
+  });
+
+  return assignments;
 }
 
 async function runAutoDispatch() {
@@ -7157,33 +3442,89 @@ async function runAutoDispatch() {
   }
 
   lastAutoDispatchRunAtMinutes = getCurrentClockMinutes();
-
   const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
-  let assignments = optimizeAssignments(activeItems, selectedVehicles, monthlyMap);
-  if (!Array.isArray(assignments)) assignments = [];
+  let assignments = [];
 
-  if (__hasEnoughVehiclesForDisplayGroups(activeItems, selectedVehicles)) {
-    assignments = __buildAssignmentsPreserveDisplayGroups(activeItems, selectedVehicles, monthlyMap);
-  } else {
-    const routeFlowAssignments = optimizeAssignmentsByRouteFlow(assignments, activeItems, selectedVehicles);
-    assignments = Array.isArray(routeFlowAssignments) ? routeFlowAssignments : assignments;
-
-    if (!Array.isArray(assignments) || !assignments.length) {
-      assignments = buildFallbackAssignments(activeItems, selectedVehicles);
-    }
+  try {
+    assignments = optimizeAssignments(activeItems, selectedVehicles, monthlyMap);
     if (!Array.isArray(assignments)) assignments = [];
 
-    const balancedAssignments = optimizeAssignmentsByDistanceBalance(assignments, activeItems, selectedVehicles, monthlyMap);
-    assignments = Array.isArray(balancedAssignments) ? balancedAssignments : assignments;
+    if (__hasEnoughVehiclesForDisplayGroups(activeItems, selectedVehicles)) {
+      const preserved = __buildAssignmentsPreserveDisplayGroups(activeItems, selectedVehicles, monthlyMap);
+      assignments = Array.isArray(preserved) ? preserved : assignments;
+    } else {
+      if (typeof optimizeAssignmentsByRouteFlow === "function") {
+      const routeFlowAssignments = optimizeAssignmentsByRouteFlow(assignments, activeItems, selectedVehicles);
+      assignments = Array.isArray(routeFlowAssignments) ? routeFlowAssignments : assignments;
+      }
 
-    const correctedAssignments = applyLastTripDistanceCorrectionToAssignments(assignments, activeItems, selectedVehicles, monthlyMap);
-    assignments = Array.isArray(correctedAssignments) ? correctedAssignments : assignments;
+      if (!Array.isArray(assignments) || !assignments.length) {
+        assignments = buildFallbackAssignments(activeItems, selectedVehicles);
+      }
+      if (!Array.isArray(assignments)) assignments = [];
 
-    const manualAssignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
-    assignments = Array.isArray(manualAssignments) ? manualAssignments : assignments;
+      const balancedAssignments = optimizeAssignmentsByDistanceBalance(assignments, activeItems, selectedVehicles, monthlyMap);
+      assignments = Array.isArray(balancedAssignments) ? balancedAssignments : assignments;
+
+      const correctedAssignments = applyLastTripDistanceCorrectionToAssignments(assignments, activeItems, selectedVehicles, monthlyMap);
+      assignments = Array.isArray(correctedAssignments) ? correctedAssignments : assignments;
+
+      const manualAssignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
+      assignments = Array.isArray(manualAssignments) ? manualAssignments : assignments;
+    }
+  } catch (error) {
+    console.error("runAutoDispatch main pipeline error:", error);
+    assignments = [];
   }
 
-  if (!Array.isArray(assignments) || !assignments.length) {
+  if ((!Array.isArray(assignments) || !assignments.length) && typeof __buildEmergencyAssignments === "function") {
+    try {
+      assignments = __buildEmergencyAssignments(activeItems, selectedVehicles);
+    } catch (fallbackError) {
+      console.error("runAutoDispatch emergency fallback error:", fallbackError);
+      assignments = [];
+    }
+  }
+
+  if (!Array.isArray(assignments)) assignments = [];
+
+  const assignedItemIds = new Set(assignments.map(a => Number(a?.item_id || 0)).filter(Boolean));
+  const unassignedItems = activeItems.filter(item => !assignedItemIds.has(Number(item?.id || 0)));
+
+  if (unassignedItems.length && typeof rebalanceUnassignedItems === "function") {
+    try {
+      const extraAssignments = rebalanceUnassignedItems(
+        unassignedItems,
+        assignments,
+        selectedVehicles,
+        monthlyMap
+      );
+      if (Array.isArray(extraAssignments) && extraAssignments.length) {
+        const existingKeys = new Set(
+          assignments.map(a => `${Number(a?.item_id || 0)}__${Number(a?.actual_hour ?? 0)}`)
+        );
+        extraAssignments.forEach(extra => {
+          const key = `${Number(extra?.item_id || 0)}__${Number(extra?.actual_hour ?? 0)}`;
+          if (!existingKeys.has(key)) {
+            assignments.push(extra);
+            existingKeys.add(key);
+          }
+        });
+      }
+    } catch (rebalanceError) {
+      console.error("runAutoDispatch rebalance error:", rebalanceError);
+    }
+  }
+
+  const finalAssignedItemIds = new Set(assignments.map(a => Number(a?.item_id || 0)).filter(Boolean));
+  const finalUnassignedCount = activeItems.filter(item => !finalAssignedItemIds.has(Number(item?.id || 0))).length;
+
+  if (!assignments.length || finalUnassignedCount > 0) {
+    console.error("auto dispatch incomplete", {
+      totalItems: activeItems.length,
+      assignedCount: finalAssignedItemIds.size,
+      unassignedCount: finalUnassignedCount
+    });
     alert("自動配車に失敗しました");
     return;
   }
@@ -7202,8 +3543,6 @@ async function runAutoDispatch() {
   renderDailyDispatchResult();
   scrollToDispatchResult();
 }
-
-
 
 function scrollToDispatchResult() {
   try {
@@ -7306,7 +3645,6 @@ function buildRotationTimelineHtmlSafe(vehicles, activeItems) {
     return "";
   }
 }
-
 
 
 function formatMinutesAsJa(totalMinutes) {
@@ -7654,7 +3992,6 @@ function buildLineResultText() {
 }
 
 
-
 function getOvernightLooseHourBucket(item) {
   const hour = Number(item?.actual_hour ?? item?.plan_hour ?? 0);
   return hour >= 0 && hour <= 5 ? "overnight" : String(hour);
@@ -7869,178 +4206,6 @@ function rebundleLongDistanceDirectionalClusters(assignments, items, vehicles, m
   return working;
 }
 
-function optimizeAssignmentsByDistanceBalance(assignments, items, vehicles, monthlyMap) {
-  const working = assignments.map(a => ({ ...a }));
-  if (!working.length || !vehicles.length) return working;
-
-  const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
-  const hourLoads = new Map();
-  const assignedDistance = new Map();
-
-  const getDistanceForAssignment = assignment => {
-    const item = itemMap.get(Number(assignment.item_id));
-    return Number(item?.distance_km ?? assignment?.distance_km ?? 0);
-  };
-
-  const rebuild = () => {
-    hourLoads.clear();
-    assignedDistance.clear();
-
-    working.forEach(a => {
-      const hourKey = `${Number(a.vehicle_id)}__${Number(a.actual_hour ?? 0)}`;
-      hourLoads.set(hourKey, Number(hourLoads.get(hourKey) || 0) + 1);
-      assignedDistance.set(
-        Number(a.vehicle_id),
-        Number(assignedDistance.get(Number(a.vehicle_id)) || 0) + getDistanceForAssignment(a)
-      );
-    });
-  };
-
-  const getProjectedDistance = vehicleId => {
-    const monthly = monthlyMap?.get(Number(vehicleId)) || { totalDistance: 0 };
-    return Number(monthly.totalDistance || 0) + Number(assignedDistance.get(Number(vehicleId)) || 0);
-  };
-
-  rebuild();
-
-  for (const assignment of working) {
-    const currentVehicleId = Number(assignment.vehicle_id);
-    const currentProjected = getProjectedDistance(currentVehicleId);
-    const item = itemMap.get(Number(assignment.item_id));
-    if (!item) continue;
-
-    const area = normalizeAreaLabel(item.destination_area || item.cluster_area || "無し");
-    const dist = Number(item.distance_km || assignment.distance_km || 0);
-    const currentVehicle = vehicles.find(v => Number(v.id) === currentVehicleId);
-    const currentCompat =
-      getStrictHomeCompatibilityScore(area, currentVehicle?.home_area || "") * 1.4 +
-      Math.max(0, getDirectionAffinityScore(area, currentVehicle?.home_area || "")) * 0.7 +
-      getAreaAffinityScore(area, currentVehicle?.home_area || "");
-
-    let bestMove = null;
-
-    for (const vehicle of vehicles) {
-      const vehicleId = Number(vehicle.id);
-      if (vehicleId === currentVehicleId) continue;
-
-      const hourKey = `${vehicleId}__${Number(assignment.actual_hour ?? 0)}`;
-      const seatCapacity = Number(vehicle.seat_capacity || 4);
-      const hourLoad = Number(hourLoads.get(hourKey) || 0);
-      if (hourLoad >= seatCapacity) continue;
-
-      const candidateProjected = getProjectedDistance(vehicleId);
-      const projectedGapImprove = currentProjected - candidateProjected;
-      if (projectedGapImprove < 10) continue;
-
-      const compat =
-        getStrictHomeCompatibilityScore(area, vehicle.home_area || "") * 1.4 +
-        Math.max(0, getDirectionAffinityScore(area, vehicle.home_area || "")) * 0.7 +
-        getAreaAffinityScore(area, vehicle.home_area || "");
-      if (isHardReverseForHome(area, vehicle.home_area || "")) continue;
-
-      const score = projectedGapImprove * 2.2 + (compat - currentCompat) * 1.1 - dist * 0.12;
-      if (!bestMove || score > bestMove.score) {
-        bestMove = { vehicle, score };
-      }
-    }
-
-    if (bestMove && bestMove.score >= 28) {
-      assignment.vehicle_id = bestMove.vehicle.id;
-      assignment.driver_name = bestMove.vehicle.driver_name || "";
-      rebuild();
-    }
-  }
-
-  return working;
-}
-
-function applyLastTripDistanceCorrectionToAssignments(assignments, items, vehicles, monthlyMap) {
-  const working = assignments.map(a => ({ ...a }));
-  if (!working.length || !vehicles.length) return working;
-
-  const itemMap = new Map((items || []).map(item => [Number(item.id), item]));
-  const dateStr = els.actualDate?.value || todayStr();
-  const defaultLastHour = getDefaultLastHour(dateStr);
-  const targetHour = working.some(a => Number(a.actual_hour ?? 0) === Number(defaultLastHour))
-    ? Number(defaultLastHour)
-    : Math.max(...working.map(a => Number(a.actual_hour ?? 0)));
-
-  const targetRows = working.filter(a => Number(a.actual_hour ?? 0) === Number(targetHour));
-  if (!targetRows.length) return working;
-
-  const manualVehicleId = getManualLastVehicleId();
-  const projectedDistanceByVehicle = new Map();
-
-  working.forEach(a => {
-    const item = itemMap.get(Number(a.item_id));
-    projectedDistanceByVehicle.set(
-      Number(a.vehicle_id),
-      Number(projectedDistanceByVehicle.get(Number(a.vehicle_id)) || 0) +
-        Number(item?.distance_km ?? a.distance_km ?? 0)
-    );
-  });
-
-  const evaluate = (vehicle, item) => {
-    const area = normalizeAreaLabel(item?.destination_area || item?.cluster_area || "無し");
-    const itemDistance = Number(item?.distance_km || 0);
-    const strict = getStrictHomeCompatibilityScore(area, vehicle?.home_area || "");
-    const direction = Math.max(0, getDirectionAffinityScore(area, vehicle?.home_area || ""));
-    const affinity = getAreaAffinityScore(area, vehicle?.home_area || "");
-    const vehicleMatch = getVehicleAreaMatchScore(vehicle, area);
-    const projectedMonthly =
-      Number(monthlyMap?.get(Number(vehicle?.id))?.totalDistance || 0) +
-      Number(projectedDistanceByVehicle.get(Number(vehicle?.id)) || 0);
-    const hardReverse = isHardReverseForHome(area, vehicle?.home_area || "");
-
-    let score =
-      strict * 3.2 +
-      direction * 1.6 +
-      affinity * 1.2 +
-      vehicleMatch * 0.25 +
-      itemDistance * (strict >= 78 ? 0.35 : strict >= 52 ? 0.15 : 0.05);
-
-    score -= projectedMonthly * 0.04;
-    if (hardReverse) score -= 9999;
-    if (Number(vehicle?.id) === Number(manualVehicleId) && strict >= 52 && !hardReverse) score += 38;
-    return score;
-  };
-
-  for (const target of targetRows) {
-    const item = itemMap.get(Number(target.item_id));
-    if (!item) continue;
-
-    const currentVehicle = vehicles.find(v => Number(v.id) === Number(target.vehicle_id));
-    const currentScore = evaluate(currentVehicle, item);
-    let best = { vehicle: currentVehicle, score: currentScore };
-
-    for (const vehicle of vehicles) {
-      const seatCapacity = Number(vehicle.seat_capacity || 4);
-      const load = working.filter(
-        a =>
-          Number(a.vehicle_id) === Number(vehicle.id) &&
-          Number(a.actual_hour ?? 0) === Number(targetHour) &&
-          Number(a.item_id) !== Number(target.item_id)
-      ).length;
-      if (load >= seatCapacity) continue;
-
-      const score = evaluate(vehicle, item);
-      if (score > best.score) best = { vehicle, score };
-    }
-
-    if (
-      best.vehicle &&
-      Number(best.vehicle.id) !== Number(target.vehicle_id) &&
-      best.score >= currentScore + 24
-    ) {
-      target.vehicle_id = best.vehicle.id;
-      target.driver_name = best.vehicle.driver_name || "";
-      target.manual_last_vehicle = Number(best.vehicle.id) === Number(manualVehicleId);
-    }
-  }
-
-  return working;
-}
-
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
 
@@ -8206,21 +4371,6 @@ function renderDailyDispatchResult() {
   }
 }
 
-function buildCopyResultText() {
-  return buildLineResultText();
-}
-
-async function copyDispatchResult() {
-  const text = buildCopyResultText();
-  try {
-    await navigator.clipboard.writeText(text);
-    alert("結果をコピーしました");
-  } catch (error) {
-    console.error(error);
-    alert("コピーに失敗しました");
-  }
-}
-
 async function clearAllActuals() {
   if (!window.confirm("この日のActualを全消去しますか？")) return;
   if (!currentDispatchId) return;
@@ -8244,37 +4394,6 @@ async function clearAllActuals() {
   await addHistory(currentDispatchId, null, "clear_actual", "Actualを全消去");
   await loadActualsByDate(els.actualDate?.value || todayStr());
   await loadPlansByDate(els.planDate?.value || todayStr());
-}
-
-async function loadDailyReports(dateStr) {
-  const monthKey = getMonthKey(dateStr);
-  const monthStart = `${monthKey}-01`;
-  const start = new Date(monthStart);
-  const next = new Date(start.getFullYear(), start.getMonth() + 1, 1);
-  const nextStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
-
-  const { data, error } = await supabaseClient
-    .from("vehicle_daily_reports")
-    .select(`
-      *,
-      vehicles (
-        id,
-        plate_number,
-        driver_name
-      )
-    `)
-    .gte("report_date", monthStart)
-    .lt("report_date", nextStr)
-    .order("report_date", { ascending: true });
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  currentDailyReportsCache = data || [];
-  renderHomeMonthlyVehicleList();
-  renderVehiclesTable();
 }
 
 async function confirmDailyToMonthly() {
@@ -8321,7 +4440,7 @@ async function confirmDailyToMonthly() {
           driver_name: info.driver_name || null,
           distance_km: Number(info.distance.toFixed(1)),
           note: "当日運用の完了データから更新",
-          created_by: currentUser.id
+          created_by: getCurrentUserIdSafe()
         })
         .eq("id", existing.id);
 
@@ -8335,7 +4454,7 @@ async function confirmDailyToMonthly() {
           driver_name: info.driver_name || null,
           distance_km: Number(info.distance.toFixed(1)),
           note: "当日運用の完了データから自動反映",
-          created_by: currentUser.id
+          created_by: getCurrentUserIdSafe()
         });
 
       if (insertError) console.error(insertError);
@@ -8382,42 +4501,10 @@ async function addHistory(dispatchId, itemId, action, message) {
       item_id: itemId,
       action,
       message,
-      acted_by: currentUser.id
+      acted_by: getCurrentUserIdSafe()
     });
 
   if (error) console.error(error);
-}
-
-async function loadHistory() {
-  const { data, error } = await supabaseClient
-    .from("dispatch_history")
-    .select("*")
-    .order("id", { ascending: false })
-    .limit(50);
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  if (!els.historyList) return;
-  els.historyList.innerHTML = "";
-
-  if (!data?.length) {
-    els.historyList.innerHTML = `<div class="muted">履歴はありません</div>`;
-    return;
-  }
-
-  data.forEach(row => {
-    const div = document.createElement("div");
-    div.className = "history-item";
-    div.innerHTML = `
-      <h4>${escapeHtml(row.action)}</h4>
-      <p>${escapeHtml(row.message || "")}</p>
-      <p class="muted">${escapeHtml(formatDateTimeJa(row.created_at))}</p>
-    `;
-    els.historyList.appendChild(div);
-  });
 }
 
 async function fetchAllTableRows(tableName, orderColumn = "id") {
@@ -8583,7 +4670,7 @@ async function importAllDataFromFile() {
     // 1. casts
     for (const oldRow of backup.casts || []) {
       const row = stripMetaForInsert(oldRow);
-      if (!row.created_by) row.created_by = currentUser.id;
+      if (!row.created_by) row.created_by = getCurrentUserIdSafe();
 
       const { data, error } = await supabaseClient
         .from("casts")
@@ -8598,7 +4685,7 @@ async function importAllDataFromFile() {
     // 2. vehicles
     for (const oldRow of backup.vehicles || []) {
       const row = stripMetaForInsert(oldRow);
-      if (!row.created_by) row.created_by = currentUser.id;
+      if (!row.created_by) row.created_by = getCurrentUserIdSafe();
 
       const { data, error } = await supabaseClient
         .from("vehicles")
@@ -8613,7 +4700,7 @@ async function importAllDataFromFile() {
     // 3. dispatches
     for (const oldRow of backup.dispatches || []) {
       const row = stripMetaForInsert(oldRow);
-      if (!row.created_by) row.created_by = currentUser.id;
+      if (!row.created_by) row.created_by = getCurrentUserIdSafe();
 
       const { data, error } = await supabaseClient
         .from("dispatches")
@@ -8629,7 +4716,7 @@ async function importAllDataFromFile() {
     for (const oldRow of backup.dispatch_plans || []) {
       const row = stripMetaForInsert(oldRow);
       row.cast_id = castIdMap.get(Number(oldRow.cast_id)) || null;
-      if (!row.created_by) row.created_by = currentUser.id;
+      if (!row.created_by) row.created_by = getCurrentUserIdSafe();
 
       const { data, error } = await supabaseClient
         .from("dispatch_plans")
@@ -8664,7 +4751,7 @@ async function importAllDataFromFile() {
     for (const oldRow of backup.vehicle_daily_reports || []) {
       const row = stripMetaForInsert(oldRow);
       row.vehicle_id = vehicleIdMap.get(Number(oldRow.vehicle_id)) || null;
-      if (!row.created_by) row.created_by = currentUser.id;
+      if (!row.created_by) row.created_by = getCurrentUserIdSafe();
 
       const { error } = await supabaseClient
         .from("vehicle_daily_reports")
@@ -8684,7 +4771,7 @@ async function importAllDataFromFile() {
         oldRow.item_id != null
           ? (itemIdMap.get(Number(oldRow.item_id)) || null)
           : null;
-      if (!row.acted_by) row.acted_by = currentUser.id;
+      if (!row.acted_by) row.acted_by = getCurrentUserIdSafe();
 
       const { error } = await supabaseClient
         .from("dispatch_history")
@@ -8790,29 +4877,6 @@ async function resetAllDataDanger() {
     console.error("resetAllDataDanger error:", err);
     alert("全消去中にエラーが発生しました");
   }
-}
-
-async function loadHomeAndAll() {
-  const dateStr = els.dispatchDate?.value || todayStr();
-
-  if (els.dispatchDate) els.dispatchDate.value = dateStr;
-  if (els.planDate) els.planDate.value = dateStr;
-  if (els.actualDate) els.actualDate.value = dateStr;
-  if (els.mileageReportStartDate && !els.mileageReportStartDate.value) els.mileageReportStartDate.value = getMonthStartStr(dateStr);
-  if (els.mileageReportEndDate && !els.mileageReportEndDate.value) els.mileageReportEndDate.value = dateStr;
-
-  await loadCasts();
-  await loadVehicles();
-  await loadPlansByDate(dateStr);
-  await loadActualsByDate(dateStr);
-  await loadDailyReports(dateStr);
-  await loadHistory();
-
-  renderDailyVehicleChecklist();
-  renderDailyMileageInputs();
-  renderDailyDispatchResult();
-  renderHomeSummary();
-  renderHomeMonthlyVehicleList();
 }
 
 function renderDailyMileageInputs() {
@@ -8932,7 +4996,7 @@ async function saveDailyMileageReports() {
           driver_name: vehicle.driver_name || null,
           distance_km: distanceKm,
           note,
-          created_by: currentUser.id
+          created_by: getCurrentUserIdSafe()
         })
         .eq("id", existing.id);
 
@@ -8950,7 +5014,7 @@ async function saveDailyMileageReports() {
           driver_name: vehicle.driver_name || null,
           distance_km: distanceKm,
           note,
-          created_by: currentUser.id
+          created_by: getCurrentUserIdSafe()
         });
 
       if (insertError) {
@@ -8974,6 +5038,7 @@ async function syncDateAndReloadFromDispatchDate() {
   const dateStr = els.dispatchDate?.value || todayStr();
   if (els.planDate) els.planDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
+  syncMileageReportRange(dateStr, true);
 
   await loadPlansByDate(dateStr);
   await loadActualsByDate(dateStr);
@@ -8986,6 +5051,7 @@ async function syncDateAndReloadFromPlanDate() {
   const dateStr = els.planDate?.value || todayStr();
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.actualDate) els.actualDate.value = dateStr;
+  syncMileageReportRange(dateStr, true);
 
   await loadPlansByDate(dateStr);
   await loadActualsByDate(dateStr);
@@ -8997,6 +5063,7 @@ async function syncDateAndReloadFromActualDate() {
   const dateStr = els.actualDate?.value || todayStr();
   if (els.dispatchDate) els.dispatchDate.value = dateStr;
   if (els.planDate) els.planDate.value = dateStr;
+  syncMileageReportRange(dateStr, true);
 
   await loadPlansByDate(dateStr);
   await loadActualsByDate(dateStr);
@@ -9019,7 +5086,7 @@ function bindPlanAndActualFormEvents() {
 }
 
 function bindDispatchEvents() {
-  if (els.optimizeBtn) els.optimizeBtn.addEventListener("click", runAutoDispatch);
+  if (els.optimizeBtn) els.optimizeBtn.addEventListener("click", () => (typeof window.runAutoDispatchV1 === "function" ? window.runAutoDispatchV1() : runAutoDispatch()));
   if (els.simulationSlotSelect) els.simulationSlotSelect.addEventListener("change", () => {
     if (suppressSimulationSlotChange || isRefreshingHybridUI) return;
     simulationSlotHour = Number(els.simulationSlotSelect.value || getOperationBaseHour());
@@ -9033,7 +5100,31 @@ function bindDispatchEvents() {
   if (els.runSimulationDispatchBtn) els.runSimulationDispatchBtn.addEventListener("click", runSimulationDispatchPreview);
 }
 
+let postDispatchEventsBound = false;
+let dashboardInitialized = false;
+let mileageSyncListenersBound = false;
+
+function bindMileageReportSyncListeners() {
+  if (mileageSyncListenersBound) return;
+  mileageSyncListenersBound = true;
+
+  const syncMileageReport = () => {
+    syncMileageReportRange(els.dispatchDate?.value || todayStr(), true);
+  };
+
+  window.addEventListener("load", syncMileageReport, { once: true });
+  window.addEventListener("pageshow", syncMileageReport, { once: true });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      syncMileageReport();
+    }
+  });
+}
+
 function bindPostDispatchEvents() {
+  if (postDispatchEventsBound) return;
+  postDispatchEventsBound = true;
+
   if (els.copyResultBtn) els.copyResultBtn.addEventListener("click", copyDispatchResult);
   if (els.confirmDailyBtn) els.confirmDailyBtn.addEventListener("click", confirmDailyToMonthly);
   if (els.clearActualBtn) els.clearActualBtn.addEventListener("click", clearAllActuals);
@@ -9093,8 +5184,20 @@ function setupEvents() {
   els.exportPlansCsvBtn?.addEventListener("click", exportPlansCsv);
   els.importPlansCsvBtn?.addEventListener("click", triggerImportPlansCsv);
   els.plansCsvFileInput?.addEventListener("change", importPlansCsvFile);
-  els.previewMileageReportBtn?.addEventListener("click", previewDriverMileageReport);
+  els.previewMileageReportBtn?.addEventListener("click", async () => {
+    await previewDriverMileageReport();
+    await refreshHomeMonthlyVehicleList();
+    renderVehiclesTable();
+  });
   els.exportMileageReportBtn?.addEventListener("click", exportDriverMileageReportXlsx);
+  els.mileageReportStartDate?.addEventListener("change", async () => {
+    await refreshHomeMonthlyVehicleList();
+    renderVehiclesTable();
+  });
+  els.mileageReportEndDate?.addEventListener("change", async () => {
+    await refreshHomeMonthlyVehicleList();
+    renderVehiclesTable();
+  });
 
   els.savePlanBtn?.addEventListener("click", savePlan);
   els.guessPlanAreaBtn?.addEventListener("click", guessPlanArea);
@@ -9117,7 +5220,6 @@ function setupEvents() {
   els.planDate?.addEventListener("change", syncDateAndReloadFromPlanDate);
   els.actualDate?.addEventListener("change", syncDateAndReloadFromActualDate);
 
-  els.copyResultBtn?.addEventListener("click", copyDispatchResult);
   els.sendLineBtn?.addEventListener("click", sendDispatchResultToLine);
   els.saveDailyMileageBtn?.addEventListener("click", saveDailyMileageReports);
 
@@ -9132,13 +5234,13 @@ function setupEvents() {
   });
 }
 
-function sendDispatchResultToLine() {
-  const text = buildCopyResultText();
-  const url = "https://line.me/R/msg/text/?" + encodeURIComponent(text);
-  window.open(url, "_blank");
-}
-
 document.addEventListener("DOMContentLoaded", async () => {
+  if (dashboardInitialized) {
+    console.warn("[dashboard] initialization skipped: already initialized");
+    return;
+  }
+  dashboardInitialized = true;
+
   try {
     console.log("SUPABASE_URL:", SUPABASE_URL);
 
@@ -9146,6 +5248,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!ok) return;
 
     ensureCastTravelMinutesUi();
+    initializeMileageReportDefaultDates();
     setupTabs();
     setupEvents();
 
@@ -9162,8 +5265,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.dispatchDate) els.dispatchDate.value = today;
     if (els.planDate) els.planDate.value = today;
     if (els.actualDate) els.actualDate.value = today;
+    forceResetMileageReportInputs(today);
 
+    syncScheduleRendererDeps();
     await loadHomeAndAll();
+    syncMileageReportRange(today, true);
+    window.requestAnimationFrame(() => syncMileageReportRange(els.dispatchDate?.value || todayStr(), true));
+    window.setTimeout(() => syncMileageReportRange(els.dispatchDate?.value || todayStr(), true), 0);
+    window.setTimeout(() => syncMileageReportRange(els.dispatchDate?.value || todayStr(), true), 120);
+    bindMileageReportSyncListeners();
     renderManualLastVehicleInfo();
   } catch (err) {
     console.error("dashboard init error:", err);
@@ -9421,7 +5531,6 @@ runAutoDispatch = async function() {
   return result;
 };
 /* ===== THEMIS v3.7 配車AI強化版 patch end ===== */
-
 
 
 /* ===== THEMIS v5.4 配車AI強化版 patch start ===== */
@@ -9720,6 +5829,36 @@ optimizeAssignmentsByDistanceBalance = function(assignments, items, vehicles, mo
   };
 
   const scoreForVehicle = (vehicle, item, currentHour) => {
+  const maxDetourKm = 10;
+  try {
+    const candidatePoint = typeof getThemisV54RowPoint === "function" ? getThemisV54RowPoint(item) : null;
+    const siblingAssignmentsForDetour = working.filter(a =>
+      Number(a.vehicle_id) === Number(vehicle?.id) &&
+      Number(a.actual_hour ?? 0) === Number(currentHour ?? 0) &&
+      Number(a.item_id) !== Number(item?.id)
+    );
+    const siblingItemsForDetour = siblingAssignmentsForDetour
+      .map(a => itemMap.get(Number(a.item_id)))
+      .filter(Boolean);
+    const siblingPoints = siblingItemsForDetour
+      .map(row => (typeof getThemisV54RowPoint === "function" ? getThemisV54RowPoint(row) : null))
+      .filter(Boolean);
+
+    if (candidatePoint && siblingPoints.length) {
+      const avgLat = siblingPoints.reduce((sum, pt) => sum + Number(pt.lat || 0), 0) / siblingPoints.length;
+      const avgLng = siblingPoints.reduce((sum, pt) => sum + Number(pt.lng || 0), 0) / siblingPoints.length;
+      const detourKm = typeof estimateRoadKmBetweenPoints === "function"
+        ? Number(estimateRoadKmBetweenPoints(avgLat, avgLng, candidatePoint.lat, candidatePoint.lng) || 0)
+        : Number(Math.sqrt(((candidatePoint.lat - avgLat) ** 2) + ((candidatePoint.lng - avgLng) ** 2)) * 111 || 0);
+
+      if (detourKm > maxDetourKm) {
+        return -Infinity;
+      }
+    }
+  } catch (bundleGuardError) {
+    console.warn("bundle protection skipped:", bundleGuardError);
+  }
+
     const area = getThemisV54RowArea(item);
     const compat =
       getStrictHomeCompatibilityScore(area, vehicle?.home_area || "") * 1.7 +
@@ -9730,7 +5869,37 @@ optimizeAssignmentsByDistanceBalance = function(assignments, items, vehicles, mo
     const projectedAvg = getThemisV54VehicleProjectedAvg(vehicle?.id, monthlyMap, assignedDistance, assignedCount);
     const currentHourLoad = Number(hourLoads.get(`${Number(vehicle?.id)}__${Number(currentHour ?? 0)}`) || 0);
 
-    return compat - projectedAvg * 1.35 - currentHourLoad * 18;
+    const siblingAssignments = working.filter(a => Number(a.vehicle_id) === Number(vehicle?.id) && Number(a.actual_hour ?? 0) === Number(currentHour ?? 0) && Number(a.item_id) !== Number(item?.id));
+    const siblingItems = siblingAssignments.map(a => itemMap.get(Number(a.item_id))).filter(Boolean);
+    const siblingAreas = siblingItems.map(s => getThemisV54RowArea(s)).filter(Boolean);
+    const siblingAnchor = [...siblingItems].sort((a, b) => Number(b?.distance_km || 0) - Number(a?.distance_km || 0))[0] || null;
+    const siblingAnchorArea = siblingAnchor ? getThemisV54RowArea(siblingAnchor) : "";
+    const siblingAnchorDistance = Number(siblingAnchor?.distance_km || 0);
+    const itemDistance = Number(item?.distance_km || 0);
+
+    let bundlePenalty = 0;
+    siblingAreas.forEach(existingArea => {
+      const direction = Number(getDirectionAffinityScore(area, existingArea) || 0);
+      const affinity = Number(getAreaAffinityScore(area, existingArea) || 0);
+      if (direction <= -38 || isHardReverseMixForRoute(area, existingArea)) {
+        bundlePenalty += 1600;
+      } else {
+        bundlePenalty += Math.max(0, 36 - direction) * 8;
+        bundlePenalty += Math.max(0, 55 - affinity) * 1.5;
+      }
+    });
+
+    if (siblingAnchorArea) {
+      const anchorDirection = Number(getDirectionAffinityScore(area, siblingAnchorArea) || 0);
+      if (anchorDirection <= -38 || isHardReverseMixForRoute(area, siblingAnchorArea)) {
+        bundlePenalty += 2200;
+      } else {
+        bundlePenalty += Math.max(0, 42 - anchorDirection) * 10;
+        bundlePenalty += Math.abs(itemDistance - siblingAnchorDistance) * 0.8;
+      }
+    }
+
+    return compat - projectedAvg * 1.35 - currentHourLoad * 18 - bundlePenalty;
   };
 
   rebuild();
@@ -9900,12 +6069,13 @@ runAutoDispatch = async function() {
 
   function v551VehicleStateSummary(assignments, vehicles, hour) {
     const map = new Map();
-    (vehicles || []).forEach(v => map.set(Number(v.id), { count:0, areas:[], vehicle:v }));
+    (vehicles || []).forEach(v => map.set(Number(v.id), { count:0, areas:[], rows:[], vehicle:v }));
     (assignments || []).filter(r => Number(r?.actual_hour ?? 0) === Number(hour)).forEach(r => {
       const id = Number(r.vehicle_id || 0);
       if (!map.has(id)) return;
       const state = map.get(id);
       state.count += 1;
+      state.rows.push(r);
       const area = normalizeAreaLabel(r.destination_area || r.cluster_area || r.planned_area || r.casts?.area || '');
       if (area) state.areas.push(area);
     });
@@ -9923,8 +6093,9 @@ runAutoDispatch = async function() {
   }
 
   function v551PickBundleVehicle(bundleRows, vehicleStates, vehicles, monthlyMap) {
-    const first = bundleRows[0];
-    const rowArea = normalizeAreaLabel(first.destination_area || first.cluster_area || first.planned_area || first.casts?.area || '');
+    const farthestBundleRow = [...(bundleRows || [])].sort((a, b) => Number(b?.distance_km || 0) - Number(a?.distance_km || 0))[0] || bundleRows[0];
+    const rowArea = normalizeAreaLabel(farthestBundleRow?.destination_area || farthestBundleRow?.cluster_area || farthestBundleRow?.planned_area || farthestBundleRow?.casts?.area || '');
+    const rowDistance = Number(farthestBundleRow?.distance_km || 0);
     let best = null;
     for (const [vehicleId, state] of vehicleStates.entries()) {
       const vehicle = state.vehicle || (vehicles || []).find(v => Number(v.id) === Number(vehicleId));
@@ -9932,20 +6103,47 @@ runAutoDispatch = async function() {
       const capacity = Number(vehicle.seat_capacity || 4);
       if (state.count + bundleRows.length > capacity) continue;
       if (!bundleRows.every(r => v551CanMoveIntoVehicle(r, state, vehicle))) continue;
+
       let score = 0;
       const areas = state.areas || [];
+      const existingRows = Array.isArray(state.rows) ? state.rows : [];
+      const existingAnchorRow = [...existingRows].sort((a, b) => Number(b?.distance_km || 0) - Number(a?.distance_km || 0))[0] || null;
+      const existingAnchorArea = normalizeAreaLabel(existingAnchorRow?.destination_area || existingAnchorRow?.cluster_area || existingAnchorRow?.planned_area || existingAnchorRow?.casts?.area || '');
+      const existingAnchorDistance = Number(existingAnchorRow?.distance_km || 0);
+
       if (areas.length) {
         for (const area of areas) {
-          if (v551IsFriendlyDirection(rowArea, area)) score += 120;
-          if (v551IsStrongReverse(rowArea, area)) score -= 400;
+          const direction = Number(getDirectionAffinityScore(rowArea, area) || 0);
+          const affinity = Number(getAreaAffinityScore(rowArea, area) || 0);
+          if (v551IsStrongReverse(rowArea, area)) {
+            score -= 1200;
+          } else {
+            score += direction * 1.8;
+            score += affinity * 0.7;
+            if (v551IsFriendlyDirection(rowArea, area)) score += 140;
+          }
         }
       } else {
-        score += 15;
+        score += 20;
       }
+
+      if (existingAnchorArea) {
+        const anchorDir = Number(getDirectionAffinityScore(rowArea, existingAnchorArea) || 0);
+        const anchorAffinity = Number(getAreaAffinityScore(rowArea, existingAnchorArea) || 0);
+        if (v551IsStrongReverse(rowArea, existingAnchorArea)) {
+          score -= 1800;
+        } else {
+          score += anchorDir * 4.2;
+          score += anchorAffinity * 1.2;
+        }
+        score -= Math.abs(existingAnchorDistance - rowDistance) * 0.9;
+      }
+
       const monthly = monthlyMap.get(Number(vehicleId)) || {};
-      const avg = Number(monthly.averageDistance || 0);
+      const avg = Number(monthly.averageDistance || monthly.avgDistance || 0);
       score -= avg * 0.08;
-      score -= Number(state.count || 0) * 4;
+      score -= Number(state.count || 0) * 5;
+
       if (!best || score > best.score) best = { vehicleId:Number(vehicleId), score };
     }
     return best?.vehicleId || null;
@@ -10218,7 +6416,7 @@ runAutoDispatch = async function() {
     return rows;
   };
 
-  const _THEMIS_V553_BASE_applyManualLastVehicleToAssignments = applyManualLastVehicleToAssignments;
+  const _THEMIS_V553_BASE_applyManualLastVehicleToAssignments = (typeof applyManualLastVehicleToAssignments === "function" ? applyManualLastVehicleToAssignments : function(assignments){ return Array.isArray(assignments) ? assignments : []; });
   applyManualLastVehicleToAssignments = function(assignments, vehicles) {
     let rows = _THEMIS_V553_BASE_applyManualLastVehicleToAssignments.apply(this, arguments);
     if (!Array.isArray(rows)) rows = Array.isArray(assignments) ? assignments : [];
@@ -10439,3 +6637,31 @@ window.renderDailyDispatchResult = function(){
   };
 })();
 /* ===== THEMIS v6.9.13 drop-order unify hotfix end ===== */
+
+
+// ===== THEMIS field trial compatibility shim =====
+function optimizeAssignments(items, vehicles, monthlyMap, options = {}) {
+  if (!window.DispatchCore || typeof window.DispatchCore.optimizeAssignments !== 'function') {
+    console.error('DispatchCore.optimizeAssignments is not available');
+    return [];
+  }
+  const safeItems = Array.isArray(items) ? items : [];
+  const safeVehicles = Array.isArray(vehicles)
+    ? vehicles
+    : (vehicles && typeof vehicles === 'object')
+      ? Object.values(vehicles)
+      : [];
+  const safeMonthlyMap = monthlyMap instanceof Map ? monthlyMap : new Map();
+  return window.DispatchCore.optimizeAssignments(safeItems, safeVehicles, safeMonthlyMap, options || {});
+}
+
+function callDispatchCoreSafe(items, vehicles, monthlyMap, options = {}) {
+  return optimizeAssignments(items, vehicles, monthlyMap, options);
+}
+
+function runSimulationDispatchPreview() {
+  if (typeof runAutoDispatch === 'function') {
+    return runAutoDispatch();
+  }
+  return [];
+}

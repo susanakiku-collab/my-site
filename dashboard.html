@@ -317,11 +317,11 @@
           <div class="form-grid three-col">
             <div class="field">
               <label for="mileageReportStartDate">開始日</label>
-              <input id="mileageReportStartDate" type="date" />
+              <input id="mileageReportStartDate" type="date" autocomplete="off" />
             </div>
             <div class="field">
               <label for="mileageReportEndDate">終了日</label>
-              <input id="mileageReportEndDate" type="date" />
+              <input id="mileageReportEndDate" type="date" autocomplete="off" />
             </div>
             <div class="field">
               <label>&nbsp;</label>
@@ -659,6 +659,27 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="config.js"></script>
-  <script src="dashboard.js?v=v3-2-ui-tidy-v1-map"></script>
+  <script src="format.js"></script>
+  <script src="time.js"></script>
+  <script src="utils.js"></script>
+  <script src="storage.js"></script>
+  <script src="geo.js"></script>
+  <script src="grouping.js"></script>
+  <script src="renderSchedule.js"></script>
+  <script src="renderActual.js"></script>
+  <script src="copyLine.js"></script>
+  <script src="supabaseService.js"></script>
+  <script src="authService.js"></script>
+  <script src="simulation.js"></script>
+  <script src="lastTrip.js"></script>
+  <script src="dispatchCore.js"></script>
+  <script src="dashboard.js"></script>
+  <script src="dispatch_v1.js"></script>
+  <script src="dispatch_v1_1.js"></script>
+
+
+
+
+
 </body>
 </html>
