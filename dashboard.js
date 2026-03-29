@@ -46,7 +46,7 @@ let isRefreshingHybridUI = false;
 let suppressSimulationSlotChange = false;
 const ENABLE_DISTANCE_REBALANCE = false;
 const ENFORCE_AREA_PRIORITY_STRICT = true;
-const ENABLE_DISPLAY_GROUP_FORCE_BRANCH = false;
+const ENABLE_DISPLAY_GROUP_FORCE_BRANCH = true;
 
 const els = {
   plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
@@ -3133,14 +3133,31 @@ async function applyAutoDispatchAssignments(assignments) {
 
 
 function __getDisplayGroupAreaLabel(item) {
-  const area = normalizeAreaLabel(
+  const rawGroup =
+    item?.display_group ||
+    item?.area_group ||
+    item?.group_area ||
+    item?.actual_group ||
+    item?.group ||
     item?.destination_area ||
     item?.cluster_area ||
     item?.planned_area ||
     item?.casts?.area ||
-    "無し"
-  );
-  return getAreaDisplayGroup(area);
+    "無し";
+  const area = normalizeAreaLabel(rawGroup);
+  if (typeof THEMIS_DISPLAY_GROUPS !== "undefined" && THEMIS_DISPLAY_GROUPS && THEMIS_DISPLAY_GROUPS.has(area)) return area;
+  return getAreaDisplayGroup(area) || area || "東京方面";
+}
+
+function __sortRowsForGroupCapacitySplit(rows) {
+  const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  return [...safeRows].sort((a, b) => {
+    const dist = Number(b?.distance_km || 0) - Number(a?.distance_km || 0);
+    if (dist !== 0) return dist;
+    const tm = Number(b?.travel_minutes ?? b?.casts?.travel_minutes ?? 0) - Number(a?.travel_minutes ?? a?.casts?.travel_minutes ?? 0);
+    if (tm !== 0) return tm;
+    return Number(a?.id || 0) - Number(b?.id || 0);
+  });
 }
 
 function __hasEnoughVehiclesForDisplayGroups(items, vehicles) {
@@ -3211,6 +3228,9 @@ function __buildAssignmentsPreserveDisplayGroups(items, vehicles, monthlyMap) {
 
     const groupEntries = [...byGroup.entries()].sort((a, b) => {
       if (b[1].length !== a[1].length) return b[1].length - a[1].length;
+      const aMax = Math.max(...a[1].map(row => Number(row?.distance_km || 0)), 0);
+      const bMax = Math.max(...b[1].map(row => Number(row?.distance_km || 0)), 0);
+      if (bMax !== aMax) return bMax - aMax;
       return String(a[0] || "").localeCompare(String(b[0] || ""), "ja");
     });
 
@@ -3224,7 +3244,7 @@ function __buildAssignmentsPreserveDisplayGroups(items, vehicles, monthlyMap) {
     }));
 
     for (const [group, rows] of groupEntries) {
-      let remaining = [...sortItemsByNearestRoute(rows)];
+      let remaining = __sortRowsForGroupCapacitySplit(rows);
 
       while (remaining.length) {
         const candidates = vehicleState
@@ -3306,7 +3326,7 @@ async function assignUnassignedActualsForToday() {
     }
 
     if (!assignments.length) {
-      assignments = buildFallbackAssignments(unassignedItems, selectedVehicles);
+      assignments = __buildEmergencyAssignments(unassignedItems, selectedVehicles);
     }
 
     assignments = optimizeAssignmentsByDistanceBalance(assignments, unassignedItems, selectedVehicles, monthlyMap);
@@ -3459,7 +3479,7 @@ async function runAutoDispatch() {
       }
 
       if (!Array.isArray(assignments) || !assignments.length) {
-        assignments = buildFallbackAssignments(activeItems, selectedVehicles);
+        assignments = __buildEmergencyAssignments(activeItems, selectedVehicles);
       }
       if (!Array.isArray(assignments)) assignments = [];
 
@@ -4494,11 +4514,13 @@ async function resetMonthlySummary() {
 }
 
 async function addHistory(dispatchId, itemId, action, message) {
+  const safeDispatchId = Number.isFinite(Number(dispatchId)) && Number(dispatchId) > 0 ? Number(dispatchId) : null;
+  const safeItemId = Number.isFinite(Number(itemId)) && Number(itemId) > 0 ? Number(itemId) : null;
   const { error } = await supabaseClient
     .from("dispatch_history")
     .insert({
-      dispatch_id: dispatchId,
-      item_id: itemId,
+      dispatch_id: safeDispatchId,
+      item_id: safeItemId,
       action,
       message,
       acted_by: getCurrentUserIdSafe()
@@ -5697,7 +5719,7 @@ calcVehicleRotationForecastGlobal = function(vehicle, orderedRows) {
   const summary = getThemisV54TravelSummary(rows);
   const primaryZone = getDistanceZoneInfoGlobal(Math.max(routeDistanceKm, returnDistanceKm), representativeArea);
 
-  const departDelayMinutes = getExpectedDepartureDelayMinutes(baseHour);
+  const departDelayMinutes = (typeof getExpectedDepartureDelayMinutes === "function" ? getExpectedDepartureDelayMinutes(baseHour) : 0);
   const predictedDepartureAbs = baseHour * 60 + departDelayMinutes;
   const predictedReturnAbs = predictedDepartureAbs + Number(summary.totalMinutes || 0);
   const predictedReadyAbs = predictedReturnAbs + 1;
@@ -6665,3 +6687,301 @@ function runSimulationDispatchPreview() {
   }
   return [];
 }
+
+
+/* ===== THEMIS monthly UI sync hotfix v4 start ===== */
+(function(){
+  let __themisMonthlyUiRows = [];
+
+  function __themisMonthRange(dateStr) {
+    const base = String(dateStr || (els?.dispatchDate?.value || todayStr?.() || new Date().toISOString().slice(0,10)));
+    const monthKey = typeof getMonthKey === 'function' ? getMonthKey(base) : base.slice(0, 7);
+    return { startDate: `${monthKey}-01`, endDate: base, baseDate: base };
+  }
+
+  function __themisResolveVehicleId(row) {
+    const directId = Number(row?.vehicle_id || row?.vehicles?.id || 0);
+    if (directId > 0) return directId;
+    const reportDriver = String(row?.driver_name || row?.vehicles?.driver_name || '').trim();
+    const reportPlate = String(row?.plate_number || row?.vehicles?.plate_number || '').trim();
+    const matched = (Array.isArray(allVehiclesCache) ? allVehiclesCache : []).find(vehicle => {
+      const vehicleDriver = String(vehicle?.driver_name || '').trim();
+      const vehiclePlate = String(vehicle?.plate_number || '').trim();
+      return (reportDriver && vehicleDriver && reportDriver === vehicleDriver) || (reportPlate && vehiclePlate && reportPlate === vehiclePlate);
+    });
+    return Number(matched?.id || 0);
+  }
+
+  function __themisNormalizeMonthlyRows(rows) {
+    return (Array.isArray(rows) ? rows : []).map(row => ({
+      ...row,
+      vehicle_id: __themisResolveVehicleId(row),
+      report_date: row?.report_date || '',
+      driver_name: row?.driver_name || row?.vehicles?.driver_name || '',
+      plate_number: row?.plate_number || row?.vehicles?.plate_number || '',
+      distance_km: Number(row?.distance_km || 0)
+    }));
+  }
+
+  async function __themisFetchMonthlyRows(baseDate) {
+    const range = __themisMonthRange(baseDate);
+    if (typeof fetchDriverMileageRows === 'function') {
+      try {
+        const rows = await fetchDriverMileageRows(range.startDate, range.endDate);
+        return __themisNormalizeMonthlyRows(rows);
+      } catch (error) {
+        console.error('fetchDriverMileageRows monthly hotfix error:', error);
+      }
+    }
+
+    if (supabaseClient?.from) {
+      try {
+        const { data, error } = await supabaseClient
+          .from('vehicle_daily_reports')
+          .select('vehicle_id, driver_name, distance_km, report_date, note, vehicles(id, plate_number, driver_name)')
+          .gte('report_date', range.startDate)
+          .lte('report_date', range.endDate)
+          .order('report_date', { ascending: true });
+        if (error) throw error;
+        return __themisNormalizeMonthlyRows(data);
+      } catch (error) {
+        console.error('supabase monthly hotfix fetch error:', error);
+      }
+    }
+
+    return __themisNormalizeMonthlyRows(currentDailyReportsCache);
+  }
+
+  function __themisStatsMap(rows, baseDate) {
+    return getVehicleMonthlyStatsMap(__themisNormalizeMonthlyRows(rows), typeof getMonthKey === 'function' ? getMonthKey(baseDate || (els?.dispatchDate?.value || todayStr())) : String(baseDate || '').slice(0, 7));
+  }
+
+  async function __themisRefreshMonthlyUi(baseDate) {
+    const rows = await __themisFetchMonthlyRows(baseDate);
+    __themisMonthlyUiRows = rows;
+    try { currentDailyReportsCache = rows; } catch(e) {}
+    if (typeof renderHomeMonthlyVehicleList === 'function') renderHomeMonthlyVehicleList(rows);
+    if (typeof renderVehiclesTable === 'function') renderVehiclesTable();
+    if (typeof renderDailyVehicleChecklist === 'function') renderDailyVehicleChecklist();
+  }
+
+  renderHomeMonthlyVehicleList = function(reportRows = currentDailyReportsCache) {
+    if (!els?.homeMonthlyVehicleList) return;
+    const rows = (Array.isArray(__themisMonthlyUiRows) && __themisMonthlyUiRows.length) ? __themisMonthlyUiRows : __themisNormalizeMonthlyRows(reportRows);
+    const statsMap = __themisStatsMap(rows, els?.dispatchDate?.value || todayStr());
+    els.homeMonthlyVehicleList.innerHTML = '';
+    if (!allVehiclesCache.length) {
+      els.homeMonthlyVehicleList.innerHTML = `<div class="chip">車両なし</div>`;
+      return;
+    }
+    getSortedVehiclesForDisplay().forEach(vehicle => {
+      const stats = statsMap.get(Number(vehicle.id)) || { totalDistance: 0, workedDays: 0, avgDistance: 0 };
+      const row = document.createElement('div');
+      row.className = 'home-monthly-item';
+      row.innerHTML = `
+        <span class="chip">${escapeHtml(vehicle.driver_name || vehicle.plate_number || '-')}</span>
+        <span class="chip">${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || '-'))}</span>
+        <span class="chip">帰宅:${escapeHtml(normalizeAreaLabel(vehicle.home_area || '-'))}</span>
+        <span class="chip">月間:${Number(stats.totalDistance || 0).toFixed(1)}km</span>
+        <span class="chip">出勤:${Number(stats.workedDays || 0)}日</span>
+        <span class="chip">平均:${Number(stats.avgDistance || 0).toFixed(1)}km</span>`;
+      els.homeMonthlyVehicleList.appendChild(row);
+    });
+  };
+
+  renderVehiclesTable = function() {
+    if (!els?.vehiclesTableBody) return;
+    const rows = (Array.isArray(__themisMonthlyUiRows) && __themisMonthlyUiRows.length) ? __themisMonthlyUiRows : __themisNormalizeMonthlyRows(currentDailyReportsCache);
+    const statsMap = __themisStatsMap(rows, els?.dispatchDate?.value || todayStr());
+    els.vehiclesTableBody.innerHTML = '';
+    if (!allVehiclesCache.length) {
+      els.vehiclesTableBody.innerHTML = `<tr><td colspan="9" class="muted">車両がありません</td></tr>`;
+      return;
+    }
+    getSortedVehiclesForDisplay().forEach(vehicle => {
+      const stats = statsMap.get(Number(vehicle.id)) || { totalDistance: 0, workedDays: 0, avgDistance: 0 };
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+      <tr>
+      <td>${escapeHtml(vehicle.driver_name || '-')}</td>
+      <td>${escapeHtml(vehicle.plate_number || '-')}</td>
+      <td>${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || '-'))}</td>
+      <td>${escapeHtml(normalizeAreaLabel(vehicle.home_area || '-'))}</td>
+      <td>${vehicle.seat_capacity ?? '-'}</td>
+      <td>${Number(stats.totalDistance || 0).toFixed(1)}</td>
+      <td>${Number(stats.workedDays || 0)}</td>
+      <td>${Number(stats.avgDistance || 0).toFixed(1)}</td>
+      <td class="actions-cell">
+        <button class="btn ghost vehicle-edit-btn" data-id="${vehicle.id}">編集</button>
+        <button class="btn danger vehicle-delete-btn" data-id="${vehicle.id}">削除</button>
+      </td>`;
+      els.vehiclesTableBody.appendChild(tr);
+    });
+    els.vehiclesTableBody.querySelectorAll('.vehicle-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const vehicle = allVehiclesCache.find(x => Number(x.id) === Number(btn.dataset.id));
+        if (vehicle) fillVehicleForm(vehicle);
+      });
+    });
+    els.vehiclesTableBody.querySelectorAll('.vehicle-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => deleteVehicle(Number(btn.dataset.id)));
+    });
+  };
+
+  renderDailyVehicleChecklist = function() {
+    if (!els?.dailyVehicleChecklist) return;
+    els.dailyVehicleChecklist.innerHTML = '';
+    if (!allVehiclesCache.length) {
+      els.dailyVehicleChecklist.innerHTML = `<div class="muted">車両がありません</div>`;
+      return;
+    }
+    const rows = (Array.isArray(__themisMonthlyUiRows) && __themisMonthlyUiRows.length) ? __themisMonthlyUiRows : __themisNormalizeMonthlyRows(currentDailyReportsCache);
+    const monthlyStatsMap = __themisStatsMap(rows, els?.dispatchDate?.value || todayStr());
+    const header = document.createElement('div');
+    header.className = 'vehicle-check-header';
+    header.innerHTML = `<div class="vehicle-check-header-info"></div><div class="vehicle-check-header-col">可能車両</div><div class="vehicle-check-header-col">ラスト便</div>`;
+    els.dailyVehicleChecklist.appendChild(header);
+    getSortedVehiclesForDisplay().forEach(vehicle => {
+      const stats = monthlyStatsMap.get(Number(vehicle.id)) || { totalDistance: 0, workedDays: 0, avgDistance: 0 };
+      const avgDistanceText = `${Number(stats.avgDistance || 0).toFixed(1)}km`;
+      const row = document.createElement('div');
+      row.className = 'vehicle-check-item';
+      row.innerHTML = `
+        <div class="vehicle-check-info">
+          <div class="vehicle-check-name">${escapeHtml(vehicle.driver_name || '-')}</div>
+          <div class="vehicle-check-car">車両 ${escapeHtml(vehicle.plate_number || '-')}</div>
+          <div class="vehicle-check-meta">担当 ${escapeHtml(normalizeAreaLabel(vehicle.vehicle_area || '-'))} / 帰宅 ${escapeHtml(normalizeAreaLabel(vehicle.home_area || '-'))} / 定員 ${vehicle.seat_capacity ?? '-'} / 1日平均距離 ${avgDistanceText}</div>
+        </div>
+        <label class="vehicle-check-toggle vehicle-check-toggle-work">
+          <input class="vehicle-check-input" type="checkbox" data-id="${vehicle.id}" ${activeVehicleIdsForToday.has(Number(vehicle.id)) ? 'checked' : ''} />
+          <span>可能車両</span>
+        </label>
+        <label class="vehicle-check-toggle vehicle-check-toggle-last">
+          <input class="driver-last-trip-input" type="checkbox" data-id="${vehicle.id}" ${isDriverLastTripChecked(vehicle.id) ? 'checked' : ''} />
+          <span>ラスト便</span>
+        </label>`;
+      els.dailyVehicleChecklist.appendChild(row);
+    });
+    renderOperationAndSimulationUI();
+    els.dailyVehicleChecklist.querySelectorAll('.vehicle-check-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const id = Number(input.dataset.id);
+        if (input.checked) activeVehicleIdsForToday.add(id); else activeVehicleIdsForToday.delete(id);
+        renderDailyMileageInputs();
+        renderDailyDispatchResult();
+        renderDailyVehicleChecklist();
+      });
+    });
+    els.dailyVehicleChecklist.querySelectorAll('.driver-last-trip-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const id = Number(input.dataset.id);
+        setDriverLastTripChecked(id, input.checked);
+        if (input.checked && !activeVehicleIdsForToday.has(id)) activeVehicleIdsForToday.add(id);
+        renderDailyMileageInputs();
+        renderDailyDispatchResult();
+        renderDailyVehicleChecklist();
+      });
+    });
+  };
+
+  const __themisRefreshNames = ['saveDailyMileageReports','confirmDailyToMonthly','resetMonthlySummary','syncDateAndReloadFromDispatchDate','syncDateAndReloadFromPlanDate','syncDateAndReloadFromActualDate','loadHomeAndAll','previewDriverMileageReport'];
+  __themisRefreshNames.forEach(name => {
+    const orig = globalThis[name];
+    if (typeof orig !== 'function') return;
+    globalThis[name] = async function(...args) {
+      const result = await orig.apply(this, args);
+      try { await __themisRefreshMonthlyUi(els?.dispatchDate?.value || todayStr()); } catch (e) { console.error(`${name} monthly refresh error:`, e); }
+      return result;
+    };
+  });
+
+  window.addEventListener('load', () => {
+    setTimeout(() => { __themisRefreshMonthlyUi(els?.dispatchDate?.value || todayStr()).catch(err => console.error('monthly refresh on load error:', err)); }, 300);
+  });
+
+  window.__themisRefreshMonthlyUi = __themisRefreshMonthlyUi;
+})();
+/* ===== THEMIS monthly UI sync hotfix v4 end ===== */
+
+
+function getVehicleAreaMatchScore(vehicle, area) {
+  const targetRaw = typeof normalizeAreaLabel === "function"
+    ? normalizeAreaLabel(area || "")
+    : String(area || "").trim();
+  if (!targetRaw || targetRaw === "無し") return 0;
+
+  const targetCanonical = typeof getCanonicalArea === "function"
+    ? (getCanonicalArea(targetRaw) || targetRaw)
+    : targetRaw;
+  const targetGroup = (typeof THEMIS_DISPLAY_GROUPS !== "undefined" && THEMIS_DISPLAY_GROUPS && THEMIS_DISPLAY_GROUPS.has(targetRaw))
+    ? targetRaw
+    : (typeof getAreaDisplayGroup === "function" ? getAreaDisplayGroup(targetRaw) : targetCanonical);
+
+  const vehicleAreaRaw = typeof normalizeAreaLabel === "function"
+    ? normalizeAreaLabel(vehicle?.vehicle_area || "")
+    : String(vehicle?.vehicle_area || "").trim();
+  const homeAreaRaw = typeof normalizeAreaLabel === "function"
+    ? normalizeAreaLabel(vehicle?.home_area || "")
+    : String(vehicle?.home_area || "").trim();
+
+  const vehicleCanonical = typeof getCanonicalArea === "function"
+    ? (getCanonicalArea(vehicleAreaRaw) || vehicleAreaRaw)
+    : vehicleAreaRaw;
+  const homeCanonical = typeof getCanonicalArea === "function"
+    ? (getCanonicalArea(homeAreaRaw) || homeAreaRaw)
+    : homeAreaRaw;
+
+  const vehicleGroup = vehicleAreaRaw
+    ? ((typeof THEMIS_DISPLAY_GROUPS !== "undefined" && THEMIS_DISPLAY_GROUPS && THEMIS_DISPLAY_GROUPS.has(vehicleAreaRaw))
+        ? vehicleAreaRaw
+        : (typeof getAreaDisplayGroup === "function" ? getAreaDisplayGroup(vehicleAreaRaw) : vehicleCanonical))
+    : vehicleCanonical;
+  const homeGroup = homeAreaRaw
+    ? ((typeof THEMIS_DISPLAY_GROUPS !== "undefined" && THEMIS_DISPLAY_GROUPS && THEMIS_DISPLAY_GROUPS.has(homeAreaRaw))
+        ? homeAreaRaw
+        : (typeof getAreaDisplayGroup === "function" ? getAreaDisplayGroup(homeAreaRaw) : homeCanonical))
+    : homeCanonical;
+
+  function calcScore(baseCanonical, baseGroup, weight, useHomeReverseGuard) {
+    if (!baseCanonical && !baseGroup) return -999;
+
+    let score = 0;
+    if (baseCanonical && targetCanonical && baseCanonical === targetCanonical) {
+      score = 100;
+    } else if (baseGroup && targetGroup && baseGroup === targetGroup) {
+      score = 88;
+    } else {
+      const affinity = typeof getAreaAffinityScore === "function"
+        ? Number(getAreaAffinityScore(baseCanonical || baseGroup, targetCanonical) || 0)
+        : 0;
+      const direction = typeof getDirectionAffinityScore === "function"
+        ? Number(getDirectionAffinityScore(baseCanonical || baseGroup, targetCanonical) || 0)
+        : 0;
+
+      score = affinity * 0.72 + direction * 0.34;
+      if (direction <= -38) score -= 55;
+      if (direction <= -95) score -= 95;
+    }
+
+    if (typeof isHardReverseMixForRoute === "function" && isHardReverseMixForRoute(baseCanonical || baseGroup, targetCanonical)) {
+      score -= 130;
+    }
+    if (useHomeReverseGuard && typeof isHardReverseForHome === "function" && isHardReverseForHome(targetCanonical, baseCanonical || baseGroup)) {
+      score -= 120;
+    }
+
+    return score * weight;
+  }
+
+  const vehicleScore = calcScore(vehicleCanonical, vehicleGroup, 1.0, false);
+  const homeScore = calcScore(homeCanonical, homeGroup, 0.72, true);
+
+  let best = Math.max(vehicleScore, homeScore, 0);
+
+  if (vehicleGroup && homeGroup && vehicleGroup === homeGroup && vehicleGroup === targetGroup) {
+    best += 8;
+  }
+
+  return Math.max(-160, Math.min(110, Math.round(best)));
+}
+
