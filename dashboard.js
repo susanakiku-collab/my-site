@@ -600,17 +600,60 @@ function getVehicleMonthlyStatsMap(reportRows, targetMonth) {
 }
 
 
+
+function getUnifiedMonthlyUiStatsMap(reportRows = currentDailyReportsCache, baseDate) {
+  const targetDate = baseDate || (els?.dispatchDate?.value || todayStr());
+  const startDate = getMonthStartStr(targetDate);
+  const endDate = getMonthEndStr(targetDate);
+  const normalizedRows = normalizeMileageExportRows(
+    (Array.isArray(reportRows) ? reportRows : []).filter(row => {
+      const d = String(row?.report_date || "");
+      return d && d >= startDate && d <= endDate;
+    })
+  );
+
+  const calendar = buildMileageCalendarRows(normalizedRows, startDate, endDate);
+  const map = new Map();
+
+  const vehicles = Array.isArray(allVehiclesCache) ? allVehiclesCache : [];
+  const normalizeText = value => String(value || "").trim();
+  const findVehicleId = entry => {
+    const directId = Number(entry?.vehicle_id || 0);
+    if (directId > 0) return directId;
+
+    const driver = normalizeText(entry?.driver_name);
+    const plate = normalizeText(entry?.plate_number);
+
+    const exact = vehicles.find(vehicle => {
+      const vehicleDriver = normalizeText(vehicle?.driver_name);
+      const vehiclePlate = normalizeText(vehicle?.plate_number);
+      return (plate && vehiclePlate && plate === vehiclePlate) ||
+             (driver && vehicleDriver && driver === vehicleDriver);
+    });
+    return Number(exact?.id || 0);
+  };
+
+  (calendar?.drivers || []).forEach(entry => {
+    const vehicleId = findVehicleId(entry);
+    if (!vehicleId) return;
+    map.set(vehicleId, {
+      totalDistance: Number(Number(entry.total_distance_km || 0).toFixed(1)),
+      workedDays: Number(entry.worked_days || 0),
+      avgDistance: Number(Number(entry.avg_distance_km || 0).toFixed(1))
+    });
+  });
+
+  return map;
+}
+
 function buildMonthlyDistanceMapForCurrentMonth() {
   try {
-    const today = typeof getSelectedDispatchDate === "function"
+    const targetDate = typeof getSelectedDispatchDate === "function"
       ? getSelectedDispatchDate()
       : (new Date()).toISOString().slice(0, 10);
-    const monthKey = typeof getMonthKey === "function"
-      ? getMonthKey(today)
-      : String(today || "").slice(0, 7);
-    return getVehicleMonthlyStatsMap(
+    return getUnifiedMonthlyUiStatsMap(
       Array.isArray(currentDailyReportsCache) ? currentDailyReportsCache : [],
-      monthKey
+      targetDate
     );
   } catch (_) {
     return new Map();
@@ -767,13 +810,8 @@ function getDashboardMonthlyRange() {
 }
 
 function getVehicleStatsMapForDashboardMonth(reportRows = currentDailyReportsCache) {
-  const rows = Array.isArray(reportRows) ? reportRows : [];
-  const { startDate, endDate, monthKey } = getDashboardMonthlyRange();
-  const filtered = rows.filter(row => {
-    const d = String(row?.report_date || "");
-    return d && d >= startDate && d <= endDate;
-  });
-  return getVehicleMonthlyStatsMap(filtered, monthKey);
+  const { endDate } = getDashboardMonthlyRange();
+  return getUnifiedMonthlyUiStatsMap(reportRows, endDate);
 }
 
 function renderHomeMonthlyVehicleList(reportRows = currentDailyReportsCache) {
@@ -3149,12 +3187,30 @@ function __getDisplayGroupAreaLabel(item) {
   return getAreaDisplayGroup(area) || area || "東京方面";
 }
 
+function __rowDistanceForCapacitySplit(row) {
+  return Number(
+    row?.distance_km ??
+    row?.casts?.distance_km ??
+    row?.distanceKm ??
+    0
+  ) || 0;
+}
+
+function __rowTravelMinutesForCapacitySplit(row) {
+  return Number(
+    row?.travel_minutes ??
+    row?.casts?.travel_minutes ??
+    row?.travelMinutes ??
+    0
+  ) || 0;
+}
+
 function __sortRowsForGroupCapacitySplit(rows) {
   const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
   return [...safeRows].sort((a, b) => {
-    const dist = Number(b?.distance_km || 0) - Number(a?.distance_km || 0);
+    const dist = __rowDistanceForCapacitySplit(b) - __rowDistanceForCapacitySplit(a);
     if (dist !== 0) return dist;
-    const tm = Number(b?.travel_minutes ?? b?.casts?.travel_minutes ?? 0) - Number(a?.travel_minutes ?? a?.casts?.travel_minutes ?? 0);
+    const tm = __rowTravelMinutesForCapacitySplit(b) - __rowTravelMinutesForCapacitySplit(a);
     if (tm !== 0) return tm;
     return Number(a?.id || 0) - Number(b?.id || 0);
   });
@@ -3265,7 +3321,7 @@ function __buildAssignmentsPreserveDisplayGroups(items, vehicles, monthlyMap) {
         picked.used = true;
 
         const freeSeats = Math.max(0, picked.capacity - picked.count);
-        const chunk = remaining.splice(0, freeSeats);
+        const chunk = __sortRowsForGroupCapacitySplit(remaining.splice(0, freeSeats));
         let stopOrder = picked.count + 1;
 
         for (const row of chunk) {
@@ -3274,7 +3330,7 @@ function __buildAssignmentsPreserveDisplayGroups(items, vehicles, monthlyMap) {
             actual_hour: hour,
             vehicle_id: picked.id,
             driver_name: picked.vehicle?.driver_name || "",
-            distance_km: Number(row?.distance_km || 0),
+            distance_km: __rowDistanceForCapacitySplit(row),
             stop_order: stopOrder
           });
           stopOrder += 1;
@@ -3317,21 +3373,23 @@ async function assignUnassignedActualsForToday() {
 
   const monthlyMap = buildMonthlyDistanceMapForCurrentMonth();
   let assignments = optimizeAssignments(unassignedItems, selectedVehicles, monthlyMap);
+  if (!Array.isArray(assignments)) assignments = [];
 
-  if (__hasEnoughVehiclesForDisplayGroups(unassignedItems, selectedVehicles)) {
-    assignments = __buildAssignmentsPreserveDisplayGroups(unassignedItems, selectedVehicles, monthlyMap);
-  } else {
-    if (typeof optimizeAssignmentsByRouteFlow === "function") {
-      assignments = optimizeAssignmentsByRouteFlow(assignments, unassignedItems, selectedVehicles);
-    }
+  assignments = resolveCapacityOverflowLocally(
+    assignments,
+    unassignedItems,
+    selectedVehicles,
+    monthlyMap
+  );
 
-    if (!assignments.length) {
-      assignments = __buildEmergencyAssignments(unassignedItems, selectedVehicles);
-    }
-
-    assignments = optimizeAssignmentsByDistanceBalance(assignments, unassignedItems, selectedVehicles, monthlyMap);
-    assignments = applyLastTripDistanceCorrectionToAssignments(assignments, unassignedItems, selectedVehicles, monthlyMap);
-    assignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
+  if ((!Array.isArray(assignments) || !assignments.length) && typeof __buildEmergencyAssignments === "function") {
+    assignments = __buildEmergencyAssignments(unassignedItems, selectedVehicles);
+    assignments = resolveCapacityOverflowLocally(
+      assignments,
+      unassignedItems,
+      selectedVehicles,
+      monthlyMap
+    );
   }
 
   if (!assignments.length) return;
@@ -3444,6 +3502,354 @@ function __buildEmergencyAssignments(activeItems, selectedVehicles) {
   return assignments;
 }
 
+
+/* ===== THEMIS overflow local resolver start ===== */
+
+function __overflowGetAssignmentItem(ctx, assignment) {
+  return ctx.itemMap.get(Number(assignment?.item_id || 0)) || null;
+}
+
+function __overflowGetVehicleHourKey(vehicleId, hour) {
+  return `${Number(vehicleId || 0)}__${Number(hour || 0)}`;
+}
+
+function __overflowBuildContext(assignments, items, vehicles) {
+  const itemMap = new Map((Array.isArray(items) ? items : []).map(item => [Number(item.id), item]));
+  const vehicleMap = new Map((Array.isArray(vehicles) ? vehicles : []).map(vehicle => [Number(vehicle.id), vehicle]));
+  const vehicleHourRowsMap = new Map();
+
+  (Array.isArray(assignments) ? assignments : []).forEach(assignment => {
+    const key = __overflowGetVehicleHourKey(assignment.vehicle_id, assignment.actual_hour);
+    if (!vehicleHourRowsMap.has(key)) vehicleHourRowsMap.set(key, []);
+    vehicleHourRowsMap.get(key).push(assignment);
+  });
+
+  return {
+    itemMap,
+    vehicleMap,
+    vehicleHourRowsMap
+  };
+}
+
+function __overflowFindBuckets(ctx) {
+  const buckets = [];
+
+  ctx.vehicleHourRowsMap.forEach((rows, key) => {
+    const [vehicleId, hour] = String(key).split("__").map(Number);
+    const vehicle = ctx.vehicleMap.get(Number(vehicleId));
+    const seatCapacity = Math.max(1, Number(vehicle?.seat_capacity || 4));
+    const count = Array.isArray(rows) ? rows.length : 0;
+
+    if (count > seatCapacity) {
+      buckets.push({
+        key,
+        vehicleId: Number(vehicleId),
+        hour: Number(hour),
+        seatCapacity,
+        count,
+        overCount: count - seatCapacity
+      });
+    }
+  });
+
+  buckets.sort((a, b) => {
+    if (b.overCount !== a.overCount) return b.overCount - a.overCount;
+    if (a.hour !== b.hour) return a.hour - b.hour;
+    return a.vehicleId - b.vehicleId;
+  });
+
+  return buckets;
+}
+
+function __overflowGetRowDistanceFromOrigin(ctx, assignment) {
+  const item = __overflowGetAssignmentItem(ctx, assignment);
+  return Number(item?.distance_km || item?.casts?.distance_km || assignment?.distance_km || 0);
+}
+
+function __overflowSelectRows(sourceRows, overCount, ctx) {
+  return [...(Array.isArray(sourceRows) ? sourceRows : [])]
+    .sort((a, b) => {
+      const ad = __overflowGetRowDistanceFromOrigin(ctx, a);
+      const bd = __overflowGetRowDistanceFromOrigin(ctx, b);
+      if (ad !== bd) return ad - bd;
+      return Number(a?.item_id || 0) - Number(b?.item_id || 0);
+    })
+    .slice(0, Math.max(0, Number(overCount || 0)));
+}
+
+function __overflowGetAreaFromAssignment(ctx, assignment) {
+  const item = __overflowGetAssignmentItem(ctx, assignment);
+  return normalizeAreaLabel(
+    item?.destination_area ||
+    item?.cluster_area ||
+    item?.planned_area ||
+    item?.casts?.area ||
+    ""
+  );
+}
+
+function __overflowGetOrderedRowsFromAssignments(ctx, assignments) {
+  const rows = (Array.isArray(assignments) ? assignments : [])
+    .map(assignment => {
+      const item = __overflowGetAssignmentItem(ctx, assignment);
+      return item ? { ...item } : null;
+    })
+    .filter(Boolean);
+
+  if (typeof sortItemsByNearestRoute === "function") {
+    const sorted = sortItemsByNearestRoute(rows);
+    if (typeof moveManualLastItemsToEnd === "function") {
+      return moveManualLastItemsToEnd(sorted);
+    }
+    return sorted;
+  }
+
+  return rows.sort((a, b) => {
+    const ad = Number(a?.distance_km || 0);
+    const bd = Number(b?.distance_km || 0);
+    if (ad !== bd) return ad - bd;
+    return Number(a?.id || 0) - Number(b?.id || 0);
+  });
+}
+
+function __overflowIsReverseDirectionAgainstVehicle(ctx, candidateAssignment, existingAssignments, vehicle) {
+  const targetArea = __overflowGetAreaFromAssignment(ctx, candidateAssignment);
+  const existingAreas = (Array.isArray(existingAssignments) ? existingAssignments : [])
+    .map(row => __overflowGetAreaFromAssignment(ctx, row))
+    .filter(Boolean);
+
+  if (existingAreas.some(area => isHardReverseMixForRoute(area, targetArea))) {
+    return true;
+  }
+
+  const vehicleHomeArea = normalizeAreaLabel(vehicle?.home_area || "");
+  if (vehicleHomeArea && isHardReverseMixForRoute(vehicleHomeArea, targetArea)) {
+    return true;
+  }
+
+  const vehicleArea = normalizeAreaLabel(vehicle?.vehicle_area || "");
+  if (vehicleArea && isHardReverseMixForRoute(vehicleArea, targetArea)) {
+    return true;
+  }
+
+  return false;
+}
+
+function __overflowGetTargetCandidates(ctx, movingAssignment, bucket, vehicles) {
+  const candidates = [];
+  const movingArea = __overflowGetAreaFromAssignment(ctx, movingAssignment);
+
+  (Array.isArray(vehicles) ? vehicles : []).forEach(vehicle => {
+    const vehicleId = Number(vehicle?.id || 0);
+    if (!vehicleId) return;
+    if (vehicleId === Number(bucket.vehicleId)) return;
+
+    const key = __overflowGetVehicleHourKey(vehicleId, bucket.hour);
+    const existingAssignments = ctx.vehicleHourRowsMap.get(key) || [];
+    const seatCapacity = Math.max(1, Number(vehicle?.seat_capacity || 4));
+
+    if (existingAssignments.length >= seatCapacity) return;
+    if (__overflowIsReverseDirectionAgainstVehicle(ctx, movingAssignment, existingAssignments, vehicle)) return;
+
+    const existingAreas = existingAssignments
+      .map(row => __overflowGetAreaFromAssignment(ctx, row))
+      .filter(Boolean);
+
+    let normalSpreadOk = true;
+    for (const area of existingAreas) {
+      const direction = Number(getDirectionAffinityScore(area, movingArea) || 0);
+      if (direction <= -38) {
+        normalSpreadOk = false;
+        break;
+      }
+    }
+    if (!normalSpreadOk) return;
+
+    candidates.push({
+      vehicleId,
+      vehicle,
+      hour: bucket.hour,
+      existingAssignments
+    });
+  });
+
+  return candidates;
+}
+
+function __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMap) {
+  const simulatedAssignments = [...candidate.existingAssignments, movingAssignment];
+  const orderedRows = __overflowGetOrderedRowsFromAssignments(ctx, simulatedAssignments);
+
+  const routeKm = Number(calculateRouteDistanceGlobal(orderedRows) || 0);
+  const timeSummary = getRowsTravelTimeSummary(orderedRows);
+  const routeMinutes = Number(timeSummary?.totalMinutes || 0);
+
+  const movingArea = __overflowGetAreaFromAssignment(ctx, movingAssignment);
+  const existingAreas = candidate.existingAssignments
+    .map(row => __overflowGetAreaFromAssignment(ctx, row))
+    .filter(Boolean);
+
+  let spreadScore = 0;
+  existingAreas.forEach(area => {
+    spreadScore += Number(getAreaAffinityScore(area, movingArea) || 0) * 2.0;
+    spreadScore += Math.max(0, Number(getDirectionAffinityScore(area, movingArea) || 0)) * 1.8;
+  });
+
+  const vehicle = candidate.vehicle;
+  spreadScore += Number(getVehicleAreaMatchScore(vehicle, movingArea) || 0) * 2.3;
+  spreadScore += Number(getStrictHomeCompatibilityScore(movingArea, vehicle?.home_area || "") || 0) * 0.7;
+  spreadScore += Math.max(0, Number(getDirectionAffinityScore(movingArea, vehicle?.home_area || "") || 0)) * 0.4;
+
+  const month = monthlyMap?.get?.(Number(candidate.vehicleId)) || { totalDistance: 0, avgDistance: 0 };
+  const loadPenalty = Number(month.totalDistance || 0) * 0.04 + Number(month.avgDistance || 0) * 0.35;
+
+  let lastTripPenalty = 0;
+  if (typeof isDriverLastTripChecked === "function" && isDriverLastTripChecked(candidate.vehicleId)) {
+    lastTripPenalty = 18;
+  }
+
+  const score =
+    spreadScore
+    - routeMinutes * 1.0
+    - routeKm * 0.7
+    - loadPenalty
+    - lastTripPenalty;
+
+  return {
+    vehicleId: candidate.vehicleId,
+    vehicle,
+    score,
+    routeKm,
+    routeMinutes
+  };
+}
+
+function __overflowChooseBestTarget(ctx, movingAssignment, bucket, vehicles, monthlyMap) {
+  const candidates = __overflowGetTargetCandidates(ctx, movingAssignment, bucket, vehicles);
+  if (!candidates.length) return null;
+
+  let best = null;
+
+  candidates.forEach(candidate => {
+    const evaluated = __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMap);
+    if (!best || evaluated.score > best.score) {
+      best = evaluated;
+    }
+  });
+
+  return best;
+}
+
+function __overflowRebuildStopOrderForVehicleHour(assignments, ctx, vehicleId, hour) {
+  const targetAssignments = assignments.filter(a =>
+    Number(a?.vehicle_id || 0) === Number(vehicleId) &&
+    Number(a?.actual_hour || 0) === Number(hour)
+  );
+
+  if (!targetAssignments.length) return;
+
+  const orderedRows = __overflowGetOrderedRowsFromAssignments(ctx, targetAssignments);
+  const orderMap = new Map(orderedRows.map((row, index) => [Number(row.id), index + 1]));
+
+  targetAssignments.forEach(assignment => {
+    assignment.stop_order = Number(orderMap.get(Number(assignment.item_id)) || 1);
+    const item = __overflowGetAssignmentItem(ctx, assignment);
+    assignment.distance_km = Number(item?.distance_km || item?.casts?.distance_km || assignment?.distance_km || 0);
+    if (!assignment.driver_name) {
+      const vehicle = ctx.vehicleMap.get(Number(vehicleId));
+      assignment.driver_name = vehicle?.driver_name || "";
+    }
+  });
+}
+
+function __overflowApplyMove(assignments, movingAssignment, bucket, targetVehicleId, items, vehicles) {
+  const sourceIndex = assignments.findIndex(a =>
+    Number(a?.item_id || 0) === Number(movingAssignment?.item_id || 0) &&
+    Number(a?.vehicle_id || 0) === Number(bucket.vehicleId) &&
+    Number(a?.actual_hour || 0) === Number(bucket.hour)
+  );
+
+  if (sourceIndex < 0) return assignments;
+
+  const targetVehicle = (Array.isArray(vehicles) ? vehicles : []).find(v => Number(v?.id || 0) === Number(targetVehicleId));
+  assignments[sourceIndex] = {
+    ...assignments[sourceIndex],
+    vehicle_id: Number(targetVehicleId),
+    driver_name: targetVehicle?.driver_name || assignments[sourceIndex]?.driver_name || ""
+  };
+
+  let ctx = __overflowBuildContext(assignments, items, vehicles);
+  __overflowRebuildStopOrderForVehicleHour(assignments, ctx, bucket.vehicleId, bucket.hour);
+
+  ctx = __overflowBuildContext(assignments, items, vehicles);
+  __overflowRebuildStopOrderForVehicleHour(assignments, ctx, targetVehicleId, bucket.hour);
+
+  return assignments;
+}
+
+function __overflowFinalizeAssignments(assignments, items, vehicles) {
+  const working = [...assignments];
+  const touched = new Set(working.map(a => __overflowGetVehicleHourKey(a?.vehicle_id, a?.actual_hour)));
+
+  touched.forEach(key => {
+    const [vehicleId, hour] = String(key).split("__").map(Number);
+    const ctx = __overflowBuildContext(working, items, vehicles);
+    __overflowRebuildStopOrderForVehicleHour(working, ctx, vehicleId, hour);
+  });
+
+  return [...working].sort((a, b) => {
+    const ah = Number(a?.actual_hour || 0);
+    const bh = Number(b?.actual_hour || 0);
+    if (ah !== bh) return ah - bh;
+
+    const av = Number(a?.vehicle_id || 0);
+    const bv = Number(b?.vehicle_id || 0);
+    if (av !== bv) return av - bv;
+
+    const ao = Number(a?.stop_order || 0);
+    const bo = Number(b?.stop_order || 0);
+    if (ao !== bo) return ao - bo;
+
+    return Number(a?.item_id || 0) - Number(b?.item_id || 0);
+  });
+}
+
+function resolveCapacityOverflowLocally(assignments, items, vehicles, monthlyMap) {
+  if (!Array.isArray(assignments) || !assignments.length) return Array.isArray(assignments) ? assignments : [];
+
+  let working = assignments.map(a => ({ ...a }));
+  let ctx = __overflowBuildContext(working, items, vehicles);
+  const buckets = __overflowFindBuckets(ctx);
+
+  if (!buckets.length) return working;
+
+  buckets.forEach(bucket => {
+    ctx = __overflowBuildContext(working, items, vehicles);
+    const sourceRows = ctx.vehicleHourRowsMap.get(bucket.key) || [];
+    const overflowRows = __overflowSelectRows(sourceRows, bucket.overCount, ctx);
+
+    overflowRows.forEach(movingAssignment => {
+      ctx = __overflowBuildContext(working, items, vehicles);
+      const best = __overflowChooseBestTarget(ctx, movingAssignment, bucket, vehicles, monthlyMap);
+      if (!best) return;
+
+      working = __overflowApplyMove(
+        working,
+        movingAssignment,
+        bucket,
+        best.vehicleId,
+        items,
+        vehicles
+      );
+    });
+  });
+
+  working = __overflowFinalizeAssignments(working, items, vehicles);
+  return working;
+}
+
+/* ===== THEMIS overflow local resolver end ===== */
+
 async function runAutoDispatch() {
   const selectedVehicles = Array.isArray(getSelectedVehiclesForToday())
     ? getSelectedVehiclesForToday().filter(Boolean)
@@ -3469,29 +3875,12 @@ async function runAutoDispatch() {
     assignments = optimizeAssignments(activeItems, selectedVehicles, monthlyMap);
     if (!Array.isArray(assignments)) assignments = [];
 
-    if (__hasEnoughVehiclesForDisplayGroups(activeItems, selectedVehicles)) {
-      const preserved = __buildAssignmentsPreserveDisplayGroups(activeItems, selectedVehicles, monthlyMap);
-      assignments = Array.isArray(preserved) ? preserved : assignments;
-    } else {
-      if (typeof optimizeAssignmentsByRouteFlow === "function") {
-      const routeFlowAssignments = optimizeAssignmentsByRouteFlow(assignments, activeItems, selectedVehicles);
-      assignments = Array.isArray(routeFlowAssignments) ? routeFlowAssignments : assignments;
-      }
-
-      if (!Array.isArray(assignments) || !assignments.length) {
-        assignments = __buildEmergencyAssignments(activeItems, selectedVehicles);
-      }
-      if (!Array.isArray(assignments)) assignments = [];
-
-      const balancedAssignments = optimizeAssignmentsByDistanceBalance(assignments, activeItems, selectedVehicles, monthlyMap);
-      assignments = Array.isArray(balancedAssignments) ? balancedAssignments : assignments;
-
-      const correctedAssignments = applyLastTripDistanceCorrectionToAssignments(assignments, activeItems, selectedVehicles, monthlyMap);
-      assignments = Array.isArray(correctedAssignments) ? correctedAssignments : assignments;
-
-      const manualAssignments = applyManualLastVehicleToAssignments(assignments, selectedVehicles);
-      assignments = Array.isArray(manualAssignments) ? manualAssignments : assignments;
-    }
+    assignments = resolveCapacityOverflowLocally(
+      assignments,
+      activeItems,
+      selectedVehicles,
+      monthlyMap
+    );
   } catch (error) {
     console.error("runAutoDispatch main pipeline error:", error);
     assignments = [];
@@ -3500,6 +3889,12 @@ async function runAutoDispatch() {
   if ((!Array.isArray(assignments) || !assignments.length) && typeof __buildEmergencyAssignments === "function") {
     try {
       assignments = __buildEmergencyAssignments(activeItems, selectedVehicles);
+      assignments = resolveCapacityOverflowLocally(
+        assignments,
+        activeItems,
+        selectedVehicles,
+        monthlyMap
+      );
     } catch (fallbackError) {
       console.error("runAutoDispatch emergency fallback error:", fallbackError);
       assignments = [];
@@ -3507,34 +3902,6 @@ async function runAutoDispatch() {
   }
 
   if (!Array.isArray(assignments)) assignments = [];
-
-  const assignedItemIds = new Set(assignments.map(a => Number(a?.item_id || 0)).filter(Boolean));
-  const unassignedItems = activeItems.filter(item => !assignedItemIds.has(Number(item?.id || 0)));
-
-  if (unassignedItems.length && typeof rebalanceUnassignedItems === "function") {
-    try {
-      const extraAssignments = rebalanceUnassignedItems(
-        unassignedItems,
-        assignments,
-        selectedVehicles,
-        monthlyMap
-      );
-      if (Array.isArray(extraAssignments) && extraAssignments.length) {
-        const existingKeys = new Set(
-          assignments.map(a => `${Number(a?.item_id || 0)}__${Number(a?.actual_hour ?? 0)}`)
-        );
-        extraAssignments.forEach(extra => {
-          const key = `${Number(extra?.item_id || 0)}__${Number(extra?.actual_hour ?? 0)}`;
-          if (!existingKeys.has(key)) {
-            assignments.push(extra);
-            existingKeys.add(key);
-          }
-        });
-      }
-    } catch (rebalanceError) {
-      console.error("runAutoDispatch rebalance error:", rebalanceError);
-    }
-  }
 
   const finalAssignedItemIds = new Set(assignments.map(a => Number(a?.item_id || 0)).filter(Boolean));
   const finalUnassignedCount = activeItems.filter(item => !finalAssignedItemIds.has(Number(item?.id || 0))).length;
@@ -4516,15 +4883,27 @@ async function resetMonthlySummary() {
 async function addHistory(dispatchId, itemId, action, message) {
   const safeDispatchId = Number.isFinite(Number(dispatchId)) && Number(dispatchId) > 0 ? Number(dispatchId) : null;
   const safeItemId = Number.isFinite(Number(itemId)) && Number(itemId) > 0 ? Number(itemId) : null;
-  const { error } = await supabaseClient
+
+  const payload = {
+    dispatch_id: safeDispatchId,
+    item_id: safeItemId,
+    action,
+    message,
+    acted_by: getCurrentUserIdSafe()
+  };
+
+  let { error } = await supabaseClient
     .from("dispatch_history")
-    .insert({
-      dispatch_id: safeDispatchId,
-      item_id: safeItemId,
-      action,
-      message,
-      acted_by: getCurrentUserIdSafe()
-    });
+    .insert(payload);
+
+  if (error && String(error?.message || "").includes("dispatch_history_item_id_fkey")) {
+    ({ error } = await supabaseClient
+      .from("dispatch_history")
+      .insert({
+        ...payload,
+        item_id: null
+      }));
+  }
 
   if (error) console.error(error);
 }
@@ -6662,6 +7041,157 @@ window.renderDailyDispatchResult = function(){
 
 
 // ===== THEMIS field trial compatibility shim =====
+
+function __themisNormalizeStrictAreaLabel(area) {
+  return normalizeAreaLabel(area || "");
+}
+
+function __themisGetStrictAreaKeyFromItem(item) {
+  const area = __themisNormalizeStrictAreaLabel(
+    item?.destination_area || item?.cluster_area || item?.planned_area || item?.casts?.area || ""
+  );
+  const displayGroup = typeof getAreaDisplayGroup === "function"
+    ? (getAreaDisplayGroup(area) || area)
+    : area;
+  return __themisNormalizeStrictAreaLabel(displayGroup);
+}
+
+function __themisGetStrictAreaKeyFromAssignment(assignment, itemMap) {
+  const item = itemMap.get(Number(assignment?.item_id || 0));
+  return __themisGetStrictAreaKeyFromItem(item || assignment || {});
+}
+
+function __themisHasEnoughVehiclesForStrictAreaLayer(items, vehicles) {
+  const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  const safeVehicles = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
+  if (!safeItems.length || !safeVehicles.length) return false;
+
+  const hourAreaMap = new Map();
+  safeItems.forEach(item => {
+    const hour = Number(item?.actual_hour ?? item?.plan_hour ?? 0);
+    const areaKey = __themisGetStrictAreaKeyFromItem(item);
+    if (!areaKey || areaKey === "無し") return;
+    if (!hourAreaMap.has(hour)) hourAreaMap.set(hour, new Set());
+    hourAreaMap.get(hour).add(areaKey);
+  });
+
+  if (!hourAreaMap.size) return false;
+  for (const areaSet of hourAreaMap.values()) {
+    if (areaSet.size > safeVehicles.length) return false;
+  }
+  return true;
+}
+
+function __themisGetStrictAreaVehicleScore(vehicle, areaKey, monthlyMap) {
+  const month = monthlyMap?.get?.(Number(vehicle?.id || 0)) || { totalDistance: 0, avgDistance: 0, workedDays: 0 };
+  let score = 0;
+  if (typeof getVehicleAreaMatchScore === "function") {
+    score += Number(getVehicleAreaMatchScore(vehicle, areaKey) || 0) * 3.2;
+  }
+  if (typeof getStrictHomeCompatibilityScore === "function") {
+    score += Number(getStrictHomeCompatibilityScore(areaKey, vehicle?.home_area || "") || 0) * 2.6;
+  }
+  if (typeof getDirectionAffinityScore === "function") {
+    score += Math.max(0, Number(getDirectionAffinityScore(areaKey, vehicle?.home_area || "") || 0)) * 1.2;
+    score += Math.max(0, Number(getDirectionAffinityScore(areaKey, vehicle?.vehicle_area || "") || 0)) * 0.9;
+  }
+  if (typeof getAreaAffinityScore === "function") {
+    score += Number(getAreaAffinityScore(areaKey, vehicle?.home_area || "") || 0) * 0.9;
+    score += Number(getAreaAffinityScore(areaKey, vehicle?.vehicle_area || "") || 0) * 0.7;
+  }
+  score -= Number(month.totalDistance || 0) * 0.02;
+  score -= Number(month.avgDistance || 0) * 0.12;
+  if (typeof isDriverLastTripChecked === "function" && isDriverLastTripChecked(Number(vehicle?.id || 0))) {
+    score -= 12;
+  }
+  return score;
+}
+
+function __themisBuildAssignmentsPreserveStrictAreas(items, vehicles, monthlyMap) {
+  const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  const safeVehicles = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
+  if (!safeItems.length || !safeVehicles.length) return [];
+
+  const assignments = [];
+  const byHour = new Map();
+  safeItems.forEach(item => {
+    const hour = Number(item?.actual_hour ?? item?.plan_hour ?? 0);
+    if (!byHour.has(hour)) byHour.set(hour, []);
+    byHour.get(hour).push(item);
+  });
+
+  const hours = [...byHour.keys()].sort((a, b) => a - b);
+  for (const hour of hours) {
+    const hourItems = byHour.get(hour) || [];
+    const byArea = new Map();
+    hourItems.forEach(item => {
+      const areaKey = __themisGetStrictAreaKeyFromItem(item);
+      if (!byArea.has(areaKey)) byArea.set(areaKey, []);
+      byArea.get(areaKey).push(item);
+    });
+
+    const areaEntries = [...byArea.entries()].map(([areaKey, rows]) => ({
+      areaKey,
+      rows: rows.slice(),
+      anchor: rows.slice().sort((a, b) => Number(b?.distance_km || 0) - Number(a?.distance_km || 0) || Number(a?.id || 0) - Number(b?.id || 0))[0] || null,
+      count: rows.length
+    })).sort((a, b) => {
+      const ad = Number(a.anchor?.distance_km || 0);
+      const bd = Number(b.anchor?.distance_km || 0);
+      if (bd !== ad) return bd - ad;
+      if (b.count !== a.count) return b.count - a.count;
+      return String(a.areaKey || "").localeCompare(String(b.areaKey || ""), "ja");
+    });
+
+    const usedVehicleIds = new Set();
+    const dedicatedMap = new Map();
+
+    areaEntries.forEach(entry => {
+      let bestVehicle = null;
+      let bestScore = -Infinity;
+      safeVehicles.forEach(vehicle => {
+        const vehicleId = Number(vehicle?.id || 0);
+        if (!vehicleId || usedVehicleIds.has(vehicleId)) return;
+        const score = __themisGetStrictAreaVehicleScore(vehicle, entry.areaKey, monthlyMap);
+        if (score > bestScore) {
+          bestVehicle = vehicle;
+          bestScore = score;
+        }
+      });
+      if (bestVehicle) {
+        const vehicleId = Number(bestVehicle.id || 0);
+        usedVehicleIds.add(vehicleId);
+        dedicatedMap.set(entry.areaKey, bestVehicle);
+      }
+    });
+
+    if (dedicatedMap.size !== areaEntries.length) {
+      return [];
+    }
+
+    areaEntries.forEach(entry => {
+      const vehicle = dedicatedMap.get(entry.areaKey);
+      const vehicleId = Number(vehicle?.id || 0);
+      const orderedRows = typeof sortItemsByNearestRoute === "function"
+        ? sortItemsByNearestRoute(entry.rows)
+        : entry.rows.slice().sort((a, b) => Number(a?.distance_km || 0) - Number(b?.distance_km || 0) || Number(a?.id || 0) - Number(b?.id || 0));
+      orderedRows.forEach((row, index) => {
+        assignments.push({
+          item_id: Number(row?.id || 0),
+          actual_hour: hour,
+          vehicle_id: vehicleId,
+          driver_name: vehicle?.driver_name || "",
+          distance_km: Number(row?.distance_km || row?.casts?.distance_km || 0),
+          stop_order: index + 1,
+          strict_area_key: entry.areaKey
+        });
+      });
+    });
+  }
+
+  return assignments;
+}
+
 function optimizeAssignments(items, vehicles, monthlyMap, options = {}) {
   if (!window.DispatchCore || typeof window.DispatchCore.optimizeAssignments !== 'function') {
     console.error('DispatchCore.optimizeAssignments is not available');
@@ -6674,6 +7204,15 @@ function optimizeAssignments(items, vehicles, monthlyMap, options = {}) {
       ? Object.values(vehicles)
       : [];
   const safeMonthlyMap = monthlyMap instanceof Map ? monthlyMap : new Map();
+
+  const useStrictAreaLayer = !options?.preAssignedAssignments && __themisHasEnoughVehiclesForStrictAreaLayer(safeItems, safeVehicles);
+  if (useStrictAreaLayer) {
+    const strictAssignments = __themisBuildAssignmentsPreserveStrictAreas(safeItems, safeVehicles, safeMonthlyMap);
+    if (Array.isArray(strictAssignments) && strictAssignments.length === safeItems.length) {
+      return strictAssignments;
+    }
+  }
+
   return window.DispatchCore.optimizeAssignments(safeItems, safeVehicles, safeMonthlyMap, options || {});
 }
 
@@ -6753,7 +7292,7 @@ function runSimulationDispatchPreview() {
   }
 
   function __themisStatsMap(rows, baseDate) {
-    return getVehicleMonthlyStatsMap(__themisNormalizeMonthlyRows(rows), typeof getMonthKey === 'function' ? getMonthKey(baseDate || (els?.dispatchDate?.value || todayStr())) : String(baseDate || '').slice(0, 7));
+    return getUnifiedMonthlyUiStatsMap(__themisNormalizeMonthlyRows(rows), baseDate || (els?.dispatchDate?.value || todayStr()));
   }
 
   async function __themisRefreshMonthlyUi(baseDate) {
