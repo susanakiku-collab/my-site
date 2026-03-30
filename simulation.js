@@ -72,12 +72,12 @@ function getSuppressSimulationSlotChangeSafe() {
 }
 
 
-function callDispatchCoreSafe(functionName, ...args) {
+function __simulationCallDispatchCoreSafe(functionName, ...args) {
   if (typeof window.callDispatchCore === "function") {
     return window.callDispatchCore(functionName, ...args);
   }
   const core = window.DispatchCore || {};
-  const fn = core?.[functionName];
+  const fn = typeof window[functionName] === "function" ? window[functionName] : core?.[functionName];
   if (typeof fn !== "function") {
     if (functionName === "getVehicleDeadNamesForHour") return [];
     if (functionName === "getEffectiveVehiclesForHour") return [];
@@ -88,19 +88,19 @@ function callDispatchCoreSafe(functionName, ...args) {
 }
 
 function getBuildSimulationRowsForHourSafe(targetHour, options = {}) {
-  return callDispatchCoreSafe("buildSimulationRowsForHour", targetHour, options);
+  return __simulationCallDispatchCoreSafe("buildSimulationRowsForHour", targetHour, options);
 }
 
 function getBuildProjectedRowsForHourSafe(targetHour) {
-  return callDispatchCoreSafe("buildProjectedRowsForHour", targetHour);
+  return __simulationCallDispatchCoreSafe("buildProjectedRowsForHour", targetHour);
 }
 
 function getEffectiveVehiclesForHourSafe(targetHour) {
-  return callDispatchCoreSafe("getEffectiveVehiclesForHour", targetHour);
+  return __simulationCallDispatchCoreSafe("getEffectiveVehiclesForHour", targetHour);
 }
 
 function getVehicleDeadNamesForHourSafe(targetHour) {
-  return callDispatchCoreSafe("getVehicleDeadNamesForHour", targetHour);
+  return __simulationCallDispatchCoreSafe("getVehicleDeadNamesForHour", targetHour);
 }
 
 function diagnoseSimulationHourWindow(targetHour, options = {}) {
@@ -344,3 +344,338 @@ function runSlotDiagnosisPreview() {
   }
 }
 
+
+
+function __simulationNormalizePendingRows(rows, targetHour) {
+  return (Array.isArray(rows) ? rows : []).map((plan, index) => ({
+    id: Number(plan?.id || 0) > 0 ? (-1000000 - Number(targetHour || 0) * 1000 - index - Number(plan?.id || 0)) : (-1000000 - Number(targetHour || 0) * 1000 - index),
+    plan_id: Number(plan?.id || 0),
+    cast_id: Number(plan?.cast_id || 0),
+    actual_hour: Number(targetHour),
+    plan_hour: Number(plan?.plan_hour ?? targetHour),
+    status: "pending",
+    distance_km: Number(plan?.distance_km || plan?.casts?.distance_km || 0),
+    destination_area: plan?.planned_area || plan?.casts?.area || "",
+    destination_address: plan?.destination_address || plan?.casts?.address || "",
+    note: plan?.note || "",
+    casts: {
+      ...(plan?.casts || {}),
+      area: plan?.planned_area || plan?.casts?.area || "",
+      address: plan?.destination_address || plan?.casts?.address || "",
+      distance_km: Number(plan?.distance_km || plan?.casts?.distance_km || 0),
+      travel_minutes: Number(plan?.casts?.travel_minutes || 0),
+    },
+    simulated_from_plan: true
+  }));
+}
+
+function __simulationBuildProjectedRowsForHourFallback(targetHour) {
+  const hour = Number(targetHour);
+  const actualRows = (Array.isArray(typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) ? (typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) : [])
+    .filter(row => Number(row?.actual_hour ?? row?.plan_hour) === hour)
+    .filter(row => {
+      const status = normalizeStatus(row?.status);
+      return status !== "done" && status !== "cancel";
+    });
+
+  const actualPlanIds = new Set(actualRows.map(row => Number(row?.plan_id || 0)).filter(Boolean));
+  const actualCastKeys = new Set(actualRows.map(row => `${Number(row?.cast_id || 0)}:${hour}`));
+  const doneOrCancelPlanIds = new Set(
+    (Array.isArray(typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) ? (typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) : [])
+      .filter(row => Number(row?.actual_hour ?? row?.plan_hour) === hour)
+      .filter(row => {
+        const status = normalizeStatus(row?.status);
+        return status === "done" || status === "cancel";
+      })
+      .map(row => Number(row?.plan_id || 0))
+      .filter(Boolean)
+  );
+
+  const planRows = (Array.isArray(typeof currentPlansCache !== "undefined" ? currentPlansCache : window.currentPlansCache) ? (typeof currentPlansCache !== "undefined" ? currentPlansCache : window.currentPlansCache) : [])
+    .filter(plan => Number(plan?.plan_hour ?? -1) === hour)
+    .filter(plan => !actualPlanIds.has(Number(plan?.id || 0)))
+    .filter(plan => !doneOrCancelPlanIds.has(Number(plan?.id || 0)))
+    .filter(plan => !actualCastKeys.has(`${Number(plan?.cast_id || 0)}:${hour}`));
+
+  return [...actualRows, ...__simulationNormalizePendingRows(planRows, hour)];
+}
+
+function __simulationBuildSimulationRowsForHourFallback(targetHour, options = {}) {
+  const hour = Number(targetHour);
+  const slotRows = __simulationBuildProjectedRowsForHourFallback(hour);
+  const slotPlanIds = new Set(slotRows.map(row => Number(row?.plan_id || 0)).filter(Boolean));
+  const slotCount = slotRows.filter(row => Boolean(row?.simulated_from_plan)).length;
+  let inflowRows = [];
+
+  if (options?.includePlanInflow) {
+    const actualPlanIdsAll = new Set(
+      (Array.isArray(typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) ? (typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) : [])
+        .filter(row => {
+          const status = normalizeStatus(row?.status);
+          return status !== "cancel" && status !== "done";
+        })
+        .map(row => Number(row?.plan_id || 0))
+        .filter(Boolean)
+    );
+    const doneOrCancelPlanIdsAll = new Set(
+      (Array.isArray(typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) ? (typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) : [])
+        .filter(row => {
+          const status = normalizeStatus(row?.status);
+          return status === "cancel" || status === "done";
+        })
+        .map(row => Number(row?.plan_id || 0))
+        .filter(Boolean)
+    );
+
+    const inflowPlans = (Array.isArray(typeof currentPlansCache !== "undefined" ? currentPlansCache : window.currentPlansCache) ? (typeof currentPlansCache !== "undefined" ? currentPlansCache : window.currentPlansCache) : [])
+      .filter(plan => Number(plan?.plan_hour ?? -1) < hour)
+      .filter(plan => !slotPlanIds.has(Number(plan?.id || 0)))
+      .filter(plan => !doneOrCancelPlanIdsAll.has(Number(plan?.id || 0)))
+      .filter(plan => !actualPlanIdsAll.has(Number(plan?.id || 0)));
+
+    inflowRows = __simulationNormalizePendingRows(inflowPlans, hour).map(row => ({
+      ...row,
+      simulated_inflow: true
+    }));
+  }
+
+  return {
+    rows: [...slotRows, ...inflowRows],
+    summary: {
+      slotPlanCount: slotCount,
+      inflowPlanCount: inflowRows.length
+    }
+  };
+}
+
+(function registerSimulationFallbacks() {
+  if (typeof window.buildProjectedRowsForHour !== 'function') {
+    window.buildProjectedRowsForHour = __simulationBuildProjectedRowsForHourFallback;
+  }
+  if (typeof window.buildSimulationRowsForHour !== 'function') {
+    window.buildSimulationRowsForHour = __simulationBuildSimulationRowsForHourFallback;
+  }
+  if (typeof window.getEffectiveVehiclesForHour !== 'function') {
+    window.getEffectiveVehiclesForHour = function(targetHour) {
+      const slotMinutes = Number(targetHour) * 60;
+      const vehicles = Array.isArray(getSelectedVehiclesForToday?.()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
+      const activeItems = (Array.isArray(typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) ? (typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) : []).filter(row => {
+        const status = normalizeStatus(row?.status);
+        return status !== 'done' && status !== 'cancel';
+      });
+      return vehicles.filter(vehicle => {
+        const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle.id));
+        if (!rows.length) return true;
+        const orderedRows = typeof moveManualLastItemsToEnd === 'function' && typeof sortItemsByNearestRoute === 'function'
+          ? moveManualLastItemsToEnd(sortItemsByNearestRoute(rows))
+          : rows;
+        const forecast = typeof getVehicleRotationForecastSafe === 'function'
+          ? getVehicleRotationForecastSafe(vehicle, orderedRows)
+          : null;
+        const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
+        if (readyMinutes === null) return true;
+        return readyMinutes <= slotMinutes;
+      });
+    };
+  }
+  if (typeof window.getVehicleDeadNamesForHour !== 'function') {
+    window.getVehicleDeadNamesForHour = function(targetHour) {
+      const slotMinutes = Number(targetHour) * 60;
+      const vehicles = Array.isArray(getSelectedVehiclesForToday?.()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
+      const activeItems = (Array.isArray(typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) ? (typeof currentActualsCache !== "undefined" ? currentActualsCache : window.currentActualsCache) : []).filter(row => {
+        const status = normalizeStatus(row?.status);
+        return status !== 'done' && status !== 'cancel';
+      });
+      return vehicles.filter(vehicle => {
+        const rows = activeItems.filter(item => Number(item?.vehicle_id || 0) === Number(vehicle.id));
+        if (!rows.length) return false;
+        const orderedRows = typeof moveManualLastItemsToEnd === 'function' && typeof sortItemsByNearestRoute === 'function'
+          ? moveManualLastItemsToEnd(sortItemsByNearestRoute(rows))
+          : rows;
+        const forecast = typeof getVehicleRotationForecastSafe === 'function'
+          ? getVehicleRotationForecastSafe(vehicle, orderedRows)
+          : null;
+        const readyMinutes = parseClockTextToMinutes(forecast?.predictedReadyTime);
+        return readyMinutes !== null && readyMinutes > slotMinutes;
+      }).map(vehicle => vehicle?.driver_name || vehicle?.plate_number || `車両${vehicle.id}`);
+    };
+  }
+})();
+
+window.renderSimulationDispatchPreview = function renderSimulationDispatchPreview() {
+  const hour = Number(els.simulationSlotSelect?.value ?? getSimulationSlotHourSafe() ?? getOperationBaseHour());
+  setSimulationSlotHourSafe(hour);
+
+  const built = __simulationBuildSimulationRowsForHourFallback(hour, { includePlanInflow: Boolean(els.simulationIncludePlanInflow?.checked) });
+  const rows = Array.isArray(built?.rows) ? built.rows.filter(Boolean) : [];
+  const vehicles = Array.isArray(getSelectedVehiclesForToday?.()) ? getSelectedVehiclesForToday().filter(Boolean) : [];
+
+  if (!vehicles.length) {
+    alert('可能車両を選択してください');
+    return [];
+  }
+  if (!rows.length) {
+    alert('この便の試算対象がありません');
+    return [];
+  }
+
+  const monthlyMap = typeof buildMonthlyDistanceMapForCurrentMonth === 'function'
+    ? buildMonthlyDistanceMapForCurrentMonth()
+    : new Map();
+
+  let assignments = [];
+  if (typeof optimizeAssignments === 'function') {
+    assignments = optimizeAssignments(rows, vehicles, monthlyMap, { mode: 'simulation_preview' });
+  } else if (window.DispatchCore?.optimizeAssignments) {
+    assignments = window.DispatchCore.optimizeAssignments(rows, vehicles, monthlyMap, { mode: 'simulation_preview' });
+  }
+  if (typeof resolveCapacityOverflowLocally === 'function') {
+    assignments = resolveCapacityOverflowLocally(assignments, rows, vehicles, monthlyMap);
+  }
+  if (!Array.isArray(assignments)) assignments = [];
+
+  const byItemId = new Map(assignments.map(a => [Number(a?.item_id || 0), Number(a?.vehicle_id || 0)]));
+  const previewRows = rows.map(row => ({
+    ...row,
+    vehicle_id: byItemId.get(Number(row.id)) || 0
+  }));
+  const assignedCount = previewRows.filter(row => Number(row.vehicle_id || 0) > 0).length;
+  const unassignedRows = previewRows.filter(row => Number(row.vehicle_id || 0) <= 0);
+
+  setLastSimulationResultSafe({
+    type: 'dispatch_preview',
+    hour,
+    assignments,
+    rows: previewRows,
+    summary: built.summary
+  });
+
+  if (els.simulationDiagnosis) {
+    const diagStatus = unassignedRows.length ? 'warn' : 'ok';
+    els.simulationDiagnosis.className = `hybrid-diagnosis ${diagStatus}`;
+    els.simulationDiagnosis.innerHTML = `
+      <div class="hybrid-state-row">
+        ${buildStatusPill('便', `${getHourLabel(hour)}`, diagStatus)}
+        ${buildStatusPill('対象', `${rows.length}名`, diagStatus)}
+        ${buildStatusPill('割当', `${assignedCount}名`, diagStatus)}
+        ${buildStatusPill('未割当', `${unassignedRows.length}名`, unassignedRows.length ? 'warn' : 'ok')}
+      </div>
+      <div class="hybrid-legend-grid">
+        <div class="hybrid-legend-card">
+          <div class="hybrid-legend-title">対象便予定</div>
+          <div class="hybrid-legend-value">${Number(built?.summary?.slotPlanCount || 0)}名</div>
+        </div>
+        <div class="hybrid-legend-card">
+          <div class="hybrid-legend-title">前便未処理予定</div>
+          <div class="hybrid-legend-value">${Number(built?.summary?.inflowPlanCount || 0)}名</div>
+        </div>
+        <div class="hybrid-legend-card">
+          <div class="hybrid-legend-title">表示</div>
+          <div class="hybrid-legend-value">試算のみ / 実績保存なし / 実際の配車結果はそのまま表示</div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (els.simulationPreview) {
+    const formatMinutesJaSafe = minutes => {
+      if (typeof formatMinutesAsJa === 'function') return formatMinutesAsJa(minutes);
+      const safe = Math.max(0, Math.round(Number(minutes || 0)));
+      const h = Math.floor(safe / 60);
+      const m = safe % 60;
+      if (h <= 0) return `${m}分`;
+      if (m === 0) return `${h}時間`;
+      return `${h}時間${m}分`;
+    };
+
+    const sortRowsForPreview = sourceRows => {
+      const base = Array.isArray(sourceRows) ? sourceRows.slice() : [];
+      if (typeof moveManualLastItemsToEnd === 'function' && typeof sortItemsByNearestRoute === 'function') {
+        try {
+          return moveManualLastItemsToEnd(sortItemsByNearestRoute(base));
+        } catch (_) {}
+      }
+      return base.sort((a, b) => Number(a?.distance_km || 0) - Number(b?.distance_km || 0));
+    };
+
+    const buildVehicleSummary = assignedRows => {
+      const orderedRows = sortRowsForPreview(assignedRows);
+      const forecast = typeof calcVehicleRotationForecastGlobal === 'function'
+        ? calcVehicleRotationForecastGlobal(null, orderedRows)
+        : (typeof getVehicleRotationForecastSafe === 'function' ? getVehicleRotationForecastSafe(null, orderedRows) : null);
+      const routeDistanceKm = Number(forecast?.routeDistanceKm ?? (typeof calculateRouteDistanceGlobal === 'function' ? calculateRouteDistanceGlobal(orderedRows) : 0) ?? 0);
+      const lastRow = orderedRows[orderedRows.length - 1] || {};
+      const returnDistanceKm = Number(forecast?.returnDistanceKm ?? lastRow?.distance_km ?? lastRow?.casts?.distance_km ?? 0);
+      const roundTripKm = Number((routeDistanceKm + returnDistanceKm).toFixed(1));
+      const totalMinutes = Number(forecast?.predictedReturnMinutes ?? (typeof getRowsTravelTimeSummary === 'function' ? getRowsTravelTimeSummary(orderedRows)?.totalMinutes : 0) ?? 0);
+      return {
+        orderedRows,
+        roundTripKm,
+        totalMinutes,
+        totalMinutesLabel: formatMinutesJaSafe(totalMinutes)
+      };
+    };
+
+    const assignedVehicleGroups = vehicles.map(vehicle => {
+      const vehicleRows = previewRows.filter(row => Number(row?.vehicle_id || 0) === Number(vehicle?.id || 0));
+      const summary = buildVehicleSummary(vehicleRows);
+      return {
+        vehicle,
+        rows: summary.orderedRows,
+        roundTripKm: summary.roundTripKm,
+        totalMinutes: summary.totalMinutes,
+        totalMinutesLabel: summary.totalMinutesLabel
+      };
+    }).filter(group => group.rows.length > 0)
+      .sort((a, b) => Number(a.vehicle?.id || 0) - Number(b.vehicle?.id || 0));
+
+    const buildCompactCastLabel = row => {
+      const name = escapeHtml(row?.casts?.name || '-');
+      const area = escapeHtml(normalizeAreaLabel(row?.destination_area || row?.planned_area || row?.casts?.area || '-'));
+      return `${name}(${area})${row?.simulated_inflow ? ' [流入]' : ''}`;
+    };
+
+    const assignedHtml = assignedVehicleGroups.length
+      ? assignedVehicleGroups.map(group => {
+          const vehicleLabel = group.vehicle?.driver_name || group.vehicle?.plate_number || `車両${group.vehicle?.id || '-'}`;
+          const castLine = group.rows.map(buildCompactCastLabel).join(' ・ ');
+          return `
+            <div class="hybrid-legend-card" style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;">
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <div class="hybrid-legend-title" style="margin:0;">${escapeHtml(vehicleLabel)}</div>
+                <span class="chip">${group.rows.length}名</span>
+                <span class="chip">往復 ${group.roundTripKm.toFixed(1)}km</span>
+                <span class="chip">往復 ${escapeHtml(group.totalMinutesLabel)}</span>
+              </div>
+              <div style="font-size:13px;line-height:1.6;word-break:break-word;">${castLine || '-'}</div>
+            </div>
+          `;
+        }).join('')
+      : '<div class="muted">割当車両はありません</div>';
+
+    const unassignedHtml = unassignedRows.length
+      ? `
+        <div class="hybrid-legend-card" style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <div class="hybrid-legend-title" style="margin:0;">未割当</div>
+            <span class="chip">${unassignedRows.length}名</span>
+          </div>
+          <div style="font-size:13px;line-height:1.6;word-break:break-word;">
+            ${unassignedRows.map(buildCompactCastLabel).join(' ・ ')}
+          </div>
+        </div>
+      ` : '';
+
+    els.simulationPreview.className = 'simulation-preview';
+    els.simulationPreview.innerHTML = `
+      <div class="sim-preview-head">
+        <h4 class="sim-preview-title">試算対象一覧</h4>
+        <span class="chip">${getHourLabel(hour)}</span>
+      </div>
+      <div class="sim-preview-meta">対象 ${rows.length}名 / 割当 ${assignedCount}名 / 未割当 ${unassignedRows.length}名</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">${assignedHtml}${unassignedHtml}</div>
+    `;
+  }
+
+  return previewRows;
+};

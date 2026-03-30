@@ -987,6 +987,7 @@ function renderCastsTable() {
 
 function exportCastsCsv() {
   const headers = [
+    "cast_id",
     "name",
     "phone",
     "address",
@@ -999,6 +1000,7 @@ function exportCastsCsv() {
   ];
 
   const rows = allCastsCache.map(cast => [
+    Number(cast.id || 0) || "",
     cast.name || "",
     cast.phone || "",
     cast.address || "",
@@ -1675,6 +1677,53 @@ function normalizePlanImportMode(input) {
   return "";
 }
 
+function normalizeCastMatchText(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function findCastForPlanImport(row, casts = []) {
+  const castIdValue = Number(row.cast_id || 0);
+  const castName = normalizeCastMatchText(row.cast_name);
+  const castAddress = normalizeCastMatchText(row.cast_address || row.destination_address);
+  const castPhone = normalizeCastMatchText(row.cast_phone || row.phone);
+
+  if (castIdValue) {
+    const byId = casts.find(x => Number(x.id) === castIdValue);
+    if (byId) return byId;
+  }
+
+  if (castName && castAddress) {
+    const byNameAddress = casts.find(x => (
+      normalizeCastMatchText(x.name) === castName &&
+      normalizeCastMatchText(x.address) === castAddress
+    ));
+    if (byNameAddress) return byNameAddress;
+  }
+
+  if (castName && castPhone) {
+    const byNamePhone = casts.find(x => (
+      normalizeCastMatchText(x.name) === castName &&
+      normalizeCastMatchText(x.phone) === castPhone
+    ));
+    if (byNamePhone) return byNamePhone;
+  }
+
+  if (castAddress) {
+    const addressMatches = casts.filter(x => normalizeCastMatchText(x.address) === castAddress);
+    if (addressMatches.length === 1) return addressMatches[0];
+  }
+
+  if (castName) {
+    const nameMatches = casts.filter(x => normalizeCastMatchText(x.name) === castName);
+    if (nameMatches.length === 1) return nameMatches[0];
+  }
+
+  return null;
+}
+
 function getPlanDuplicateKey(row) {
   return [
     row.plan_date || "",
@@ -1693,8 +1742,9 @@ function exportPlansCsv() {
     .map(plan => ({
       plan_date: planDate,
       plan_hour: Number(plan.plan_hour || 0),
-      cast_id: Number(plan.cast_id || plan.casts?.id || 0),
       cast_name: plan.casts?.name || "",
+      cast_address: plan.casts?.address || "",
+      cast_phone: plan.casts?.phone || "",
       destination_address: plan.destination_address || plan.casts?.address || "",
       planned_area: normalizeAreaLabel(plan.planned_area || plan.casts?.area || ""),
       distance_km: plan.distance_km ?? "",
@@ -1706,8 +1756,9 @@ function exportPlansCsv() {
   const headers = [
     "plan_date",
     "plan_hour",
-    "cast_id",
     "cast_name",
+    "cast_address",
+    "cast_phone",
     "destination_address",
     "planned_area",
     "distance_km",
@@ -1784,17 +1835,9 @@ async function importPlansCsvFile() {
     const missingCasts = [];
 
     for (const row of rows) {
-      const castIdValue = Number(row.cast_id || 0);
-      let cast = null;
-      if (castIdValue) {
-        cast = allCastsCache.find(x => Number(x.id) === castIdValue) || null;
-      }
-      if (!cast && row.cast_name) {
-        const name = String(row.cast_name).trim();
-        cast = allCastsCache.find(x => String(x.name || "").trim() === name) || null;
-      }
+      const cast = findCastForPlanImport(row, allCastsCache);
       if (!cast) {
-        missingCasts.push(String(row.cast_name || row.cast_id || "不明"));
+        missingCasts.push(String(row.cast_name || row.cast_address || row.cast_id || "不明"));
         continue;
       }
 
@@ -3612,6 +3655,17 @@ function __overflowGetOrderedRowsFromAssignments(ctx, assignments) {
   });
 }
 
+function __overflowIsMonotonicFromOrigin(rows) {
+  const ordered = Array.isArray(rows) ? rows : [];
+  let prev = -Infinity;
+  for (const row of ordered) {
+    const dist = Number(row?.distance_km || row?.casts?.distance_km || 0);
+    if (dist + 1e-9 < prev) return false;
+    prev = dist;
+  }
+  return true;
+}
+
 function __overflowIsReverseDirectionAgainstVehicle(ctx, candidateAssignment, existingAssignments, vehicle) {
   const targetArea = __overflowGetAreaFromAssignment(ctx, candidateAssignment);
   const existingAreas = (Array.isArray(existingAssignments) ? existingAssignments : [])
@@ -3680,6 +3734,10 @@ function __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMa
   const simulatedAssignments = [...candidate.existingAssignments, movingAssignment];
   const orderedRows = __overflowGetOrderedRowsFromAssignments(ctx, simulatedAssignments);
 
+  if (!__overflowIsMonotonicFromOrigin(orderedRows)) {
+    return null;
+  }
+
   const routeKm = Number(calculateRouteDistanceGlobal(orderedRows) || 0);
   const timeSummary = getRowsTravelTimeSummary(orderedRows);
   const routeMinutes = Number(timeSummary?.totalMinutes || 0);
@@ -3732,6 +3790,7 @@ function __overflowChooseBestTarget(ctx, movingAssignment, bucket, vehicles, mon
 
   candidates.forEach(candidate => {
     const evaluated = __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMap);
+    if (!evaluated) return;
     if (!best || evaluated.score > best.score) {
       best = evaluated;
     }
@@ -7221,9 +7280,10 @@ function callDispatchCoreSafe(items, vehicles, monthlyMap, options = {}) {
 }
 
 function runSimulationDispatchPreview() {
-  if (typeof runAutoDispatch === 'function') {
-    return runAutoDispatch();
+  if (typeof window.renderSimulationDispatchPreview === 'function') {
+    return window.renderSimulationDispatchPreview();
   }
+  alert('試算プレビュー関数が見つかりません');
   return [];
 }
 
