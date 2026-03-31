@@ -88,6 +88,9 @@
         html += `<div class="grouped-area-title">${getGroupedAreaHeaderHtml(detailArea)}</div>`;
 
         areaItems.forEach(item => {
+          const overflowText = Number(item?.vehicle_id || 0) <= 0 && String(item?.driver_name || '').includes('あぶれ')
+            ? `<span class="badge-status pending" style="margin-left:6px;">あぶれ</span>`
+            : '';
           html += `
             <div class="grouped-row">
               <div>${getHourLabel(hour)}</div>
@@ -96,7 +99,7 @@
                 address: item?.destination_address || item?.casts?.address,
                 lat: item?.casts?.latitude,
                 lng: item?.casts?.longitude
-              })}</strong></div>
+              })}</strong>${overflowText}</div>
               <div>${escapeHtml(normalizeAreaLabel(item?.destination_area || "無し"))}</div>
               <div>${item?.distance_km ?? ""}</div>
               <div class="op-cell">

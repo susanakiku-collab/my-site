@@ -3692,32 +3692,50 @@ function __overflowIsReverseDirectionAgainstVehicle(ctx, candidateAssignment, ex
 function __overflowGetTargetCandidates(ctx, movingAssignment, bucket, vehicles) {
   const candidates = [];
   const movingArea = __overflowGetAreaFromAssignment(ctx, movingAssignment);
+  const debugRows = [];
 
   (Array.isArray(vehicles) ? vehicles : []).forEach(vehicle => {
     const vehicleId = Number(vehicle?.id || 0);
+    const vehicleName = vehicle?.driver_name || vehicle?.name || `車両${vehicleId}`;
     if (!vehicleId) return;
-    if (vehicleId === Number(bucket.vehicleId)) return;
+    if (vehicleId === Number(bucket.vehicleId)) {
+      debugRows.push({ vehicleId, vehicleName, status: 'skip', reason: 'source_vehicle' });
+      return;
+    }
 
     const key = __overflowGetVehicleHourKey(vehicleId, bucket.hour);
     const existingAssignments = ctx.vehicleHourRowsMap.get(key) || [];
     const seatCapacity = Math.max(1, Number(vehicle?.seat_capacity || 4));
 
-    if (existingAssignments.length >= seatCapacity) return;
-    if (__overflowIsReverseDirectionAgainstVehicle(ctx, movingAssignment, existingAssignments, vehicle)) return;
+    if (existingAssignments.length >= seatCapacity) {
+      debugRows.push({ vehicleId, vehicleName, status: 'excluded', reason: 'seat_capacity', existingCount: existingAssignments.length, seatCapacity });
+      return;
+    }
+    if (__overflowIsReverseDirectionAgainstVehicle(ctx, movingAssignment, existingAssignments, vehicle)) {
+      debugRows.push({ vehicleId, vehicleName, status: 'excluded', reason: 'reverse_direction', existingCount: existingAssignments.length, seatCapacity });
+      return;
+    }
 
     const existingAreas = existingAssignments
       .map(row => __overflowGetAreaFromAssignment(ctx, row))
       .filter(Boolean);
 
     let normalSpreadOk = true;
+    let spreadNgArea = '';
+    let spreadNgScore = null;
     for (const area of existingAreas) {
       const direction = Number(getDirectionAffinityScore(area, movingArea) || 0);
       if (direction <= -38) {
         normalSpreadOk = false;
+        spreadNgArea = area;
+        spreadNgScore = direction;
         break;
       }
     }
-    if (!normalSpreadOk) return;
+    if (!normalSpreadOk) {
+      debugRows.push({ vehicleId, vehicleName, status: 'excluded', reason: 'direction_affinity', existingAreas, ngArea: spreadNgArea, ngScore: spreadNgScore });
+      return;
+    }
 
     candidates.push({
       vehicleId,
@@ -3725,6 +3743,16 @@ function __overflowGetTargetCandidates(ctx, movingAssignment, bucket, vehicles) 
       hour: bucket.hour,
       existingAssignments
     });
+    debugRows.push({ vehicleId, vehicleName, status: 'candidate', existingCount: existingAssignments.length, seatCapacity, existingAreas });
+  });
+
+  __logOverflowDebug({
+    phase: 'candidate_filter',
+    movingItemId: Number(movingAssignment?.item_id || 0),
+    movingArea,
+    sourceVehicleId: Number(bucket?.vehicleId || 0),
+    hour: Number(bucket?.hour || 0),
+    rows: debugRows
   });
 
   return candidates;
@@ -3733,8 +3761,20 @@ function __overflowGetTargetCandidates(ctx, movingAssignment, bucket, vehicles) 
 function __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMap) {
   const simulatedAssignments = [...candidate.existingAssignments, movingAssignment];
   const orderedRows = __overflowGetOrderedRowsFromAssignments(ctx, simulatedAssignments);
+  const vehicle = candidate.vehicle;
+  const vehicleName = vehicle?.driver_name || vehicle?.name || `車両${candidate.vehicleId}`;
 
   if (!__overflowIsMonotonicFromOrigin(orderedRows)) {
+    __logOverflowDebug({
+      phase: 'evaluate',
+      movingItemId: Number(movingAssignment?.item_id || 0),
+      vehicleId: Number(candidate.vehicleId || 0),
+      vehicleName,
+      status: 'excluded',
+      reason: 'monotonic_ng',
+      orderedItemIds: orderedRows.map(row => Number(row?.item_id || 0)),
+      orderedAreas: orderedRows.map(row => __overflowGetAreaFromAssignment(ctx, row))
+    });
     return null;
   }
 
@@ -3753,7 +3793,6 @@ function __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMa
     spreadScore += Math.max(0, Number(getDirectionAffinityScore(area, movingArea) || 0)) * 1.8;
   });
 
-  const vehicle = candidate.vehicle;
   spreadScore += Number(getVehicleAreaMatchScore(vehicle, movingArea) || 0) * 2.3;
   spreadScore += Number(getStrictHomeCompatibilityScore(movingArea, vehicle?.home_area || "") || 0) * 0.7;
   spreadScore += Math.max(0, Number(getDirectionAffinityScore(movingArea, vehicle?.home_area || "") || 0)) * 0.4;
@@ -3773,27 +3812,69 @@ function __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMa
     - loadPenalty
     - lastTripPenalty;
 
-  return {
+  const result = {
     vehicleId: candidate.vehicleId,
     vehicle,
     score,
     routeKm,
     routeMinutes
   };
+
+  __logOverflowDebug({
+    phase: 'evaluate',
+    movingItemId: Number(movingAssignment?.item_id || 0),
+    vehicleId: Number(candidate.vehicleId || 0),
+    vehicleName,
+    status: 'ok',
+    routeKm,
+    routeMinutes,
+    score,
+    existingAreas,
+    orderedItemIds: orderedRows.map(row => Number(row?.item_id || 0)),
+    orderedAreas: orderedRows.map(row => __overflowGetAreaFromAssignment(ctx, row))
+  });
+
+  return result;
 }
 
 function __overflowChooseBestTarget(ctx, movingAssignment, bucket, vehicles, monthlyMap) {
   const candidates = __overflowGetTargetCandidates(ctx, movingAssignment, bucket, vehicles);
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    __logOverflowDebug({
+      phase: 'choose',
+      movingItemId: Number(movingAssignment?.item_id || 0),
+      status: 'no_candidates'
+    });
+    return null;
+  }
 
   let best = null;
+  const compared = [];
 
   candidates.forEach(candidate => {
     const evaluated = __overflowEvaluateInsertion(ctx, movingAssignment, candidate, monthlyMap);
     if (!evaluated) return;
+    compared.push({
+      vehicleId: Number(evaluated.vehicleId || 0),
+      vehicleName: evaluated?.vehicle?.driver_name || evaluated?.vehicle?.name || `車両${evaluated.vehicleId}`,
+      score: Number(evaluated.score || 0),
+      routeMinutes: Number(evaluated.routeMinutes || 0),
+      routeKm: Number(evaluated.routeKm || 0)
+    });
     if (!best || evaluated.score > best.score) {
       best = evaluated;
     }
+  });
+
+  __logOverflowDebug({
+    phase: 'choose',
+    movingItemId: Number(movingAssignment?.item_id || 0),
+    compared,
+    selectedVehicleId: Number(best?.vehicleId || 0),
+    selectedVehicleName: best?.vehicle?.driver_name || best?.vehicle?.name || (best ? `車両${best.vehicleId}` : ''),
+    selectedScore: Number(best?.score || 0),
+    selectedRouteMinutes: Number(best?.routeMinutes || 0),
+    selectedRouteKm: Number(best?.routeKm || 0)
   });
 
   return best;
@@ -3963,13 +4044,32 @@ async function runAutoDispatch() {
   if (!Array.isArray(assignments)) assignments = [];
 
   const finalAssignedItemIds = new Set(assignments.map(a => Number(a?.item_id || 0)).filter(Boolean));
-  const finalUnassignedCount = activeItems.filter(item => !finalAssignedItemIds.has(Number(item?.id || 0))).length;
+  const overflowMeta = window.__THEMIS_LAST_OVERFLOW__ || null;
+  const overflowItemIds = new Set(
+    Array.isArray(overflowMeta?.overflowGroups)
+      ? overflowMeta.overflowGroups.flatMap(group => Array.isArray(group?.itemIds) ? group.itemIds.map(id => Number(id || 0)) : []).filter(Boolean)
+      : []
+  );
+  const finalUnassignedItems = activeItems.filter(item => !finalAssignedItemIds.has(Number(item?.id || 0)));
+  const finalUnassignedCount = finalUnassignedItems.length;
+  const hasUnexpectedUnassigned = finalUnassignedItems.some(item => !overflowItemIds.has(Number(item?.id || 0)));
 
-  if (!assignments.length || finalUnassignedCount > 0) {
+  if (!assignments.length && !overflowItemIds.size) {
     console.error("auto dispatch incomplete", {
       totalItems: activeItems.length,
       assignedCount: finalAssignedItemIds.size,
       unassignedCount: finalUnassignedCount
+    });
+    alert("自動配車に失敗しました");
+    return;
+  }
+
+  if (hasUnexpectedUnassigned) {
+    console.error("auto dispatch incomplete", {
+      totalItems: activeItems.length,
+      assignedCount: finalAssignedItemIds.size,
+      unassignedCount: finalUnassignedCount,
+      overflowCount: overflowItemIds.size
     });
     alert("自動配車に失敗しました");
     return;
@@ -4652,6 +4752,161 @@ function rebundleLongDistanceDirectionalClusters(assignments, items, vehicles, m
   return working;
 }
 
+
+function getOverflowDisplayRowsFromCache() {
+  const meta = window.__THEMIS_LAST_OVERFLOW__ || null;
+  if (!meta || !Array.isArray(meta.overflowGroups) || !meta.overflowGroups.length) return [];
+
+  const overflowIds = new Set(
+    meta.overflowGroups.flatMap(group => Array.isArray(group?.itemIds) ? group.itemIds.map(id => Number(id || 0)) : []).filter(Boolean)
+  );
+  if (!overflowIds.size) return [];
+
+  const groupById = new Map();
+  meta.overflowGroups.forEach(group => {
+    (Array.isArray(group?.itemIds) ? group.itemIds : []).forEach(id => {
+      groupById.set(Number(id || 0), String(group?.group || '無し'));
+    });
+  });
+
+  return currentActualsCache
+    .filter(item => overflowIds.has(Number(item?.id || 0)))
+    .map(item => ({
+      ...item,
+      overflow_group: groupById.get(Number(item?.id || 0)) || normalizeAreaLabel(item?.destination_area || item?.casts?.area || '無し')
+    }))
+    .sort((a, b) => Number(a?.actual_hour || 0) - Number(b?.actual_hour || 0) || Number(b?.distance_km || 0) - Number(a?.distance_km || 0));
+}
+
+
+
+
+function getCapacityOverflowRowsFromCache() {
+  const meta = window.__THEMIS_LAST_OVERFLOW__ || null;
+  const rows = Array.isArray(meta?.capacityOverflowItems) ? meta.capacityOverflowItems : [];
+  if (!rows.length) return [];
+  const byId = new Map(currentActualsCache.map(item => [Number(item?.id || 0), item]));
+  return rows.map(row => {
+    const item = byId.get(Number(row?.itemId || 0)) || null;
+    return {
+      ...(item || {}),
+      actual_hour: Number(row?.hour || item?.actual_hour || 0),
+      distance_km: Number(row?.distanceKm || item?.distance_km || item?.casts?.distance_km || 0),
+      capacity_group: String(row?.group || row?.area || normalizeAreaLabel(item?.destination_area || item?.casts?.area || '無し')),
+      capacity_reason: '定員超過'
+    };
+  }).sort((a, b) => Number(a?.actual_hour || 0) - Number(b?.actual_hour || 0) || Number(a?.distance_km || 0) - Number(b?.distance_km || 0));
+}
+
+function buildCapacityOverflowHtml() {
+  const meta = window.__THEMIS_LAST_OVERFLOW__ || null;
+  const rows = getCapacityOverflowRowsFromCache();
+  const overflowCount = Number(meta?.capacityOverflowCount || 0);
+  if (!overflowCount || !rows.length) return '';
+  const totalSeatCapacity = Number(meta?.totalSeatCapacity || 0);
+  const totalCastCount = Number(meta?.totalCastCount || 0);
+  return `
+    <div class="vehicle-result-card" style="border:1px solid rgba(239,68,68,.35); margin-bottom:16px;">
+      <div class="vehicle-result-head">
+        <div class="vehicle-result-title">
+          <h4>定員オーバー</h4>
+          <div class="vehicle-result-meta">方面確定後に、起点から近い順で超過分を未配車へ退避しています</div>
+        </div>
+        <div class="vehicle-result-badges">
+          <span class="metric-badge">総定員 ${totalSeatCapacity}人</span>
+          <span class="metric-badge">対象 ${totalCastCount}人</span>
+          <span class="metric-badge">超過 ${overflowCount}人</span>
+        </div>
+      </div>
+      <div class="vehicle-result-body">
+        ${rows.map((row, index) => `
+          <div class="dispatch-row">
+            <div class="dispatch-left">
+              <span class="badge-time">${escapeHtml(getHourLabel(row.actual_hour))}</span>
+              <span class="badge-order">未配車 ${index + 1}</span>
+              <span class="dispatch-name">${buildMapLinkHtml({
+                name: row.casts?.name,
+                address: row.destination_address || row.casts?.address,
+                lat: row.casts?.latitude,
+                lng: row.casts?.longitude,
+                className: 'dispatch-name-link'
+              })}</span>
+              <span class="dispatch-area">${escapeHtml(row.capacity_group || normalizeAreaLabel(row.destination_area || '-'))}</span>
+              <span class="badge-status canceled">定員超過</span>
+            </div>
+            <div class="dispatch-right">
+              <div class="dispatch-distance">${Number(row.distance_km || row.casts?.distance_km || 0).toFixed(1)}km</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+function buildOverflowEvaluationHtml() {
+  return "";
+
+  /* hidden for operations
+    <div class="vehicle-result-card" style="border:1px solid rgba(59,130,246,.28); margin-bottom:16px;">
+      <div class="vehicle-result-head">
+        <div class="vehicle-result-title">
+          <h4>あぶれ仮投入評価</h4>
+          <div class="vehicle-result-meta">判定順: 戻り時間 → 距離 → 人数</div>
+        </div>
+        <div class="vehicle-result-badges">
+          <span class="metric-badge">対象 ${evaluations.length}件</span>
+        </div>
+      </div>
+      <div class="vehicle-result-body">
+        ${evaluations.map((evalRow, index) => {
+          const candidates = Array.isArray(evalRow?.candidates) ? evalRow.candidates : [];
+          const selectedVehicleId = Number(evalRow?.selectedVehicleId || 0);
+          return `
+            <div style="padding:12px 0; border-bottom:${index === evaluations.length - 1 ? 'none' : '1px solid rgba(148,163,184,.14)'};">
+              <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
+                <span class="badge-time">${escapeHtml(getHourLabel(evalRow?.hour || 0))}</span>
+                <span class="badge-order">あぶれ ${index + 1}</span>
+                <span class="dispatch-name">${escapeHtml(evalRow?.castName || '-')}</span>
+                <span class="dispatch-area">${escapeHtml(evalRow?.group || evalRow?.area || '-')}</span>
+                <span class="metric-badge">距離 ${Number(evalRow?.distanceKm || 0).toFixed(1)}km</span>
+              </div>
+              <div style="display:grid; gap:8px;">
+                ${candidates.map(candidate => {
+                  const isSelected = Number(candidate?.vehicleId || 0) === selectedVehicleId;
+                  if (candidate?.excluded) {
+                    return `
+                      <div style="padding:10px 12px; border-radius:12px; background:rgba(15,23,42,.35); border:1px solid rgba(148,163,184,.18); color:#94a3b8;">
+                        <strong>${escapeHtml(candidate?.vehicleName || '-')}</strong>
+                        / 除外: ${escapeHtml(candidate?.reason || '-')}
+                      </div>
+                    `;
+                  }
+                  return `
+                    <div style="padding:10px 12px; border-radius:12px; background:${isSelected ? 'rgba(34,197,94,.10)' : 'rgba(15,23,42,.35)'}; border:1px solid ${isSelected ? 'rgba(34,197,94,.38)' : 'rgba(148,163,184,.18)'};">
+                      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:4px;">
+                        <strong>${escapeHtml(candidate?.vehicleName || '-')}</strong>
+                        ${isSelected ? '<span class="badge-status assigned">採用</span>' : ''}
+                      </div>
+                      <div class="dispatch-meta" style="font-size:12px; color:#9aa3b2; line-height:1.8;">
+                        最大戻り ${escapeHtml(formatMinutesAsJa(candidate?.maxReturnMinutes || 0))}
+                        / 全体合計往復 ${Number(candidate?.totalRoundTripKm || 0).toFixed(1)}km
+                        / 人数 ${Number(candidate?.seatCountAfter || 0)}人
+                        / 対象車戻り ${escapeHtml(formatMinutesAsJa(candidate?.routeMinutes || 0))} (往路 ${escapeHtml(formatMinutesAsJa(candidate?.outboundMinutes || 0))} / 復路 ${escapeHtml(formatMinutesAsJa(candidate?.returnMinutes || 0))})
+                        / 対象車往復 ${Number(candidate?.routeKm || 0).toFixed(1)}km (往路 ${Number(candidate?.outboundKm || 0).toFixed(1)} / 復路 ${Number(candidate?.returnKm || 0).toFixed(1)})
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  */
+}
+
 function renderDailyDispatchResult() {
   if (!els.dailyDispatchResult) return;
 
@@ -4688,6 +4943,10 @@ function renderDailyDispatchResult() {
         <div id="dispatchOverviewMap" style="width:100%;height:420px;border-radius:18px;overflow:hidden;background:#0f172a;"></div>
       </div>
     `;
+
+    const overflowRows = getOverflowDisplayRowsFromCache();
+    const capacityOverflowHtml = buildCapacityOverflowHtml();
+    const overflowEvaluationHtml = buildOverflowEvaluationHtml();
 
     const cardsHtml = cards
       .map(({ vehicle, rows, orderedRows }) => {
@@ -4782,7 +5041,45 @@ function renderDailyDispatchResult() {
       })
       .join("");
 
-    els.dailyDispatchResult.innerHTML = timelineHtml + overviewHtml + cardsHtml;
+    const overflowHtml = overflowRows.length
+      ? `
+        <div class="vehicle-result-card" style="border:1px solid rgba(245,158,11,.35);">
+          <div class="vehicle-result-head">
+            <div class="vehicle-result-title">
+              <h4>あぶれ方面</h4>
+              <div class="vehicle-result-meta">可能台数を超えた方面は未配車のまま表示しています</div>
+            </div>
+            <div class="vehicle-result-badges">
+              <span class="metric-badge">件数 ${overflowRows.length}件</span>
+            </div>
+          </div>
+          <div class="vehicle-result-body">
+            ${overflowRows.map((row, index) => `
+              <div class="dispatch-row">
+                <div class="dispatch-left">
+                  <span class="badge-time">${escapeHtml(getHourLabel(row.actual_hour))}</span>
+                  <span class="badge-order">あぶれ ${index + 1}</span>
+                  <span class="dispatch-name">${buildMapLinkHtml({
+                    name: row.casts?.name,
+                    address: row.destination_address || row.casts?.address,
+                    lat: row.casts?.latitude,
+                    lng: row.casts?.longitude,
+                    className: "dispatch-name-link"
+                  })}</span>
+                  <span class="dispatch-area">${escapeHtml(row.overflow_group || normalizeAreaLabel(row.destination_area || '-'))}</span>
+                  <span class="badge-status canceled">未配車</span>
+                </div>
+                <div class="dispatch-right">
+                  <div class="dispatch-distance">${Number(row.distance_km || row.casts?.distance_km || 0).toFixed(1)}km</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `
+      : "";
+
+    els.dailyDispatchResult.innerHTML = timelineHtml + overviewHtml + cardsHtml + capacityOverflowHtml + overflowEvaluationHtml + overflowHtml;
     renderOperationAndSimulationUI();
     renderDispatchOverviewMap(cards);
 
@@ -6028,7 +6325,15 @@ function getThemisV54StoredTravelMinutes(row) {
 function getThemisV54SegmentDistanceKm(fromPoint, toRow) {
   const toPoint = getThemisV54RowPoint(toRow);
   if (fromPoint && toPoint) {
-    return Number(estimateRoadKmBetweenPoints(fromPoint.lat, fromPoint.lng, toPoint.lat, toPoint.lng) || 0);
+    const rad = (deg) => (deg * Math.PI) / 180;
+    const R = 6371;
+    const dLat = rad(toPoint.lat - fromPoint.lat);
+    const dLng = rad(toPoint.lng - fromPoint.lng);
+    const lat1 = rad(fromPoint.lat);
+    const lat2 = rad(toPoint.lat);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Number((R * c).toFixed(1));
   }
   return getThemisV54RowDistance(toRow);
 }
@@ -6061,57 +6366,83 @@ function getThemisV54TravelSummary(rows) {
   const ordered = Array.isArray(rows) ? rows.filter(Boolean) : [];
   if (!ordered.length) {
     return {
+      outboundKm: 0,
+      returnKm: 0,
+      totalKm: 0,
       outboundMinutes: 0,
       returnMinutes: 0,
       totalMinutes: 0,
       sendOnlyMinutes: 0,
       stopCount: 0,
+      segmentKm: [],
       segmentMinutes: [],
-      model: "v5.4"
+      model: "legacy_segment_speed"
     };
   }
 
   const stopCount = ordered.length;
+  const segmentKm = [];
   const segmentMinutes = [];
-
   let currentPoint = { lat: ORIGIN_LAT, lng: ORIGIN_LNG };
+  let outboundKm = 0;
   let outboundMinutes = 0;
 
   ordered.forEach((row, index) => {
+    let legKm = 0;
     let legMinutes = 0;
     if (index === 0) {
+      legKm = Math.max(0, Number(getThemisV54RowDistance(row) || 0));
       legMinutes = getThemisV54StoredTravelMinutes(row);
       if (!(legMinutes > 0)) {
         legMinutes = Math.max(1, Math.round(
-          estimateFallbackTravelMinutes(getThemisV54RowDistance(row), getThemisV54RowArea(row))
+          estimateFallbackTravelMinutes(legKm, getThemisV54RowArea(row))
         ));
       }
     } else {
+      legKm = getThemisV54SegmentDistanceKm(currentPoint, row);
       legMinutes = getThemisV54SegmentMinutes(currentPoint, row);
     }
 
+    legKm = Math.max(0, Number(legKm || 0));
     legMinutes = Math.max(1, Math.round(Number(legMinutes || 0)));
+    segmentKm.push(Number(legKm.toFixed(1)));
     segmentMinutes.push(legMinutes);
+    outboundKm += legKm;
     outboundMinutes += legMinutes;
 
     const point = getThemisV54RowPoint(row);
     if (point) currentPoint = point;
   });
 
-  const dwellMinutes = stopCount;
-  const sendOnlyMinutes = Math.max(0, Math.round(outboundMinutes + dwellMinutes));
+  const sendOnlyMinutes = Math.max(0, Math.round(outboundMinutes));
   const isLastTrip = getThemisV54VehicleIsLastTrip(ordered);
-  const returnMinutes = isLastTrip ? 0 : Math.max(0, Math.round(outboundMinutes));
+  const lastRow = ordered[ordered.length - 1] || null;
+  let returnKm = 0;
+  let returnMinutes = 0;
+  if (!isLastTrip && lastRow) {
+    returnKm = Math.max(0, Number(getThemisV54RowDistance(lastRow) || 0));
+    returnMinutes = Math.max(0, Math.round(getThemisV54StoredTravelMinutes(lastRow) || 0));
+    if (!(returnMinutes > 0)) {
+      returnMinutes = Math.max(0, Math.round(
+        estimateFallbackTravelMinutes(returnKm, getThemisV54RowArea(lastRow))
+      ));
+    }
+  }
+  const totalKm = Math.max(0, Number((outboundKm + returnKm).toFixed(1)));
   const totalMinutes = Math.max(0, Math.round(sendOnlyMinutes + returnMinutes));
 
   return {
+    outboundKm: Number(outboundKm.toFixed(1)),
+    returnKm: Number(returnKm.toFixed(1)),
+    totalKm,
     outboundMinutes: Math.round(outboundMinutes),
     returnMinutes,
     totalMinutes,
     sendOnlyMinutes,
     stopCount,
+    segmentKm,
     segmentMinutes,
-    model: "v5.4"
+    model: "legacy_segment_speed"
   };
 }
 
@@ -6125,6 +6456,10 @@ getRowsReturnMinutes = function(rows) {
 
 getRowsTravelTimeSummary = function(rows) {
   return getThemisV54TravelSummary(rows);
+};
+
+calculateRouteDistanceGlobal = function(rows) {
+  return Number(getThemisV54TravelSummary(rows).outboundKm || 0);
 };
 
 calcVehicleRotationForecastGlobal = function(vehicle, orderedRows) {
@@ -6150,11 +6485,10 @@ calcVehicleRotationForecastGlobal = function(vehicle, orderedRows) {
   }, 99);
 
   const baseHour = firstHour === 99 ? 0 : firstHour;
-  const routeDistanceKm = Number(calculateRouteDistanceGlobal(rows) || 0);
-  const lastRow = rows[rows.length - 1] || {};
-  const returnDistanceKm = Number(lastRow.distance_km || 0);
-  const representativeArea = getRepresentativeAreaFromRows(rows);
   const summary = getThemisV54TravelSummary(rows);
+  const routeDistanceKm = Number(summary.outboundKm || 0);
+  const returnDistanceKm = Number(summary.returnKm || 0);
+  const representativeArea = getRepresentativeAreaFromRows(rows);
   const primaryZone = getDistanceZoneInfoGlobal(Math.max(routeDistanceKm, returnDistanceKm), representativeArea);
 
   const departDelayMinutes = (typeof getExpectedDepartureDelayMinutes === "function" ? getExpectedDepartureDelayMinutes(baseHour) : 0);
@@ -7584,3 +7918,13 @@ function getVehicleAreaMatchScore(vehicle, area) {
   return Math.max(-160, Math.min(110, Math.round(best)));
 }
 
+
+
+
+// ===== DEBUG: overflow evaluation log =====
+window.__overflowDebugLogs = [];
+
+function __logOverflowDebug(entry){
+  window.__overflowDebugLogs.push(entry);
+  console.log('[OVERFLOW DEBUG]', entry);
+}

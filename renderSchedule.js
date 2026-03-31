@@ -81,7 +81,10 @@
       className: `map-name-link matrix-name status-${safeStatus}`
     });
     const metaText = buildMatrixMetaText(row && row.distance_km, row && row.casts && row.casts.travel_minutes || row && row.travel_minutes);
-    return `<span class="matrix-line">${nameHtml}<span class="matrix-meta">${escapeHtml(metaText)}</span></span>`;
+    const overflowText = Number(row && row.vehicle_id || 0) <= 0 && String(row && row.driver_name || '').includes('あぶれ')
+      ? `<span class="matrix-meta" style="margin-left:6px;"> あぶれ</span>`
+      : '';
+    return `<span class="matrix-line">${nameHtml}<span class="matrix-meta">${escapeHtml(metaText)}</span>${overflowText}</span>`;
   }
 
   function renderPlanGroupedTableCore({ els, plans, actuals, actions, helpers }) {
