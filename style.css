@@ -2146,3 +2146,12 @@ img, table, input, select, textarea, button{
 @media (max-width: 480px){
   .sim-mini-chip-grid{ grid-template-columns:1fr; }
 }
+
+
+.header-actions{
+  align-items:center;
+}
+
+#adminHeaderBtn{
+  min-width:132px;
+}

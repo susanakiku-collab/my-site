@@ -9,6 +9,7 @@ const loginBtn = document.getElementById("loginBtn");
 const authMessage = document.getElementById("authMessage");
 
 function setMessage(message, isError = true) {
+  if (!authMessage) return;
   authMessage.textContent = message;
   authMessage.style.color = isError ? "#ff6b6b" : "#7be2ab";
 }
@@ -17,8 +18,8 @@ async function handleLogin() {
   try {
     setMessage("ログイン中...", false);
 
-    const email = loginEmail.value.trim();
-    const password = loginPassword.value.trim();
+    const email = loginEmail?.value.trim() || "";
+    const password = loginPassword?.value.trim() || "";
 
     if (!email || !password) {
       setMessage("ログインIDとパスワードを入力してください。");
@@ -38,6 +39,7 @@ async function handleLogin() {
     setMessage("ログイン成功", false);
     console.log("login success:", data);
 
+    // 管理者でも一般ユーザーでも、最初は必ずホーム画面へ
     window.location.href = "dashboard.html";
   } catch (err) {
     console.error(err);
@@ -45,4 +47,6 @@ async function handleLogin() {
   }
 }
 
-loginBtn.addEventListener("click", handleLogin);
+if (loginBtn) {
+  loginBtn.addEventListener("click", handleLogin);
+}

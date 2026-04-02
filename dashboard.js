@@ -51,6 +51,7 @@ const ENABLE_DISPLAY_GROUP_FORCE_BRANCH = true;
 const els = {
   plansTimeAreaMatrix: document.getElementById("plansTimeAreaMatrix"),
   userEmail: document.getElementById("userEmail"),
+  adminHeaderBtn: document.getElementById("adminHeaderBtn"),
   sendLineBtn: document.getElementById("sendLineBtn"),
   originLabelText: document.getElementById("originLabelText"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -5887,8 +5888,32 @@ function bindPostDispatchEvents() {
   if (els.clearActualBtn) els.clearActualBtn.addEventListener("click", clearAllActuals);
 }
 
+async function refreshAdminHeaderVisibility() {
+  const btn = els.adminHeaderBtn;
+  if (!btn) return;
+
+  let user = currentUser || null;
+
+  try {
+    if (!user) {
+      const { data, error } = await supabaseClient.auth.getUser();
+      if (!error && data?.user) user = data.user;
+    }
+  } catch (error) {
+    console.error("refreshAdminHeaderVisibility error:", error);
+  }
+
+  const isAdmin = user?.user_metadata?.is_admin === true;
+  btn.classList.toggle("hidden", !isAdmin);
+}
+
+function goToAdminPage() {
+  window.location.href = "admin.html";
+}
+
 function setupEvents() {
   els.logoutBtn?.addEventListener("click", logout);
+  els.adminHeaderBtn?.addEventListener("click", goToAdminPage);
   els.exportAllBtn?.addEventListener("click", exportAllData);
   els.importAllBtn?.addEventListener("click", triggerImportAll);
   els.importAllFileInput?.addEventListener("change", importAllDataFromFile);
@@ -6004,6 +6029,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const ok = await ensureAuth();
     if (!ok) return;
 
+    await refreshAdminHeaderVisibility();
     ensureCastTravelMinutesUi();
     initializeMileageReportDefaultDates();
     setupTabs();
