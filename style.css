@@ -2155,3 +2155,41 @@ img, table, input, select, textarea, button{
 #adminHeaderBtn{
   min-width:132px;
 }
+
+/* =========================================================
+   mileage report mobile horizontal scroll fix
+   ========================================================= */
+@media (max-width: 900px){
+  #vehiclesTab #mileageReportTableWrap.table-wrap,
+  #vehiclesTab .mileage-matrix-wrap.table-wrap{
+    overflow-x:auto;
+    overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.02);
+  }
+}
+
+@media (max-width: 640px){
+  #vehiclesTab #mileageReportTableWrap.table-wrap,
+  #vehiclesTab .mileage-matrix-wrap.table-wrap{
+    overflow-x:auto;
+    overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.02);
+    border-radius:14px;
+  }
+
+  #vehiclesTab #mileageReportTableWrap .mileage-matrix-table,
+  #vehiclesTab .mileage-matrix-wrap .mileage-matrix-table{
+    display:table;
+    width:max-content;
+    min-width:980px;
+  }
+
+  #vehiclesTab #mileageReportTableWrap .mileage-matrix-section,
+  #vehiclesTab .mileage-matrix-wrap .mileage-matrix-section{
+    min-width:max-content;
+  }
+}
