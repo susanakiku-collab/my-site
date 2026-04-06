@@ -1,8 +1,10 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'dispatchcore-2026-04-06-final-lasttrip-complete';
+  const VERSION = 'dispatchcore-2026-04-07-normal-merge-waiting';
   const AREA_MEMBER_ANGLE_THRESHOLD = 30;
+  const SAME_DIRECTION_MERGE_ANGLE_THRESHOLD = 18;
+  const SAME_DIRECTION_MERGE_POINT_DISTANCE_KM = 18;
   const DISPATCH_DEBUG = Boolean(global.DISPATCH_DEBUG);
 
   function debugLog(...args) {
@@ -321,6 +323,108 @@
     };
   }
 
+
+  function getMaxVehicleCapacity(vehicles) {
+    return Math.max(0, ...(Array.isArray(vehicles) ? vehicles : []).map(vehicle => Number(vehicle?.capacity || 0)));
+  }
+
+  function buildAxisMergeCandidate(leftRep, rightRep, maxCapacity) {
+    if (!leftRep?.axis || !rightRep?.axis) return null;
+    if (!Number.isFinite(leftRep.angleFromOrigin) || !Number.isFinite(rightRep.angleFromOrigin)) return null;
+    const combinedSize = Number(leftRep.size || 0) + Number(rightRep.size || 0);
+    if (combinedSize <= 0 || combinedSize > maxCapacity) return null;
+
+    const angleGap = angleDiff(leftRep.angleFromOrigin, rightRep.angleFromOrigin);
+    if (!Number.isFinite(angleGap) || angleGap > SAME_DIRECTION_MERGE_ANGLE_THRESHOLD) return null;
+
+    const pointDistanceKm = (leftRep.point && rightRep.point)
+      ? haversineKm(leftRep.point, rightRep.point)
+      : Infinity;
+    if (Number.isFinite(pointDistanceKm) && pointDistanceKm > SAME_DIRECTION_MERGE_POINT_DISTANCE_KM) return null;
+
+    const primary = Number(leftRep.distanceKm || 0) >= Number(rightRep.distanceKm || 0) ? leftRep : rightRep;
+    const secondary = primary === leftRep ? rightRep : leftRep;
+
+    return {
+      primaryAxisId: primary.axis.axisId,
+      secondaryAxisId: secondary.axis.axisId,
+      angleGap,
+      pointDistanceKm,
+      combinedSize,
+      primaryDistanceKm: Number(primary.distanceKm || 0),
+      secondaryDistanceKm: Number(secondary.distanceKm || 0)
+    };
+  }
+
+  function pickSameDirectionMergePair(axes, vehicles, origin) {
+    if (!Array.isArray(axes) || axes.length < 2) return null;
+    const maxCapacity = getMaxVehicleCapacity(vehicles);
+    if (maxCapacity <= 0) return null;
+
+    const reps = axes.map(axis => getAxisRepresentative(axis, origin));
+    const candidates = [];
+
+    for (let i = 0; i < reps.length; i += 1) {
+      for (let j = i + 1; j < reps.length; j += 1) {
+        const candidate = buildAxisMergeCandidate(reps[i], reps[j], maxCapacity);
+        if (candidate) candidates.push(candidate);
+      }
+    }
+
+    candidates.sort((a, b) => {
+      if (a.angleGap !== b.angleGap) return a.angleGap - b.angleGap;
+      if (a.pointDistanceKm !== b.pointDistanceKm) return a.pointDistanceKm - b.pointDistanceKm;
+      if (b.primaryDistanceKm !== a.primaryDistanceKm) return b.primaryDistanceKm - a.primaryDistanceKm;
+      if (a.combinedSize !== b.combinedSize) return a.combinedSize - b.combinedSize;
+      return String(a.primaryAxisId).localeCompare(String(b.primaryAxisId), 'ja');
+    });
+
+    return candidates[0] || null;
+  }
+
+  function mergeFixedAxesByCandidate(axes, candidate) {
+    if (!candidate?.primaryAxisId || !candidate?.secondaryAxisId) return Array.isArray(axes) ? [...axes] : [];
+    const primary = axes.find(axis => axis.axisId === candidate.primaryAxisId);
+    const secondary = axes.find(axis => axis.axisId === candidate.secondaryAxisId);
+    if (!primary || !secondary) return [...axes];
+
+    primary.members = [...(Array.isArray(primary.members) ? primary.members : []), ...(Array.isArray(secondary.members) ? secondary.members : [])];
+    primary.overflowed = [...(Array.isArray(primary.overflowed) ? primary.overflowed : []), ...(Array.isArray(secondary.overflowed) ? secondary.overflowed : [])];
+    primary.pending = [];
+    return axes.filter(axis => axis.axisId !== candidate.secondaryAxisId);
+  }
+
+  function collapseSameDirectionAxes(axes, vehicles, origin) {
+    let current = Array.isArray(axes) ? [...axes] : [];
+    const standbyCount = Math.max(0, (Array.isArray(vehicles) ? vehicles.length : 0) - current.length);
+    if (current.length < 2) return { axes: current, mergeLogs: [], standbyCount };
+
+    const mergeLogs = [];
+    while (current.length >= 2) {
+      const candidate = pickSameDirectionMergePair(current, vehicles, origin);
+      if (!candidate) break;
+      mergeLogs.push(candidate);
+      current = mergeFixedAxesByCandidate(current, candidate);
+    }
+
+    current.forEach(axis => {
+      axis.members.sort(byDistanceAsc);
+      const rep = getAxisRepresentative(axis, origin);
+      if (rep?.farthest) {
+        axis.anchorItemId = rep.farthest.itemId;
+        axis.anchorName = rep.farthest.name;
+        axis.anchorAngle = rep.farthest.angleFromOrigin;
+        axis.anchorDistanceKm = rep.farthest.distanceKm;
+      }
+    });
+
+    return {
+      axes: current,
+      mergeLogs,
+      standbyCount: Math.max(0, (Array.isArray(vehicles) ? vehicles.length : 0) - current.length)
+    };
+  }
+
   function vehicleCanTakeAxis(vehicle, axisRep) {
     if (!vehicle || !axisRep) return false;
     if (Number(vehicle.capacity || 0) <= 0) return false;
@@ -553,12 +657,15 @@
     const overflow = resolveUnsettledMembers(unsettled, fixedAxes);
     finalizeAxisOrder(fixedAxes);
 
-    const vehicleAssignments = assignVehiclesToFixedAxes(fixedAxes, normalizedVehicles.slice(0, vehicleCount), origin);
-    applyVehicleAssignmentsToAxes(fixedAxes, vehicleAssignments);
+    const mergeResult = collapseSameDirectionAxes(fixedAxes, normalizedVehicles.slice(0, vehicleCount), origin);
+    const mergedAxes = Array.isArray(mergeResult?.axes) ? mergeResult.axes : fixedAxes;
 
-    const assignments = buildAssignments(fixedAxes);
+    const vehicleAssignments = assignVehiclesToFixedAxes(mergedAxes, normalizedVehicles.slice(0, vehicleCount), origin);
+    applyVehicleAssignmentsToAxes(mergedAxes, vehicleAssignments);
+
+    const assignments = buildAssignments(mergedAxes);
     try {
-      debugLog('[DispatchCore][RESULT]', fixedAxes.map(axis => ({
+      debugLog('[DispatchCore][RESULT]', mergedAxes.map(axis => ({
         axisId: axis.axisId,
         vehicleId: axis.vehicleId,
         driverName: axis.driverName,
@@ -572,7 +679,7 @@
     }
     global.__THEMIS_LAST_OVERFLOW__ = {
       ...buildOverflowMeta(overflow),
-      fixedAxes: fixedAxes.map(axis => ({
+      fixedAxes: mergedAxes.map(axis => ({
         axisId: axis.axisId,
         vehicleId: axis.vehicleId,
         driverName: axis.driverName,
@@ -582,8 +689,10 @@
         anchorDistanceKm: axis.anchorDistanceKm,
         memberItemIds: axis.members.map(item => item.itemId)
       })),
-      totalSeatCapacity: fixedAxes.reduce((sum, axis) => sum + Number(axis.capacity || 0), 0),
+      totalSeatCapacity: mergedAxes.reduce((sum, axis) => sum + Number(axis.capacity || 0), 0),
       totalCastCount: normalizedItems.length,
+      standbyVehicleCount: Number(mergeResult?.standbyCount || 0),
+      mergedSameDirectionAxes: Array.isArray(mergeResult?.mergeLogs) ? mergeResult.mergeLogs : [],
       version: VERSION
     };
 

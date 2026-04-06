@@ -1981,7 +1981,7 @@ async function syncPlanFieldsFromCastInput(forceFill = false) {
 }
 
 async function syncActualFieldsFromCastInput(forceFill = false) {
-  const cast = findCastByInputValue(els.castSelect?.value || "");
+  const cast = findActualSelectableCastByInputValue(els.castSelect?.value || "");
   if (!cast) {
     clearActualCastDerivedFields();
     return null;
@@ -2146,6 +2146,13 @@ function getActualSelectableCasts() {
       Number(cast.id) === editingCastIdForActual ||
       (!usedCastIds.has(Number(cast.id)) && !doneCastIds.has(Number(cast.id)))
   );
+}
+
+function findActualSelectableCastByInputValue(value) {
+  const cast = findCastByInputValue(value);
+  if (!cast) return null;
+  const selectable = getActualSelectableCasts();
+  return selectable.find(x => Number(x.id) === Number(cast.id)) || null;
 }
 
 function getCastSearchText(cast) {
@@ -2515,7 +2522,7 @@ function fillActualForm(item) {
 }
 
 function fillActualFormFromSelectedCast() {
-  const cast = findCastByInputValue(els.castSelect?.value || "");
+  const cast = findActualSelectableCastByInputValue(els.castSelect?.value || "");
   if (!cast) return;
 
   if (els.actualAddress && !els.actualAddress.value.trim()) {
@@ -2657,10 +2664,16 @@ async function loadActualsByDate(dateStr) {
 }
 
 async function saveActual() {
-  const cast = findCastByInputValue(els.castSelect?.value || "");
+  const inputValue = els.castSelect?.value || "";
+  const typedCast = findCastByInputValue(inputValue);
+  const cast = findActualSelectableCastByInputValue(inputValue);
   const castId = Number(cast?.id || 0);
   if (!castId) {
-    alert("キャストを選択または入力してください");
+    if (typedCast) {
+      alert("このキャストはすでに実際の送りに入っているため、再選択できません");
+    } else {
+      alert("キャストを選択または入力してください");
+    }
     return;
   }
 
