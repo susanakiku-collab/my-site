@@ -257,6 +257,14 @@
               <input id="vehicleHomeArea" type="text" placeholder="例：柏方面" />
             </div>
 
+            <div class="field two-col">
+              <label for="vehicleHomeLatLngText">帰宅座標貼り付け</label>
+              <input id="vehicleHomeLatLngText" type="text" placeholder="例：35.77265133165276, 139.92975099369397" />
+              <div id="vehicleGeoStatus" class="geo-status idle">座標を「緯度, 経度」の形式で貼り付けると自動反映します</div>
+              <input id="vehicleHomeLat" type="hidden" />
+              <input id="vehicleHomeLng" type="hidden" />
+            </div>
+
             <div class="field">
               <label for="vehicleSeatCapacity">乗車可能人員</label>
               <input id="vehicleSeatCapacity" type="number" min="1" max="10" placeholder="例：4" />

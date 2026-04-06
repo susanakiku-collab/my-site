@@ -197,6 +197,13 @@ async function importCastCsvFile() {
   }
 }
 
+function parseNullableCoordinate(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function saveVehicle() {
   const plateNumber = els.vehiclePlateNumber?.value.trim();
   if (!plateNumber) {
@@ -214,6 +221,8 @@ async function saveVehicle() {
     plate_number: plateNumber,
     vehicle_area: typeof normalizeAreaLabel === "function" ? normalizeAreaLabel(els.vehicleArea?.value.trim() || "") : (els.vehicleArea?.value.trim() || ""),
     home_area: typeof normalizeAreaLabel === "function" ? normalizeAreaLabel(els.vehicleHomeArea?.value.trim() || "") : (els.vehicleHomeArea?.value.trim() || ""),
+    home_lat: parseNullableCoordinate(els.vehicleHomeLat?.value),
+    home_lng: parseNullableCoordinate(els.vehicleHomeLng?.value),
     seat_capacity: Number(els.vehicleSeatCapacity?.value || 4),
     driver_name: els.vehicleDriverName?.value.trim() || "",
     line_id: els.vehicleLineId?.value.trim() || "",
@@ -292,6 +301,8 @@ async function importVehicleCsvFile() {
         plate_number: plateNumber,
         vehicle_area: typeof normalizeAreaLabel === "function" ? normalizeAreaLabel(String(row.vehicle_area || "").trim() || "") : String(row.vehicle_area || "").trim(),
         home_area: typeof normalizeAreaLabel === "function" ? normalizeAreaLabel(String(row.home_area || "").trim() || "") : String(row.home_area || "").trim(),
+        home_lat: parseNullableCoordinate(row.home_lat),
+        home_lng: parseNullableCoordinate(row.home_lng),
         seat_capacity: Number(row.seat_capacity || 4),
         driver_name: String(row.driver_name || "").trim(),
         line_id: String(row.line_id || "").trim(),
