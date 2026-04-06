@@ -1,1 +1,1 @@
-# my-site
+# v7.0 stable
