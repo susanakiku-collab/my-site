@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>THEMIS AI Dispatch Webマニュアル</title>
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <style>
+    :root{
+      --bg:#0b1020;
+      --bg2:#11182d;
+      --card:rgba(255,255,255,.06);
+      --line:rgba(255,255,255,.12);
+      --text:#eef2ff;
+      --muted:#b8c0dd;
+      --accent:#8ab4ff;
+      --accent2:#87f0cf;
+      --warn:#ffd782;
+      --shadow:0 18px 48px rgba(0,0,0,.28);
+      --radius:18px;
+      --max:1120px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;
+      color:var(--text);
+      background:linear-gradient(180deg,var(--bg) 0%,#0d1427 42%,#121b31 100%);
+      line-height:1.65;
+    }
+    a{color:var(--accent)}
+    .wrap{max-width:var(--max);margin:0 auto;padding:24px 16px 72px}
+    .hero{
+      background:linear-gradient(135deg,rgba(138,180,255,.18),rgba(135,240,207,.10));
+      border:1px solid var(--line);
+      border-radius:24px;
+      padding:28px;
+      box-shadow:var(--shadow);
+    }
+    .eyebrow{
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding:6px 12px;
+      border-radius:999px;
+      background:rgba(255,255,255,.07);
+      color:var(--warn);
+      font-size:12px;
+      letter-spacing:.04em;
+    }
+    h1{margin:14px 0 8px;font-size:clamp(28px,4vw,42px);line-height:1.15}
+    .lead{margin:0;color:var(--muted);font-size:15px}
+    .cta-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-height:42px;
+      padding:10px 14px;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+      text-decoration:none;
+      font-weight:700;
+    }
+    .btn.primary{background:rgba(138,180,255,.16)}
+    .grid{display:grid;gap:18px;margin-top:20px}
+    .grid.top{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      padding:20px;
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(6px);
+    }
+    .card h2{margin:0 0 10px;font-size:22px}
+    .card h3{margin:0 0 10px;font-size:18px}
+    .muted{color:var(--muted)}
+    .pill-list,.toc,.flow,.spec-list{display:flex;flex-wrap:wrap;gap:10px;padding:0;margin:0;list-style:none}
+    .pill-list li,.toc a,.flow li,.spec-list li{
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.05);
+      border-radius:999px;
+      padding:8px 12px;
+      color:var(--text);
+      text-decoration:none;
+    }
+    .toc{margin-top:18px}
+    .toc a{display:inline-flex}
+    section.anchor{scroll-margin-top:24px}
+    .section-title{display:flex;align-items:center;gap:10px;margin:0 0 14px;font-size:26px}
+    .two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+    ul.clean{margin:0;padding-left:18px}
+    ul.clean li+li{margin-top:8px}
+    .table-wrap{overflow:auto;border-radius:14px;border:1px solid var(--line)}
+    table{width:100%;border-collapse:collapse;min-width:680px;background:rgba(255,255,255,.04)}
+    th,td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+    th{background:rgba(255,255,255,.06);font-size:14px}
+    .note{
+      margin-top:14px;
+      padding:12px 14px;
+      border-left:4px solid var(--accent2);
+      background:rgba(135,240,207,.08);
+      border-radius:12px;
+    }
+    .warn{
+      margin-top:14px;
+      padding:12px 14px;
+      border-left:4px solid var(--warn);
+      background:rgba(255,215,130,.08);
+      border-radius:12px;
+    }
+    .footer{margin-top:24px;color:var(--muted);font-size:13px;text-align:center}
+    @media (max-width:720px){
+      .wrap{padding:16px 12px 56px}
+      .hero,.card{padding:18px}
+      .section-title{font-size:22px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="eyebrow">📘 Webマニュアル ・ THEMIS AI Dispatch v7.0 stable</div>
+      <h1>THEMIS AI Dispatch 操作マニュアル</h1>
+      <p class="lead">
+        このマニュアルは、現在の画面構成と実装に合わせた web版です。<br>
+        旧PDFリンクの代わりに、このページをアプリから直接開く構成に変更しています。
+      </p>
+      <div class="cta-row">
+        <a class="btn primary" href="dashboard.html">アプリへ戻る</a>
+        <a class="btn" href="#flow">基本の流れを見る</a>
+        <a class="btn" href="#spec">仕様を見る</a>
+      </div>
+      <div class="toc">
+        <a href="#overview">概要</a>
+        <a href="#screens">画面別ガイド</a>
+        <a href="#flow">基本運用</a>
+        <a href="#spec">現在の仕様</a>
+        <a href="#tips">運用のコツ</a>
+      </div>
+    </header>
+
+    <div class="grid top">
+      <article class="card">
+        <h2>できること</h2>
+        <ul class="clean">
+          <li>キャスト、車両を事前登録</li>
+          <li>予定表の作成、CSV入出力</li>
+          <li>当日運用で自動配車、試算、結果コピー、LINE送信</li>
+          <li>実際の送りで完了 / キャンセル管理</li>
+          <li>日次走行距離の保存と月間集計</li>
+          <li>設定画面から全体エクスポート / インポート</li>
+        </ul>
+      </article>
+      <article class="card">
+        <h2>画面一覧</h2>
+        <ul class="pill-list">
+          <li>ホーム</li>
+          <li>キャスト管理</li>
+          <li>車両</li>
+          <li>当日運用</li>
+          <li>予定表</li>
+          <li>実際の送り</li>
+          <li>設定</li>
+        </ul>
+      </article>
+      <article class="card">
+        <h2>現在の起点</h2>
+        <p class="muted" style="margin:0 0 8px;">現在の設定ファイルでは起点名は次の内容です。</p>
+        <ul class="pill-list"><li>THEMIS</li></ul>
+        <div class="note">距離計算や方面判定は、この起点基準の運用が前提です。</div>
+      </article>
+    </div>
+
+    <section id="overview" class="anchor" style="margin-top:20px;">
+      <article class="card">
+        <h2 class="section-title">🚐 概要</h2>
+        <div class="two-col">
+          <div>
+            <h3>システムの役割</h3>
+            <ul class="clean">
+              <li>キャストと車両をまとめて管理します。</li>
+              <li>予定表と実際の送りを分けて扱えます。</li>
+              <li>当日運用では、自動配車と便別試算ができます。</li>
+              <li>結果はコピーやLINE送信でドライバー共有できます。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>ホーム画面で見えるもの</h3>
+            <ul class="clean">
+              <li>本日の人数、車両台数、Plan件数、Actual件数</li>
+              <li>完了件数、キャンセル件数</li>
+              <li>月間の車両別集計</li>
+              <li>主要画面へのクイック移動</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section id="screens" class="anchor" style="margin-top:20px;">
+      <article class="card">
+        <h2 class="section-title">🧭 画面別ガイド</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>画面</th>
+                <th>主な用途</th>
+                <th>現在のポイント</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>ホーム</strong></td>
+                <td>当日の全体状況と月間集計の確認</td>
+                <td>今日の件数確認、当日運用 / 予定表 / 実際の送りへすぐ移動できます。</td>
+              </tr>
+              <tr>
+                <td><strong>キャスト管理</strong></td>
+                <td>キャストの登録、更新、検索、CSV入出力</td>
+                <td>住所入力、座標貼り付け、方面判定、ルート確認に対応しています。</td>
+              </tr>
+              <tr>
+                <td><strong>車両</strong></td>
+                <td>車両マスタ管理と走行実績エクスポート</td>
+                <td>担当方面、帰宅方面、LINE ID、状態、ドライバー名を管理できます。</td>
+              </tr>
+              <tr>
+                <td><strong>当日運用</strong></td>
+                <td>自動配車、試算、結果共有、日次走行距離保存</td>
+                <td>対象便ごとの試算、自動配車、ラスト便車両設定、LINE送信が使えます。</td>
+              </tr>
+              <tr>
+                <td><strong>予定表</strong></td>
+                <td>送迎予定の登録、CSV入出力</td>
+                <td>時間帯 × 方面一覧でまとめて確認できます。</td>
+              </tr>
+              <tr>
+                <td><strong>実際の送り</strong></td>
+                <td>当日の実績入力と状態管理</td>
+                <td>予定から追加、完了 / キャンセル管理、表コピーに対応しています。</td>
+              </tr>
+              <tr>
+                <td><strong>設定</strong></td>
+                <td>ログイン情報、起点確認、全体入出力、リセット、履歴</td>
+                <td>全体エクスポート / インポート、全消去系ボタン、履歴確認ができます。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <div class="two-col" style="margin-top:18px;">
+        <article class="card">
+          <h3>キャスト管理で使う項目</h3>
+          <ul class="clean">
+            <li>氏名、想定距離、住所、方面、メモ、座標、電話</li>
+            <li>住所入力後に Enter で座標取得できます。</li>
+            <li>「住所から方面判定」で方面の自動反映ができます。</li>
+            <li>「ルート」で地図確認ができます。</li>
+            <li>CSVのインポート / エクスポートに対応しています。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>車両画面で使う項目</h3>
+          <ul class="clean">
+            <li>車両ID、担当方面、帰宅方面、帰宅座標、乗車可能人員</li>
+            <li>ドライバー名、LINE ID、状態、メモ</li>
+            <li>車両CSVのインポート / エクスポートに対応しています。</li>
+            <li>走行実績は期間指定で一覧表示とCSV出力ができます。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>当日運用で使う機能</h3>
+          <ul class="clean">
+            <li>自動配車</li>
+            <li>確定（月間へ反映）</li>
+            <li>Actual全消去</li>
+            <li>配車可能車両の全選択 / 全解除</li>
+            <li>ラスト便車両解除</li>
+            <li>対象便ごとの試算と試験的な自動配車</li>
+            <li>結果コピー、LINE送信、日次走行距離保存</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>予定表 / 実際の送りの違い</h3>
+          <ul class="clean">
+            <li><strong>予定表</strong> は事前計画用です。</li>
+            <li><strong>実際の送り</strong> は当日の実績管理用です。</li>
+            <li>実際の送りには「予定から追加」があります。</li>
+            <li>完了やキャンセルは実際の送り側で管理します。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="flow" class="anchor" style="margin-top:20px;">
+      <article class="card">
+        <h2 class="section-title">🛠️ 基本運用の流れ</h2>
+        <ol class="clean" style="padding-left:20px;">
+          <li><strong>キャスト管理</strong> で送り先情報を登録します。</li>
+          <li><strong>車両</strong> で配車に使う車両情報を登録します。</li>
+          <li><strong>予定表</strong> で当日の予定を作成します。必要に応じてCSVも使えます。</li>
+          <li><strong>当日運用</strong> で日付を合わせ、使用車両を選び、自動配車または試算を行います。</li>
+          <li><strong>実際の送り</strong> で完了 / キャンセルなどの状態を反映します。</li>
+          <li><strong>当日運用</strong> に戻って日次走行距離を保存し、必要なら「確定（月間へ反映）」を実行します。</li>
+          <li><strong>ホーム</strong> で本日状況と月間集計を確認します。</li>
+        </ol>
+        <div class="warn">
+          予定表、当日運用、実際の送りは日付が連動する前提です。日付を切り替えたら、対象日が合っているか確認してから操作してください。
+        </div>
+      </article>
+    </section>
+
+    <section id="spec" class="anchor" style="margin-top:20px;">
+      <article class="card">
+        <h2 class="section-title">⚙️ 現在の仕様</h2>
+        <div class="two-col">
+          <div>
+            <h3>住所・座標まわり</h3>
+            <ul class="clean">
+              <li>住所入力から座標取得できます。</li>
+              <li>同一住所はジオコードキャッシュを利用します。</li>
+              <li>距離計算用のキャッシュも使います。</li>
+              <li>距離は起点 THEMIS 基準で計算する運用です。</li>
+              <li>地図確認にはルートボタンや配車結果マップを使えます。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>データ・入出力</h3>
+            <ul class="clean">
+              <li>キャストCSV、車両CSV、予定CSVに対応しています。</li>
+              <li>設定画面から全体エクスポート / インポートができます。</li>
+              <li>履歴欄に主要操作のログを残します。</li>
+              <li>月間集計は日次走行距離の保存内容をもとに反映します。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>配車・状態管理</h3>
+            <ul class="clean">
+              <li>当日運用では対象便ごとの試算ができます。</li>
+              <li>自動配車結果はコピーとLINE送信ができます。</li>
+              <li>ラスト便車両の手動指定と解除に対応しています。</li>
+              <li>実際の送りの状態は pending / done / cancel ベースで管理します。</li>
+              <li>完了・キャンセル済みは、その後の対象から外れる前提で画面が連動します。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>一覧表示</h3>
+            <ul class="clean">
+              <li>予定表と実際の送りは「時間帯 × 方面 一覧」で確認できます。</li>
+              <li>一覧の色分けは未完了、完了、キャンセルに対応しています。</li>
+              <li>車両画面ではドライバー別・日別の走行実績エクスポートができます。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="note">
+          このマニュアルは、現在の実装に合わせた運用説明です。配車ロジックの内部スコアや細かな優先度は今後の改修で変わる可能性がありますが、画面操作としてはこの手順で問題ありません。
+        </div>
+      </article>
+    </section>
+
+    <section id="tips" class="anchor" style="margin-top:20px;">
+      <article class="card">
+        <h2 class="section-title">💡 運用のコツ</h2>
+        <div class="two-col">
+          <div>
+            <h3>入力時</h3>
+            <ul class="clean">
+              <li>住所と座標は、できるだけ正確に登録してください。</li>
+              <li>方面が自動判定と違う場合は、必要に応じて手修正してください。</li>
+              <li>車両の LINE ID は通知運用に合わせて揃えると管理しやすくなります。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>当日運用時</h3>
+            <ul class="clean">
+              <li>先に予定表を整えておくと、当日の「予定から追加」が使いやすくなります。</li>
+              <li>配車前に使用車両のチェック状態を確認してください。</li>
+              <li>業務終了時は日次走行距離を保存しておくと、月間集計が揃います。</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <p class="footer">THEMIS AI Dispatch Web Manual ・ Build 2026</p>
+  </div>
+</body>
+</html>

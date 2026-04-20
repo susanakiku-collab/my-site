@@ -729,10 +729,7 @@ function isLastClusterOfTheDay(cluster, dateStr) {
 }
 
 function openManual() {
-  window.open(
-    "https://drive.google.com/file/d/1LRTe2qcaef3dtItKcTAijadgHKpdmPAM/view?usp=drive_link",
-    "_blank"
-  );
+  window.open("manual.html", "_blank");
 }
 
 function activateTab(tabId) {
